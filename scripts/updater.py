@@ -615,7 +615,10 @@ def install_schedule() -> int:
         launcher.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(scripts / LAUNCHER, launcher)
         shutil.copy2(scripts / "bounded.py", launcher.parent / "bounded.py")
-    command = [sys.executable, str(launcher), "updater", "check"]
+    current = read_current(adapter)
+    python = current["python"]
+    config_file = adapter.get("base_config") or str(config_path())
+    command = [python, str(launcher), "--config", config_file, "updater", "check"]
     log = update_dir(adapter) / "scheduler.log"
     if sys.platform == "darwin":
         import plistlib

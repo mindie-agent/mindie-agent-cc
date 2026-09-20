@@ -63,7 +63,7 @@ def prepare_service(engine_file=None):
         flags |= getattr(subprocess, "DETACHED_PROCESS", 0)
         kwargs["creationflags"] = flags
     subprocess.Popen(**kwargs)
-    return "prepared"
+    return "starting"
 
 
 if __name__ == "__main__":
