@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "knowledge": {
+      "command": "python3",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/mindie_launch.py", "mcp", "knowledge"]
+    },
+    "remote": {
+      "command": "python3",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/mindie_launch.py", "mcp", "remote"]
+    }
+  }
+}

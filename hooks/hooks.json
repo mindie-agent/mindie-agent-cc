@@ -1,0 +1,90 @@
+{
+  "description": "MindIE Agent Claude Code hooks. Activation is UserPromptExpansion for /mindie-agent:init only. Stop never continues the model.",
+  "hooks": {
+    "UserPromptExpansion": [
+      {
+        "matcher": "mindie-agent:init",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/mindie_launch.py\" hook expansion",
+            "timeout": 2
+          }
+        ]
+      },
+      {
+        "matcher": "mindie-agent:status",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/mindie_launch.py\" hook expansion",
+            "timeout": 2
+          }
+        ]
+      },
+      {
+        "matcher": "mindie-agent:deactivate",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/mindie_launch.py\" hook expansion",
+            "timeout": 2
+          }
+        ]
+      },
+      {
+        "matcher": "mindie-agent:sharing-enable",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/mindie_launch.py\" hook expansion",
+            "timeout": 2
+          }
+        ]
+      },
+      {
+        "matcher": "mindie-agent:sharing-disable",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/mindie_launch.py\" hook expansion",
+            "timeout": 2
+          }
+        ]
+      },
+      {
+        "matcher": "mindie-agent:recover",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/mindie_launch.py\" hook expansion",
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "^mcp__plugin_mindie-agent_(knowledge|remote)__[A-Za-z0-9_.]+$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/mindie_launch.py\" hook pretool",
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/mindie_launch.py\" hook stop",
+            "timeout": 2
+          }
+        ]
+      }
+    ]
+  }
+}

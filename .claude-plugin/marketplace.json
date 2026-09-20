@@ -1,0 +1,14 @@
+{
+  "name": "mindie-agent-cc",
+  "owner": {
+    "name": "MindIE Agent"
+  },
+  "plugins": [
+    {
+      "name": "mindie-agent",
+      "source": "./",
+      "description": "MindIE Agent for Claude Code: explicit-task knowledge, optional public contribution, and independent remote-dev.",
+      "version": "0.1.0"
+    }
+  ]
+}

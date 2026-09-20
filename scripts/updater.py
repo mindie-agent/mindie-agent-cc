@@ -1,0 +1,703 @@
+#!/usr/bin/env python3
+"""MindIE Claude Code automatic updater. One bounded check per invocation.
+
+Driven by the OS scheduler (launchd every 5 minutes on macOS; Windows
+task registration code is present but not natively verified). No daemon,
+no model, no SessionStart work.
+
+check: serialized by a nonblocking check.lock under one absolute
+deadline. Resolve remote main to one SHA -> stage an immutable
+generation with its own pinned venv and its own adapter/engine configs
+-> build the native host package pointing at a NEW versioned launcher
+path (live entrypoints are never mutated by staging) -> under the
+exclusive operation lock call core stop_if_idle through the CURRENT
+committed interpreter -> install through Claude's native plugin CLI with
+structured JSON readback -> atomically flip current.json.
+Rollback restores the previous pointer AND the previous native package.
+Feed sync is independent: it runs even when the candidate fails.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import shutil
+import sys
+import time
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))
+
+from bounded import run as bounded_run
+from genstate import (
+    LockTimeout,
+    OperationLock,
+    atomic_write,
+    check_lock,
+    failed_path,
+    generations_dir,
+    launch_dir,
+    read_current,
+    read_json,
+    read_status,
+    receipts_dir,
+    update_dir,
+    write_current,
+    write_status,
+)
+from paths import (
+    config_path,
+    engine_config_path,
+    load_adapter_config,
+    load_engine_config,
+)
+
+DEFAULT_REMOTE = "https://github.com/mindie-agent/mindie-agent-cc.git"
+INTERVAL_SECONDS = 300
+CHECK_BUDGET = 240.0
+ROLLBACK_BUDGET = 45.0
+FEED_BUDGET = 60.0
+RESERVE = ROLLBACK_BUDGET + FEED_BUDGET
+SHA = r"[0-9a-f]{40}"
+COMPLETE = ".mindie-generation-complete"
+LAUNCHER = "mindie_launch.py"
+MIN_PYTHON = (3, 11)
+GIT_ENV = dict(os.environ, GIT_TERMINAL_PROMPT="0")
+PIP_ENV = dict(
+    os.environ,
+    PIP_RETRIES="0",
+    PIP_NO_INPUT="1",
+    PIP_DISABLE_PIP_VERSION_CHECK="1",
+)
+
+IDLE_SNIPPET = """
+import json, sys
+sys.path.insert(0, sys.argv[1])
+try:
+    from knowledge_service import existing_service
+    from mindie_knowledge.loop.cli import rpc
+except Exception as exc:
+    sys.stderr.write(json.dumps({"fatal": f"runtime import failed: {exc}"}))
+    sys.exit(3)
+try:
+    connection = existing_service(sys.argv[2])
+except (OSError, FileNotFoundError):
+    connection = None
+except Exception as exc:
+    sys.stderr.write(json.dumps({"fatal": f"service probe failed: {type(exc).__name__}: {exc}"}))
+    sys.exit(4)
+if connection is None:
+    print(json.dumps({"idle": True, "service": "absent"}))
+    sys.exit(0)
+try:
+    result = rpc(connection, "stop_if_idle", {}, timeout=5)
+except Exception as exc:
+    sys.stderr.write(json.dumps({"fatal": f"stop_if_idle RPC failed: {exc}"}))
+    sys.exit(5)
+if not isinstance(result, dict) or not isinstance(result.get("idle"), bool):
+    sys.stderr.write(json.dumps({"fatal": "invalid stop_if_idle result"}))
+    sys.exit(6)
+print(json.dumps(result))
+"""
+
+
+class CheckFailed(RuntimeError):
+    """A failed check: suppress this exact revision until recover."""
+
+
+class Deferred(RuntimeError):
+    """Not applied now; next normal scheduled check may retry."""
+
+
+def _remaining(deadline: float, reserve: float = 0.0) -> float:
+    left = deadline - time.monotonic() - reserve
+    if left < 5:
+        raise CheckFailed("whole-check deadline exhausted")
+    return left
+
+
+def _op_timeout(deadline: float, reserve: float, cap: float) -> float:
+    left = deadline - reserve - time.monotonic()
+    if left <= 0:
+        raise CheckFailed("no time left in this operation's reserved window")
+    return min(cap, left)
+
+
+def _git(args, *, timeout, deadline, cwd=None):
+    return bounded_run(["git", *args], "",
+                       timeout=min(timeout, _remaining(deadline, RESERVE)),
+                       cwd=cwd, env=GIT_ENV)
+
+
+def resolve_main(remote: str, deadline: float) -> str:
+    output = _git(["ls-remote", remote, "refs/heads/main"], timeout=30,
+                  deadline=deadline)
+    match = re.search(rf"\b({SHA})\s+refs/heads/main", output)
+    if not match:
+        raise CheckFailed("remote main did not resolve to a commit SHA")
+    return match.group(1)
+
+
+def _venv_python(venv: Path) -> Path:
+    if os.name == "nt":
+        return venv / "Scripts" / "python.exe"
+    return venv / "bin" / "python"
+
+
+def stamp_version(sha: str) -> str:
+    ident = sha if sha != "bootstrap" else "bootstrap"
+    short = ident[:12] if ident != "bootstrap" else "bootstrap"
+    return f"0.1.0+mindie.{short}"
+
+
+COPY_SKIP = {".git", ".venv", "tests", "__pycache__", ".pytest_cache", ".DS_Store"}
+
+
+def source_identity(root: Path) -> str:
+    """Exact git HEAD when the worktree is clean; otherwise a content digest."""
+    try:
+        head = bounded_run(
+            ["git", "-C", str(root), "rev-parse", "HEAD"], "", timeout=10
+        ).strip()
+        dirty = bounded_run(
+            ["git", "-C", str(root), "status", "--porcelain"], "", timeout=10
+        )
+        if re.fullmatch(SHA, head) and not dirty.strip():
+            return head
+    except Exception:
+        pass
+    digest = hashlib.sha256()
+    for path in sorted(root.rglob("*")):
+        if any(part in COPY_SKIP for part in path.parts):
+            continue
+        if not path.is_file() or path.suffix == ".pyc":
+            continue
+        digest.update(str(path.relative_to(root)).encode())
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def snapshot_source(root: Path, dest: Path) -> None:
+    if dest.exists():
+        shutil.rmtree(dest)
+    dest.mkdir(parents=True)
+
+    def ignore(_directory, names):
+        return [name for name in names if name in COPY_SKIP or name.endswith(".pyc")]
+
+    for item in root.iterdir():
+        if item.name in COPY_SKIP:
+            continue
+        target = dest / item.name
+        if item.is_dir():
+            shutil.copytree(item, target, ignore=ignore)
+        elif item.is_file():
+            shutil.copy2(item, target)
+
+
+def build_runtime(generation: Path, deadline: float) -> Path:
+    if sys.version_info < MIN_PYTHON:
+        raise CheckFailed(f"Python {MIN_PYTHON[0]}.{MIN_PYTHON[1]}+ is required")
+    requirements = generation / "runtime-requirements.txt"
+    text = requirements.read_text()
+    if re.search(r"@main\b", text):
+        raise CheckFailed("runtime-requirements.txt must pin full commit SHAs, not @main")
+    venv = generation / ".venv"
+    python = _venv_python(venv)
+    bounded_run([sys.executable, "-m", "venv", str(venv)], "",
+                timeout=min(180, _remaining(deadline, RESERVE)))
+    bounded_run(
+        [str(python), "-m", "pip", "install", "-r", str(requirements)],
+        "",
+        timeout=min(600, _remaining(deadline, RESERVE)),
+        max_output=512 * 1024,
+        env=PIP_ENV,
+    )
+    return python
+
+
+def probe_runtime(python: Path, deadline: float, generation: Path) -> None:
+    from setup import probe_script
+
+    parser = str(generation / "scripts" / "transcript.py")
+    output = bounded_run([str(python), "-c", probe_script(parser)], "",
+                         timeout=min(60, _remaining(deadline, RESERVE)))
+    if not output.strip().endswith("OK"):
+        raise CheckFailed(f"generation runtime probe failed: {output.strip()[:300]}")
+
+
+def write_generation_configs(generation: Path, python: Path, adapter: dict) -> Path:
+    engine = load_engine_config(adapter)
+    config_dir = generation / "config"
+    gen_engine = config_dir / "cc.engine.json"
+    gen_adapter = config_dir / "cc.adapter.json"
+    atomic_write(gen_engine, dict(
+        engine,
+        transcript_adapter=str(generation / "scripts" / "transcript.py"),
+        agent_command=[str(python), str(generation / "scripts" / "organizer.py")],
+    ))
+    atomic_write(gen_adapter, dict(
+        adapter,
+        python=str(python),
+        engine_config=str(gen_engine),
+        base_config=adapter.get("base_config") or str(config_path()),
+    ))
+    return gen_adapter
+
+
+def build_host_package(generation: Path, adapter: dict, sha: str,
+                       package_dir: Path | None = None) -> Path:
+    """Native host package. Live launchers are never touched during staging."""
+    from native_claude import write_host_package
+
+    launcher_dir = launch_dir(adapter) / sha
+    launcher_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(generation / "scripts" / LAUNCHER, launcher_dir / LAUNCHER)
+    shutil.copy2(generation / "scripts" / "bounded.py",
+                 launcher_dir / "bounded.py")
+    launcher = launcher_dir / LAUNCHER
+    package = package_dir if package_dir is not None else generation / "host-package"
+    python = adapter.get("python") or sys.executable
+    config_file = adapter.get("base_config") or str(config_path())
+    return write_host_package(
+        generation,
+        package,
+        python=python,
+        launcher=launcher,
+        version=stamp_version(sha),
+        config_file=config_file,
+    )
+
+
+def stage_generation(sha: str, remote: str, adapter: dict, deadline: float,
+                     build=build_runtime) -> tuple[Path, Path, Path]:
+    target = generations_dir(adapter) / sha
+    if (target / COMPLETE).is_file():
+        python = _venv_python(target / ".venv")
+        gen_adapter = target / "config" / "cc.adapter.json"
+        if python.exists() and gen_adapter.is_file():
+            return target, python, gen_adapter
+        shutil.rmtree(target)
+    elif target.exists():
+        shutil.rmtree(target)
+    staging = generations_dir(adapter) / f".staging-{sha}-{os.getpid()}"
+    staging.mkdir(parents=True, exist_ok=False)
+    try:
+        _git(["init", "-q", str(staging)], timeout=30, deadline=deadline)
+        _git(["remote", "add", "origin", remote], timeout=15,
+             deadline=deadline, cwd=staging)
+        _git(["fetch", "--depth", 1, "origin", sha], timeout=180,
+             deadline=deadline, cwd=staging)
+        _git(["checkout", "-q", "--detach", "FETCH_HEAD"], timeout=60,
+             deadline=deadline, cwd=staging)
+        os.replace(staging, target)
+    except Exception:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    try:
+        python = build(target, deadline)
+        probe_runtime(python, deadline, target)
+        gen_adapter = write_generation_configs(target, python, adapter)
+        build_host_package(target, dict(adapter, python=str(python)), sha)
+        (target / COMPLETE).write_text(f"{sha}\n")
+        return target, python, gen_adapter
+    except Exception:
+        shutil.rmtree(target, ignore_errors=True)
+        raise
+
+
+def _generation_engine(current: dict) -> str:
+    adapter = read_json(Path(current["adapter_config"]))
+    if adapter is None or not isinstance(adapter.get("engine_config"), str):
+        raise Deferred("current generation adapter config is unreadable")
+    return adapter["engine_config"]
+
+
+def stop_if_idle(adapter: dict, current: dict, deadline: float) -> dict:
+    scripts = str(Path(current["generation"]) / "scripts")
+    engine = _generation_engine(current)
+    try:
+        output = bounded_run(
+            [current["python"], "-c", IDLE_SNIPPET, scripts, engine],
+            "",
+            timeout=min(20, _remaining(deadline, RESERVE)),
+        )
+    except Deferred:
+        raise
+    except Exception as exc:
+        raise Deferred(f"stop_if_idle probe failed closed: {str(exc)[:200]}")
+    try:
+        result = json.loads(output.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        raise Deferred("stop_if_idle probe returned no parseable result")
+    if not isinstance(result, dict) or "fatal" in result:
+        raise Deferred(result.get("fatal", "stop_if_idle probe failed"))
+    if result.get("idle") is not True:
+        raise Deferred("service has actual active work; switch deferred")
+    return result
+
+
+def _readback(adapter: dict, package: Path, version: str, deadline: float,
+              reserve: float = RESERVE) -> dict:
+    from native_claude import plugin_list, marketplace_list, verify_readback
+
+    listing = plugin_list(adapter, timeout=_op_timeout(deadline, reserve, 30))
+    markets = marketplace_list(adapter, timeout=_op_timeout(deadline, reserve, 30))
+    return verify_readback(
+        adapter, package, version, listing=listing, markets=markets
+    )
+
+
+def native_install(adapter: dict, package: Path, deadline: float,
+                   reserve: float = RESERVE) -> dict:
+    from native_claude import install_and_verify
+
+    package = Path(package).resolve()
+    manifest = json.loads((package / ".claude-plugin" / "plugin.json").read_text())
+    version = manifest.get("version")
+    if not isinstance(version, str) or not version:
+        raise CheckFailed("host package plugin.json lacks a version")
+    sha = Path(package).parent.name
+    launcher = launch_dir(adapter) / sha / LAUNCHER
+    if not launcher.is_file():
+        candidate = launch_dir(adapter) / (adapter.get("sha") or sha) / LAUNCHER
+        if candidate.is_file():
+            launcher = candidate
+    try:
+        return install_and_verify(
+            package,
+            version,
+            adapter,
+            deadline=deadline - reserve if reserve else deadline,
+            launcher=str(launcher) if launcher.is_file() else None,
+            config_file=adapter.get("base_config") or str(config_path()),
+        )
+    except CheckFailed:
+        raise
+    except Exception as exc:
+        try:
+            after = _readback(adapter, package, version, deadline, reserve)
+        except Exception as read_exc:
+            raise CheckFailed(
+                f"native install uncertain ({str(exc)[:200]}); readback also "
+                f"failed ({str(read_exc)[:200]})"
+            )
+        raise CheckFailed(
+            f"native install uncertain ({str(exc)[:200]}); reconciled "
+            f"registry: {json.dumps(after)[:300]}"
+        )
+
+
+def switch(adapter: dict, current: dict, generation: Path, python: Path,
+           gen_adapter: Path, sha: str, deadline: float,
+           idle, install, lock_timeout) -> None:
+    receipts_dir(adapter).mkdir(parents=True, exist_ok=True)
+    atomic_write(receipts_dir(adapter) / f"{sha}.json", {
+        "sha": sha,
+        "at": time.time(),
+        "previous": current,
+        "generation": str(generation),
+    })
+    native_attempted = False
+    wait = min(lock_timeout, deadline - RESERVE - time.monotonic())
+    if wait <= 0:
+        raise LockTimeout("no time left for the exclusive switch lock")
+    with OperationLock(adapter).exclusive(timeout=wait):
+        try:
+            idle(adapter, current, deadline)
+            native_attempted = True
+            install(adapter, generation / "host-package", deadline)
+            write_current({
+                "generation": str(generation),
+                "python": str(python),
+                "adapter_config": str(gen_adapter),
+                "sha": sha,
+            }, adapter)
+        except Exception:
+            pointer_error = None
+            try:
+                write_current(current, adapter)
+            except Exception as exc:
+                pointer_error = f"pointer restore FAILED: {str(exc)[:200]}"
+            if native_attempted:
+                _rollback_native(adapter, current, install, deadline)
+            if pointer_error:
+                status = read_status(adapter)
+                status["pointer_restore"] = pointer_error
+                write_status(status, adapter)
+            raise
+
+
+def _previous_package(adapter: dict, previous: dict) -> Path:
+    package = Path(previous["generation"]) / "host-package"
+    if package.is_dir():
+        return package
+    if previous.get("sha") is None:
+        bootstrap = update_dir(adapter) / "bootstrap-package"
+        if bootstrap.is_dir():
+            return bootstrap
+    return package
+
+
+def _rollback_native(adapter: dict, previous: dict, install,
+                     deadline: float) -> None:
+    package = _previous_package(adapter, previous)
+    status = read_status(adapter)
+    if not package.is_dir():
+        status["rollback"] = (
+            "no retained previous host package; native registry may still "
+            "reference the candidate"
+        )
+    else:
+        try:
+            prev_adapter = read_json(Path(previous["adapter_config"])) or adapter
+            install(prev_adapter, package, deadline, reserve=FEED_BUDGET)
+            status["rollback"] = "previous native package restored with readback"
+        except Exception as exc:
+            status["rollback"] = (
+                f"native restore FAILED ({str(exc)[:200]}); previous "
+                "generation NOT proven restored"
+            )
+    write_status(status, adapter)
+
+
+def _record(adapter, **fields) -> dict:
+    status = dict(read_status(adapter), at=time.time(), **fields)
+    write_status(status, adapter)
+    return status
+
+
+def _check_once(adapter: dict, deadline: float, *, force, build, idle,
+                install, lock_timeout) -> int:
+    current = read_current(adapter)
+    remote = (os.environ.get("MINDIE_CC_UPDATE_REMOTE")
+              or adapter.get("update_remote") or DEFAULT_REMOTE)
+    try:
+        sha = resolve_main(remote, deadline)
+    except Exception as exc:
+        _record(adapter, current_sha=current.get("sha"), result="check-failed",
+                error=str(exc)[:500])
+        print(json.dumps({"result": "check-failed", "error": str(exc)[:300]}))
+        return 1
+    failed = read_json(failed_path(adapter))
+    if not force and failed and failed.get("sha") == sha \
+            and current.get("sha") != sha:
+        _record(adapter, current_sha=current.get("sha"), candidate_sha=sha,
+                result="suppressed-known-failed", error=failed.get("error"))
+        print(json.dumps({"result": "suppressed-known-failed", "sha": sha}))
+        return 0
+    if sha == current.get("sha"):
+        _record(adapter, current_sha=sha, result="current")
+        print(json.dumps({"result": "current", "sha": sha}))
+        return 0
+    try:
+        generation, python, gen_adapter = stage_generation(
+            sha, remote, adapter, deadline, build=build)
+    except Exception as exc:
+        atomic_write(failed_path(adapter),
+                     {"sha": sha, "error": str(exc)[:500], "at": time.time()})
+        _record(adapter, current_sha=current.get("sha"), candidate_sha=sha,
+                result="failed", error=str(exc)[:500])
+        print(json.dumps({"result": "failed", "error": str(exc)[:500]}))
+        return 1
+    try:
+        switch(adapter, current, generation, python, gen_adapter, sha,
+               deadline, idle, install, lock_timeout)
+    except LockTimeout:
+        _record(adapter, current_sha=current.get("sha"), candidate_sha=sha,
+                result="deferred-busy", error="operation lock stayed shared")
+        print(json.dumps({"result": "deferred-busy", "sha": sha}))
+        return 0
+    except Deferred as exc:
+        _record(adapter, current_sha=current.get("sha"), candidate_sha=sha,
+                result="deferred", error=str(exc)[:500])
+        print(json.dumps({"result": "deferred", "sha": sha,
+                          "reason": str(exc)[:300]}))
+        return 0
+    except Exception as exc:
+        atomic_write(failed_path(adapter),
+                     {"sha": sha, "error": str(exc)[:500], "at": time.time()})
+        _record(adapter, current_sha=current.get("sha"), candidate_sha=sha,
+                result="failed", error=str(exc)[:500])
+        print(json.dumps({"result": "failed", "error": str(exc)[:500]}))
+        return 1
+    _record(adapter, current_sha=sha, result="switched", needs_host_reload=True,
+            note=("MCP/hook dispatch uses the new generation per call; "
+                  "existing task authorization is preserved. Native "
+                  "Skill/MCP/hook definitions refresh with the Claude host."))
+    print(json.dumps({"result": "switched", "sha": sha,
+                      "needs_host_reload": True}))
+    return 0
+
+
+def check(config=None, *, force=False, build=build_runtime,
+          idle=stop_if_idle, install=native_install, lock_timeout=30.0) -> int:
+    adapter = config if isinstance(config, dict) else load_adapter_config()
+    update_dir(adapter).mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + CHECK_BUDGET
+    try:
+        with check_lock(adapter):
+            code = _check_once(adapter, deadline, force=force, build=build,
+                               idle=idle, install=install,
+                               lock_timeout=lock_timeout)
+            _feed_sync(adapter, deadline)
+            return code
+    except LockTimeout:
+        print(json.dumps({"result": "check-already-running"}))
+        return 0
+
+
+def _feed_sync(adapter: dict, deadline: float) -> None:
+    status = read_status(adapter)
+    left = deadline - time.monotonic()
+    if left <= 0:
+        status["feed_sync"] = "skipped: check budget exhausted"
+        write_status(status, adapter)
+        return
+    try:
+        with OperationLock(adapter).shared(timeout=min(5, left)):
+            current = read_current(adapter)
+            engine = _generation_engine(current)
+            bounded_run(
+                [current["python"], "-m", "mindie_knowledge.loop.cli",
+                 "sync", "--config", engine],
+                "",
+                timeout=min(FEED_BUDGET, deadline - time.monotonic()),
+            )
+        status["feed_sync"] = "ok"
+    except Exception as exc:
+        status["feed_sync"] = f"skipped: {str(exc)[:200]}"
+    write_status(status, adapter)
+
+
+def status() -> int:
+    try:
+        adapter = load_adapter_config()
+    except FileNotFoundError:
+        print(json.dumps({"result": "unconfigured",
+                          "hint": "run scripts/setup.py first"}))
+        return 0
+    base = generations_dir(adapter)
+    generations = sorted(
+        p.name for p in base.iterdir()
+        if p.is_dir() and not p.name.startswith(".")
+    ) if base.is_dir() else []
+    print(json.dumps({
+        "current": read_current(adapter),
+        "status": read_status(adapter),
+        "failed": read_json(failed_path(adapter)),
+        "generations": generations,
+    }, indent=2))
+    return 0
+
+
+def recover() -> int:
+    adapter = load_adapter_config()
+    failed = failed_path(adapter)
+    if failed.exists():
+        failed.unlink()
+    return check(adapter, force=True)
+
+
+def install_schedule() -> int:
+    adapter = load_adapter_config()
+    launcher = launch_dir(adapter) / "bootstrap" / LAUNCHER
+    if not launcher.is_file():
+        scripts = Path(read_current(adapter)["generation"]) / "scripts"
+        if not (scripts / LAUNCHER).is_file():
+            raise SystemExit(f"no launcher available at {scripts}")
+        launcher.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(scripts / LAUNCHER, launcher)
+        shutil.copy2(scripts / "bounded.py", launcher.parent / "bounded.py")
+    command = [sys.executable, str(launcher), "updater", "check"]
+    log = update_dir(adapter) / "scheduler.log"
+    if sys.platform == "darwin":
+        import plistlib
+
+        plist = Path.home() / "Library" / "LaunchAgents" / "agent.mindie.cc-update.plist"
+        plist.parent.mkdir(parents=True, exist_ok=True)
+        with plist.open("wb") as stream:
+            plistlib.dump({
+                "Label": "agent.mindie.cc-update",
+                "ProgramArguments": command,
+                "StartInterval": INTERVAL_SECONDS,
+                "StandardOutPath": str(log),
+                "StandardErrorPath": str(log),
+            }, stream)
+        uid = os.getuid()
+        try:
+            bounded_run(["launchctl", "bootout", f"gui/{uid}", str(plist)],
+                        "", timeout=15)
+        except RuntimeError:
+            pass
+        bounded_run(["launchctl", "bootstrap", f"gui/{uid}", str(plist)],
+                    "", timeout=15)
+        print(json.dumps({"result": "scheduled", "agent": str(plist),
+                          "interval_seconds": INTERVAL_SECONDS}))
+        return 0
+    if os.name == "nt":
+        task = " ".join(f'"{item}"' for item in command)
+        bounded_run(
+            ["schtasks", "/Create", "/F", "/TN", "MindIECCUpdate",
+             "/SC", "MINUTE", "/MO", "5", "/TR", task],
+            "",
+            timeout=30,
+        )
+        print(json.dumps({"result": "scheduled", "task": "MindIECCUpdate",
+                          "verified": False}))
+        return 0
+    print(json.dumps({
+        "result": "unsupported-platform",
+        "hint": f"run every {INTERVAL_SECONDS}s via your scheduler: "
+                + " ".join(command),
+    }))
+    return 1
+
+
+def uninstall_schedule() -> int:
+    if sys.platform == "darwin":
+        plist = Path.home() / "Library" / "LaunchAgents" / "agent.mindie.cc-update.plist"
+        if plist.exists():
+            try:
+                bounded_run(["launchctl", "bootout", f"gui/{os.getuid()}",
+                             str(plist)], "", timeout=15)
+            except RuntimeError:
+                pass
+            plist.unlink()
+    elif os.name == "nt":
+        try:
+            bounded_run(["schtasks", "/Delete", "/F", "/TN", "MindIECCUpdate"],
+                        "", timeout=30)
+        except RuntimeError:
+            pass
+    print(json.dumps({"result": "unscheduled"}))
+    return 0
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("op", choices=["check", "status", "recover",
+                                       "install-schedule", "uninstall-schedule"])
+    parser.add_argument("--config", type=Path, default=None)
+    args = parser.parse_args(argv)
+    if args.config is not None:
+        os.environ["MINDIE_CC_CONFIG"] = str(args.config.expanduser().absolute())
+    if args.op == "check":
+        return check()
+    if args.op == "status":
+        return status()
+    if args.op == "recover":
+        return recover()
+    if args.op == "install-schedule":
+        return install_schedule()
+    return uninstall_schedule()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
