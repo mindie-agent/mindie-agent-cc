@@ -63,6 +63,18 @@ class BoundedTests(unittest.TestCase):
             )
         self.assertLess(time.monotonic() - started, 5)
 
+    def test_empty_later_argument_is_passed(self):
+        output = bounded.run(
+            [sys.executable, "-c", "import sys; print(repr(sys.argv[1]))", ""],
+            "",
+            timeout=2,
+        )
+        self.assertEqual(output.strip(), "''")
+        with self.assertRaises(ValueError):
+            bounded.run(["", "-c", "print(1)"], "", timeout=1)
+        with self.assertRaises(ValueError):
+            bounded.run([sys.executable, "--depth", 1], "", timeout=1)
+
     def test_non_reading_stdin_does_not_hang_parent(self):
         started = time.monotonic()
         output = bounded.run(

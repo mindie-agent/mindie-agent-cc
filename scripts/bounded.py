@@ -173,8 +173,12 @@ def _run_windows(process, timeout, max_output, pgid, check):
 
 
 def run(argv, stdin="", *, timeout, env=None, cwd=None, max_output=MAX_OUTPUT, check=True):
-    if not argv or not all(isinstance(item, str) and item for item in argv):
+    if not isinstance(argv, (list, tuple)) or not argv:
         raise ValueError("command must be a nonempty argv list")
+    if not isinstance(argv[0], str) or not argv[0]:
+        raise ValueError("command executable must be a nonempty string")
+    if not all(isinstance(item, str) for item in argv):
+        raise ValueError("command arguments must be strings")
     if timeout is None or timeout <= 0:
         raise ValueError("timeout must be positive")
     data = stdin.encode() if isinstance(stdin, str) else (stdin or b"")

@@ -292,7 +292,7 @@ def stage_generation(sha: str, remote: str, adapter: dict, deadline: float,
         _git(["init", "-q", str(staging)], timeout=30, deadline=deadline)
         _git(["remote", "add", "origin", remote], timeout=15,
              deadline=deadline, cwd=staging)
-        _git(["fetch", "--depth", 1, "origin", sha], timeout=180,
+        _git(["fetch", "--depth", "1", "origin", sha], timeout=180,
              deadline=deadline, cwd=staging)
         _git(["checkout", "-q", "--detach", "FETCH_HEAD"], timeout=60,
              deadline=deadline, cwd=staging)
