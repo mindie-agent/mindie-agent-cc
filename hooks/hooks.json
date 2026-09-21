@@ -61,6 +61,36 @@
             "timeout": 2
           }
         ]
+      },
+      {
+        "matcher": "mindie-agent:reporting-status",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/mindie_launch.py\" hook expansion",
+            "timeout": 2
+          }
+        ]
+      },
+      {
+        "matcher": "mindie-agent:reporting-enable",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/mindie_launch.py\" hook expansion",
+            "timeout": 2
+          }
+        ]
+      },
+      {
+        "matcher": "mindie-agent:reporting-disable",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/mindie_launch.py\" hook expansion",
+            "timeout": 2
+          }
+        ]
       }
     ],
     "PreToolUse": [

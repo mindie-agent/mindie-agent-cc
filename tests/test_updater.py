@@ -65,7 +65,9 @@ class UpdaterTests(unittest.TestCase):
 
     def test_host_package_stamps_unique_version(self):
         adapter = json.loads(self.config.read_text())
-        root = Path(__file__).resolve().parents[1]
+        source = Path(__file__).resolve().parents[1]
+        root = self.tmp / "generation"
+        self.updater.snapshot_source(source, root)
         package = self.updater.build_host_package(
             root, dict(adapter, python=sys.executable), "c" * 40,
             package_dir=self.tmp / "pkg",
@@ -73,6 +75,11 @@ class UpdaterTests(unittest.TestCase):
         manifest = json.loads((package / ".claude-plugin" / "plugin.json").read_text())
         self.assertEqual(manifest["version"], "0.1.0+mindie." + ("c" * 12))
         self.assertTrue((package / "hooks" / "hooks.json").is_file())
+        metadata = json.loads((root / "scripts" / "diagnostic-build.json").read_text())
+        self.assertEqual(metadata["revision"], "c" * 40)
+        launcher = self.genstate.launch_dir(adapter) / ("c" * 40)
+        for name in ("diagnostic_support.py", "diagnostic_fallback.py"):
+            self.assertEqual((launcher / name).read_bytes(), (source / "scripts" / name).read_bytes())
         hooks = json.loads((package / "hooks" / "hooks.json").read_text())
         command = hooks["hooks"]["Stop"][0]["hooks"][0]["command"]
         self.assertIn("mindie_launch.py", command)

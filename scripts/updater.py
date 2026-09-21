@@ -33,31 +33,38 @@ HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
-from bounded import run as bounded_run
-from genstate import (
-    LockTimeout,
-    OperationLock,
-    atomic_write,
-    check_lock,
-    current_path,
-    failed_path,
-    generations_dir,
-    launch_dir,
-    native_package_path,
-    read_current,
-    read_json,
-    read_status,
-    receipts_dir,
-    update_dir,
-    write_current,
-    write_status,
-)
-from paths import (
-    config_path,
-    engine_config_path,
-    load_adapter_config,
-    load_engine_config,
-)
+import diagnostic_support
+
+try:
+    from bounded import run as bounded_run
+    from genstate import (
+        LockTimeout,
+        OperationLock,
+        atomic_write,
+        check_lock,
+        current_path,
+        failed_path,
+        generations_dir,
+        launch_dir,
+        native_package_path,
+        read_current,
+        read_json,
+        read_status,
+        receipts_dir,
+        update_dir,
+        write_current,
+        write_status,
+    )
+    from paths import (
+        config_path,
+        engine_config_path,
+        load_adapter_config,
+        load_engine_config,
+    )
+except ImportError as exc:
+    diagnostic_support.failure(
+        "updater", "bootstrap_import", "missing_committed_file", exception=exc)
+    raise SystemExit("committed updater dependency is unavailable") from None
 
 DEFAULT_REMOTE = "https://github.com/mindie-agent/mindie-agent-cc.git"
 INTERVAL_SECONDS = 300
@@ -298,14 +305,14 @@ def build_host_package(generation: Path, adapter: dict, sha: str,
 
     launcher_dir = launch_dir(adapter) / sha
     launcher_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(generation / "scripts" / LAUNCHER, launcher_dir / LAUNCHER)
-    shutil.copy2(generation / "scripts" / "bounded.py",
-                 launcher_dir / "bounded.py")
+    if not (launcher_dir / LAUNCHER).is_file():
+        for name in (LAUNCHER, "bounded.py", "diagnostic_support.py", "diagnostic_fallback.py"):
+            shutil.copy2(generation / "scripts" / name, launcher_dir / name)
     launcher = launcher_dir / LAUNCHER
     package = package_dir if package_dir is not None else generation / "host-package"
     python = adapter.get("python") or sys.executable
     config_file = adapter.get("base_config") or str(config_path())
-    return write_host_package(
+    package = write_host_package(
         generation,
         package,
         python=python,
@@ -313,6 +320,14 @@ def build_host_package(generation: Path, adapter: dict, sha: str,
         version=stamp_version(sha),
         config_file=config_file,
     )
+    metadata = {"version": stamp_version(sha)}
+    if re.fullmatch(SHA, sha):
+        metadata["revision"] = sha
+    for folder in (generation / "scripts", launcher_dir, package / "scripts"):
+        path = folder / "diagnostic-build.json"
+        if not path.exists():
+            atomic_write(path, metadata)
+    return package
 
 
 def stage_generation(sha: str, remote: str, adapter: dict, deadline: float,
@@ -561,6 +576,23 @@ def _restore_stopped_service(adapter, final, deadline):
     _record(adapter, service_handoff=result)
 
 
+def _update_diagnostic(stage, exc, revision=None):
+    """Local-only update boundary record.
+
+    Fetch, build, and native state may be external, configuration, or
+    credentials. This is not a confirmed product bug, so it is not
+    reportable. The lower layer already owns reportable errors.
+    """
+    return diagnostic_support.failure(
+        "updater",
+        stage,
+        "update_failure",
+        exception=exc,
+        revision=revision,
+        reportable=False,
+    )
+
+
 def _record(adapter, **fields) -> dict:
     status = dict(read_status(adapter), at=time.time(), **fields)
     if (status.get("service_handoff") or {}).get("status") in {"failed", "pending"}:
@@ -578,9 +610,11 @@ def _check_once(adapter: dict, deadline: float, *, force, build, idle,
     try:
         sha = resolve_main(remote, deadline)
     except Exception as exc:
+        diagnostic = _update_diagnostic("resolve_main", exc)
         _record(adapter, current_sha=current.get("sha"), result="check-failed",
-                error=str(exc)[:500])
-        print(json.dumps({"result": "check-failed", "error": str(exc)[:300]}))
+                error=str(exc)[:500], diagnostic=diagnostic)
+        print(json.dumps({"result": "check-failed", "error": str(exc)[:300],
+                          "diagnostic": diagnostic}))
         return 1
     failed = read_json(failed_path(adapter))
     if not force and failed and failed.get("sha") == sha \
@@ -597,11 +631,13 @@ def _check_once(adapter: dict, deadline: float, *, force, build, idle,
         generation, python, gen_adapter = stage_generation(
             sha, remote, adapter, deadline, build=build)
     except Exception as exc:
+        diagnostic = _update_diagnostic("stage_generation", exc)
         atomic_write(failed_path(adapter),
                      {"sha": sha, "error": str(exc)[:500], "at": time.time()})
         _record(adapter, current_sha=current.get("sha"), candidate_sha=sha,
-                result="failed", error=str(exc)[:500])
-        print(json.dumps({"result": "failed", "error": str(exc)[:500]}))
+                result="failed", error=str(exc)[:500], diagnostic=diagnostic)
+        print(json.dumps({"result": "failed", "error": str(exc)[:500],
+                          "diagnostic": diagnostic}))
         return 1
     try:
         switch(adapter, current, generation, python, gen_adapter, sha,
@@ -618,11 +654,13 @@ def _check_once(adapter: dict, deadline: float, *, force, build, idle,
                           "reason": str(exc)[:300]}))
         return 0
     except Exception as exc:
+        diagnostic = _update_diagnostic("switch", exc)
         atomic_write(failed_path(adapter),
                      {"sha": sha, "error": str(exc)[:500], "at": time.time()})
         _record(adapter, current_sha=current.get("sha"), candidate_sha=sha,
-                result="failed", error=str(exc)[:500])
-        print(json.dumps({"result": "failed", "error": str(exc)[:500]}))
+                result="failed", error=str(exc)[:500], diagnostic=diagnostic)
+        print(json.dumps({"result": "failed", "error": str(exc)[:500],
+                          "diagnostic": diagnostic}))
         return 1
     status = _record(adapter, current_sha=sha, result="switched", needs_host_reload=True,
             note=("MCP/hook dispatch uses the new generation per call; "
@@ -643,10 +681,52 @@ def check(config=None, *, force=False, build=build_runtime,
                                idle=idle, install=install,
                                lock_timeout=lock_timeout)
             _feed_sync(adapter, deadline)
+            try:
+                _logging_maintenance(adapter, deadline)
+            except Exception as exc:
+                # Retention/storage failures must not replace the update outcome.
+                _update_diagnostic("logging_maintenance", exc)
             return code
     except LockTimeout:
         print(json.dumps({"result": "check-already-running"}))
         return 0
+
+
+def _logging_maintenance(adapter, deadline):
+    """Offline diagnostic retention under the existing check lock.
+
+    Selects the committed interpreter and runs reporting maintain. Does
+    not start the reporter, ensure the service, retry, or change the
+    updater return code. Shared reporting may be disabled.
+    """
+    status = read_status(adapter)
+    remaining = deadline - time.monotonic()
+    if remaining <= 0.1:
+        status["logging_maintenance"] = {"status": "skipped_budget"}
+        write_status(status, adapter)
+        return
+    try:
+        with OperationLock(adapter).shared(timeout=min(0.5, remaining)):
+            current = read_current(adapter)
+            output = bounded_run(
+                [current["python"], "-m", "mindie_diagnostics.cli",
+                 "reporting", "maintain", "--config",
+                 str(diagnostic_support.reporting_config_path())],
+                "",
+                timeout=min(5, deadline - time.monotonic()),
+            )
+        payload = json.loads((output or "").strip() or "null")
+        if not isinstance(payload, dict):
+            raise ValueError("maintenance result is not an object")
+        status["logging_maintenance"] = {"status": "completed"}
+    except LockTimeout:
+        status["logging_maintenance"] = {"status": "deferred"}
+    except Exception as exc:
+        status["logging_maintenance"] = {
+            "status": "unavailable",
+            "type": type(exc).__name__,
+        }
+    write_status(status, adapter)
 
 
 def _feed_sync(adapter: dict, deadline: float) -> bool:
@@ -723,7 +803,6 @@ def install_schedule() -> int:
     python = current["python"]
     config_file = adapter.get("base_config") or str(config_path())
     command = [python, str(launcher), "--config", config_file, "updater", "check"]
-    log = update_dir(adapter) / "scheduler.log"
     if sys.platform == "darwin":
         import plistlib
 
@@ -734,8 +813,8 @@ def install_schedule() -> int:
                 "Label": "agent.mindie.cc-update",
                 "ProgramArguments": command,
                 "StartInterval": INTERVAL_SECONDS,
-                "StandardOutPath": str(log),
-                "StandardErrorPath": str(log),
+                "StandardOutPath": os.devnull,
+                "StandardErrorPath": os.devnull,
             }, stream)
         uid = os.getuid()
         try:
@@ -807,4 +886,21 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except (SystemExit, KeyboardInterrupt):
+        raise
+    except Exception as exc:
+        diagnostic = diagnostic_support.failure(
+            "updater",
+            "entry",
+            "update_failure",
+            exception=exc,
+            reportable=False,
+        )
+        print(json.dumps({
+            "result": "failed",
+            "error_type": type(exc).__name__,
+            "diagnostic": diagnostic,
+        }))
+        raise SystemExit(1)

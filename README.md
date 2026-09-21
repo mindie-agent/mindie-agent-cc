@@ -36,3 +36,27 @@ Explicit task entry is `/mindie-agent:init`. Contribution:
 ```
 
 Component checks: `python3 -m unittest discover -s tests -v`. These are not host acceptance.
+
+## Optional product failure reporting
+
+Product failure reporting is a separate user choice from knowledge contribution.
+It stays off until an explicit native command enables it; the setting is shared
+with the other MindIE adapters.
+
+- `/mindie-agent:reporting-status` reads the setting and reporter state.
+- `/mindie-agent:reporting-enable` enables sanitized product fault reporting to
+  `mindie-agent/mindie-agent` and returns an exact command to prepare the reporter.
+  Run that command once outside the Hook and check the result before treating
+  the reporter as ready. A failed preparation is not retried automatically.
+- `/mindie-agent:reporting-disable` revokes future reporting; local diagnostics remain.
+
+Incidents contain static product stages, error types and installed code versions.
+They do not collect task transcripts, prompts, commands, environment or credentials.
+Cancellation, caller validation, inactive permissions, ordinary lock contention
+and business-command failures are not product bug reports. The original tool
+result and remote job reference stay available when a diagnostic reference is added.
+
+Updater checks perform bounded offline log maintenance even with reporting off.
+launchd output goes to the null device; updater state and bounded diagnostics carry
+failure evidence. No unbounded `scheduler.log` is created. Native-host/reporting
+acceptance is separate from component checks; see the acceptance documentation.

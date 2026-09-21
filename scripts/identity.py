@@ -31,6 +31,9 @@ COMMANDS = {
     "mindie-agent:sharing-enable": "sharing-enable",
     "mindie-agent:sharing-disable": "sharing-disable",
     "mindie-agent:recover": "recover",
+    "mindie-agent:reporting-status": "reporting-status",
+    "mindie-agent:reporting-enable": "reporting-enable",
+    "mindie-agent:reporting-disable": "reporting-disable",
 }
 
 KNOWLEDGE_TOOLS = {

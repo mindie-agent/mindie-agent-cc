@@ -105,7 +105,7 @@ def _diagnostics(session):
         )
 
 
-def status_payload(session=None):
+def _knowledge_status_payload(session=None):
     if not _configured():
         payload = three_choices()
         if payload["first_use"] in {"read-only", "later", "contribute"}:
@@ -170,6 +170,17 @@ def status_payload(session=None):
             )
     except Exception:
         pass
+    return payload
+
+
+def status_payload(session=None):
+    """Read-only. Reporting is independent of knowledge setup and activation."""
+    import diagnostic_support
+
+    payload = dict(_knowledge_status_payload(session))
+    payload["reporting"] = diagnostic_support.reporting_status()
+    if payload.get("first_use") is None:
+        payload["reporting_choice"] = diagnostic_support.reporting_hint()
     return payload
 
 
@@ -383,6 +394,21 @@ def op_recover(session, event):
     )
 
 
+def op_reporting(session, event, command):
+    """Native slash only. Does not ensure the reporter inside the Hook."""
+    first = consume_slash(session, event, command)
+    import diagnostic_support
+
+    if command == "reporting-status":
+        return diagnostic_support.reporting_status()
+    if not first:
+        return dict(diagnostic_support.reporting_status(), already=True)
+    if not _configured():
+        raise ValueError("MindIE is not configured; run scripts/setup.py first")
+    python = load_adapter_config()["python"]
+    return diagnostic_support.configure_reporting(command == "reporting-enable", python)
+
+
 def dispatch_event(event: dict) -> dict:
     if is_subagent(event):
         raise ValueError("subagent tasks are not activated")
@@ -390,6 +416,8 @@ def dispatch_event(event: dict) -> dict:
     require_absolute(event.get("cwd"), "cwd")
     require_absolute(event.get("transcript_path"), "transcript_path")
     command = slash_command(event)
+    if command in {"reporting-status", "reporting-enable", "reporting-disable"}:
+        return op_reporting(session, event, command)
     if command == "init":
         return op_init(session, event)
     if command == "status":

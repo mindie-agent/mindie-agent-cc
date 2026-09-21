@@ -22,6 +22,9 @@ COMMANDS = (
     "sharing-enable",
     "sharing-disable",
     "recover",
+    "reporting-status",
+    "reporting-enable",
+    "reporting-disable",
 )
 
 
