@@ -1,5 +1,6 @@
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -35,10 +36,33 @@ class ManifestTests(unittest.TestCase):
         self.assertNotIn("mcpServers", plugin)
 
     def test_runtime_pins(self):
-        text = (ROOT / "runtime-requirements.txt").read_text()
-        self.assertIn("40063ebfc94a4b0fcf508a2a653af8b6403a1a0b", text)
-        self.assertIn("13301ef7f52b53ffca0a6702a8a3c18f2edfcd52", text)
-        self.assertNotIn("@main", text)
+        from setup import runtime_pins
+
+        pins = runtime_pins()
+        self.assertEqual(set(pins), {"mindie-knowledge", "remote-dev"})
+        self.assertEqual(pins["mindie-knowledge"]["url"], "https://github.com/mindie-agent/knowledge")
+        self.assertEqual(pins["remote-dev"]["url"], "https://github.com/mindie-agent/remote-dev")
+        for pin in pins.values():
+            self.assertRegex(pin["commit"], r"^[0-9a-f]{40}$")
+
+    def test_runtime_manifest_rejects_floating_foreign_duplicate_or_missing_pins(self):
+        from setup import runtime_pins
+
+        pins = runtime_pins()
+        rows = [f"{name} @ git+{pin['url']}@{pin['commit']}" for name, pin in pins.items()]
+        invalid = [
+            "\n".join(rows).replace(pins["mindie-knowledge"]["commit"], "main"),
+            "\n".join(rows).replace("github.com/mindie-agent/knowledge", "github.com/other/knowledge"),
+            "\n".join(rows + [rows[0]]),
+            rows[0],
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "runtime-requirements.txt"
+            for text in invalid:
+                with self.subTest(text=text):
+                    path.write_text(text)
+                    with self.assertRaises(ValueError):
+                        runtime_pins(path)
 
 
 if __name__ == "__main__":
