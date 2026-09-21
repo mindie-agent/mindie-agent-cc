@@ -65,5 +65,31 @@ class OrganizerTests(unittest.TestCase):
         self.assertNotIn("DEFAULT_MODEL", source)
 
 
+
+
+
+class OrganizerFailureTests(unittest.TestCase):
+    def test_typed_failures_do_not_include_provider_text(self):
+        from bounded import CommandCancelled, CommandTimedOut, OutputLimitExceeded
+        cases = ((CommandTimedOut("private"), "deadline"),
+                 (OutputLimitExceeded("private"), "output_limit"),
+                 (RuntimeError("private"), "native"))
+        for failure, category in cases:
+            with self.subTest(category=category), patch.object(
+                organizer, "native_environment", return_value={}
+            ), patch.object(organizer, "claude_bin", return_value="controlled"), patch.object(
+                organizer, "run", side_effect=failure
+            ):
+                with self.assertRaises(organizer._Category) as raised:
+                    organizer.run_native({})
+                self.assertEqual(raised.exception.category, category)
+                self.assertNotIn("private", str(raised.exception))
+        with patch.object(organizer, "native_environment", return_value={}), patch.object(
+            organizer, "claude_bin", return_value="controlled"
+        ), patch.object(organizer, "run", side_effect=CommandCancelled("private")):
+            with self.assertRaises(CommandCancelled):
+                organizer.run_native({})
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,28 @@
+name: Adapter checks
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  component:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install the declared runtime
+        env:
+          PIP_RETRIES: '0'
+          GIT_TERMINAL_PROMPT: '0'
+        run: python -m pip install -r runtime-requirements.txt
+      - name: Component contracts (not native harness acceptance)
+        run: python -m unittest discover -s tests

@@ -62,34 +62,65 @@ def probe_script(parser: str) -> str:
 PROBE_SCRIPT = probe_script(
     str((PLUGIN_ROOT / "scripts" / "transcript.py").resolve()))
 
-PINNED = {
-    "mindie-knowledge": "fbef7d5eaec9ebb6143b0a5fc4ba33a45296c41b",
-    "remote-dev": "13301ef7f52b53ffca0a6702a8a3c18f2edfcd52",
+OFFICIAL_REPOSITORIES = {
+    "mindie-knowledge": "https://github.com/mindie-agent/knowledge",
+    "remote-dev": "https://github.com/mindie-agent/remote-dev",
 }
+
+
+def runtime_pins(requirements=None):
+    """One version source, restricted to the two reviewed official Git repos."""
+    path = Path(requirements) if requirements is not None else PLUGIN_ROOT / "runtime-requirements.txt"
+    pins = {}
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        match = re.fullmatch(r"([a-z-]+)\s+@\s+git\+(https://github\.com/[^\s@]+)@([0-9a-f]{40})", line)
+        if match is None:
+            raise ValueError("runtime-requirements.txt requires official Git URLs and full commit SHAs")
+        name, url, commit = match.groups()
+        url = url.removesuffix(".git")
+        if name in pins or OFFICIAL_REPOSITORIES.get(name) != url:
+            raise ValueError("runtime-requirements.txt has a duplicate or non-official dependency")
+        pins[name] = dict(url=url, commit=commit)
+    if pins.keys() != OFFICIAL_REPOSITORIES.keys():
+        raise ValueError("runtime-requirements.txt must contain both reviewed dependencies")
+    return pins
+
+
 _PIN_TEMPLATE = """
 import json
 from importlib.metadata import distribution
-from pathlib import Path
 want = {pins!r}
 missing = []
-for name, sha in want.items():
+for name, pin in want.items():
     try:
         dist = distribution(name)
+        direct = json.loads(dist.read_text("direct_url.json") or "{{}}")
+        vcs = direct.get("vcs_info") or {{}}
+        if (direct.get("url") not in (pin["url"], pin["url"] + ".git")
+                or vcs.get("vcs") != "git" or vcs.get("commit_id") != pin["commit"]):
+            missing.append(f"{{name}} does not match the required official Git commit")
     except Exception as exc:
         missing.append(f"{{name}} ({{type(exc).__name__}})")
-        continue
-    direct = Path(dist._path) / "direct_url.json"
-    if not direct.is_file():
-        missing.append(f"{{name}} lacks direct_url.json")
-        continue
-    commit = ((json.loads(direct.read_text()).get("vcs_info") or {{}}).get("commit_id") or "")
-    if commit != sha:
-        missing.append(f"{{name}} commit {{commit}} != {{sha}}")
 print("MISSING: " + "; ".join(missing) if missing else "OK")
 """
 
 
-def probe_runtime(python):
+def probe_runtime(python, pins=None):
+    pins = runtime_pins() if pins is None else pins
+    pin_script = _PIN_TEMPLATE.format(pins=pins)
+    try:
+        pin_result = run([python, "-c", pin_script], "", timeout=15)
+    except Exception as exc:
+        raise SystemExit(
+            f"dependency pin probe failed in {python}: {type(exc).__name__}: {str(exc)[:200]}"
+        )
+    if not pin_result.strip().endswith("OK"):
+        raise SystemExit(
+            f"{python} does not have the exact required commits: {pin_result.strip()}"
+        )
     try:
         output = run([python, "-c", PROBE_SCRIPT], "", timeout=15)
     except Exception as exc:
@@ -100,17 +131,6 @@ def probe_runtime(python):
         raise SystemExit(
             f"{python} is missing pinned dependencies: {output.strip()}. "
             "Install runtime-requirements.txt first."
-        )
-    pin_script = _PIN_TEMPLATE.format(pins=PINNED)
-    try:
-        pins = run([python, "-c", pin_script], "", timeout=15)
-    except Exception as exc:
-        raise SystemExit(
-            f"dependency pin probe failed in {python}: {type(exc).__name__}: {str(exc)[:200]}"
-        )
-    if not pins.strip().endswith("OK"):
-        raise SystemExit(
-            f"{python} does not have the exact required commits: {pins.strip()}"
         )
 
 
@@ -246,6 +266,10 @@ def main():
     args = parser.parse_args()
     if sys.version_info < (3, 11):
         parser.error("Python 3.11+ is required")
+    try:
+        pins = runtime_pins()
+    except (OSError, ValueError) as exc:
+        parser.error(str(exc))
     community = community_settings(args, parser)
     config = args.config.expanduser().absolute()
     domain_root = args.root.expanduser().absolute() / "cc"
@@ -253,10 +277,10 @@ def main():
         python = str(Path(args.knowledge_python).expanduser())
         if not os.path.isabs(python):
             python = str(Path(python).absolute())
-        probe_runtime(python)
+        probe_runtime(python, pins)
     else:
         python = build_bootstrap_runtime(domain_root)
-        probe_runtime(python)
+        probe_runtime(python, pins)
     if not re.fullmatch(r"[a-z][a-z0-9-]{0,63}", args.domain):
         parser.error("invalid domain name")
     engine_config = config.with_name(config.stem + ".engine.json")

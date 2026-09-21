@@ -5,9 +5,19 @@ cannot select() process pipes, so it uses two daemon reader threads and kills
 the tree with taskkill /T. The Windows path uses only standard primitives but
 has not been verified on real hardware yet.
 
+When this process is already the leader of an owned process group
+(MINDIE_MAINTENANCE_GROUP=1 set by the outer core), POSIX spawns stay in that
+group instead of a new session: the outer core owns whole-group terminal
+cleanup, so this module only kills the direct child, never the group.
+
 Final success still closes the owned tree so no descendant outlives this call.
 Stdin is a temporary file, never a blocking pipe write: a child that does not
 read cannot hang the parent past the deadline.
+
+An optional cancel Event is checked before spawn, while draining/waiting
+(including after the child has closed its pipes), and before returning a
+result. Stderr bytes count toward the output bound and are then discarded;
+failures report only a static category and returncode.
 """
 
 from __future__ import annotations
@@ -27,6 +37,18 @@ if POSIX:
 
 MAX_OUTPUT = 256 * 1024
 _CHUNK = 8192
+
+
+class CommandCancelled(RuntimeError):
+    """The caller cancelled this attempt; owned children are reaped."""
+
+
+class CommandTimedOut(RuntimeError):
+    """The command did not finish before the absolute deadline."""
+
+
+class OutputLimitExceeded(ValueError, RuntimeError):
+    """Captured output grew past the configured byte bound."""
 
 
 def _spawn(command, stdin, env, cwd):
@@ -84,39 +106,56 @@ class _Cap:
     def add(self, chunk):
         self.size += len(chunk)
         if self.size > self.max_output:
-            raise ValueError("output exceeds the bound")
+            raise OutputLimitExceeded("output exceeds the bound")
 
 
-def _run_posix(process, timeout, max_output, pgid, check):
+def _cancelled(cancel):
+    return cancel is not None and cancel.is_set()
+
+
+def _run_posix(process, timeout, max_output, pgid, check, cancel):
     selector = selectors.DefaultSelector()
     selector.register(process.stdout, selectors.EVENT_READ, "out")
     selector.register(process.stderr, selectors.EVENT_READ, "err")
     deadline = time.monotonic() + timeout
     output = bytearray()
-    errors = bytearray()
     cap = _Cap(max_output)
     try:
-        while selector.get_map():
+        while True:
+            if _cancelled(cancel):
+                raise CommandCancelled("command cancelled")
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise TimeoutError("deadline exceeded")
-            for key, _ in selector.select(min(0.05, remaining)):
-                chunk = os.read(key.fileobj.fileno(), _CHUNK)
-                if not chunk:
-                    selector.unregister(key.fileobj)
-                    continue
-                cap.add(chunk)
-                if key.data == "out":
-                    output.extend(chunk)
-                else:
-                    errors.extend(chunk)
-        try:
-            process.wait(timeout=max(0.01, deadline - time.monotonic()))
-        except subprocess.TimeoutExpired as exc:
-            raise TimeoutError("deadline exceeded") from exc
+            alive = process.poll() is None
+            if not alive and not selector.get_map():
+                break
+            if selector.get_map():
+                for key, _ in selector.select(min(0.05, remaining)):
+                    chunk = os.read(key.fileobj.fileno(), _CHUNK)
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                        continue
+                    cap.add(chunk)
+                    if key.data == "out":
+                        output.extend(chunk)
+                continue
+            try:
+                process.wait(timeout=min(0.05, remaining))
+            except subprocess.TimeoutExpired:
+                continue
+            break
+        if _cancelled(cancel):
+            raise CommandCancelled("command cancelled")
+        if process.poll() is None:
+            try:
+                process.wait(timeout=max(0.01, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired as exc:
+                raise TimeoutError("deadline exceeded") from exc
+        if _cancelled(cancel):
+            raise CommandCancelled("command cancelled")
         if check and process.returncode:
-            err = bytes(errors[:400]).decode("utf-8", "replace")
-            raise RuntimeError(f"command failed ({process.returncode}): {err}")
+            raise RuntimeError(f"command failed ({process.returncode})")
         return output.decode("utf-8", "replace")
     finally:
         _kill_tree(process, pgid)
@@ -133,10 +172,9 @@ def _run_posix(process, timeout, max_output, pgid, check):
         process.stderr.close()
 
 
-def _run_windows(process, timeout, max_output, pgid, check):
+def _run_windows(process, timeout, max_output, pgid, check, cancel):
     deadline = time.monotonic() + timeout
     output = bytearray()
-    errors = bytearray()
     cap = _Cap(max_output)
     lock = threading.Lock()
     failure = []
@@ -151,9 +189,7 @@ def _run_windows(process, timeout, max_output, pgid, check):
                     cap.add(chunk)
                     if keep:
                         output.extend(chunk)
-                    else:
-                        errors.extend(chunk)
-        except ValueError as exc:
+        except (ValueError, OutputLimitExceeded) as exc:
             failure.append(exc)
 
     threads = [
@@ -163,18 +199,26 @@ def _run_windows(process, timeout, max_output, pgid, check):
     for thread in threads:
         thread.start()
     try:
-        while any(thread.is_alive() for thread in threads):
+        while any(thread.is_alive() for thread in threads) or process.poll() is None:
+            if _cancelled(cancel):
+                raise CommandCancelled("command cancelled")
             if time.monotonic() >= deadline:
                 raise TimeoutError("deadline exceeded")
             if failure:
                 raise failure[0]
+            if process.poll() is not None and not any(
+                thread.is_alive() for thread in threads
+            ):
+                break
             time.sleep(0.02)
         if failure:
             raise failure[0]
-        process.wait(timeout=max(0.01, deadline - time.monotonic()))
+        if process.poll() is None:
+            process.wait(timeout=max(0.01, deadline - time.monotonic()))
+        if _cancelled(cancel):
+            raise CommandCancelled("command cancelled")
         if check and process.returncode:
-            err = bytes(errors[:400]).decode("utf-8", "replace")
-            raise RuntimeError(f"command failed ({process.returncode}): {err}")
+            raise RuntimeError(f"command failed ({process.returncode})")
         return bytes(output).decode("utf-8", "replace")
     finally:
         _kill_tree(process, pgid)
@@ -188,7 +232,17 @@ def _run_windows(process, timeout, max_output, pgid, check):
         process.stderr.close()
 
 
-def run(argv, stdin="", *, timeout, env=None, cwd=None, max_output=MAX_OUTPUT, check=True):
+def run(
+    argv,
+    stdin="",
+    *,
+    timeout,
+    env=None,
+    cwd=None,
+    max_output=MAX_OUTPUT,
+    check=True,
+    cancel=None,
+):
     if not isinstance(argv, (list, tuple)) or not argv:
         raise ValueError("command must be a nonempty argv list")
     if not isinstance(argv[0], str) or not argv[0]:
@@ -197,6 +251,8 @@ def run(argv, stdin="", *, timeout, env=None, cwd=None, max_output=MAX_OUTPUT, c
         raise ValueError("command arguments must be strings")
     if timeout is None or timeout <= 0:
         raise ValueError("timeout must be positive")
+    if _cancelled(cancel):
+        raise CommandCancelled("command cancelled")
     data = stdin.encode() if isinstance(stdin, str) else (stdin or b"")
     with tempfile.TemporaryFile() as stream:
         if data:
@@ -216,20 +272,20 @@ def run(argv, stdin="", *, timeout, env=None, cwd=None, max_output=MAX_OUTPUT, c
         atexit.register(cleanup)
         try:
             if POSIX:
-                result = _run_posix(process, timeout, max_output, pgid, check)
+                result = _run_posix(process, timeout, max_output, pgid, check, cancel)
             else:
-                result = _run_windows(process, timeout, max_output, pgid, check)
-        except TimeoutError as exc:
-            raise RuntimeError(f"command timed out after {timeout}s") from exc
-        except ValueError as exc:
-            if "exceeds" in str(exc):
-                raise RuntimeError(
-                    f"command output exceeds the bound ({max_output} bytes)"
-                ) from exc
+                result = _run_windows(process, timeout, max_output, pgid, check, cancel)
+            if _cancelled(cancel):
+                raise CommandCancelled("command cancelled")
+            return result
+        except CommandCancelled:
             raise
+        except OutputLimitExceeded:
+            raise
+        except (TimeoutError, subprocess.TimeoutExpired) as exc:
+            raise CommandTimedOut(f"command timed out after {timeout}s") from exc
         finally:
             try:
                 atexit.unregister(cleanup)
             except Exception:
                 pass
-        return result

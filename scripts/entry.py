@@ -91,6 +91,20 @@ def consume_slash(session, event, command):
     return gate().claim(session, "plugin_command", ident[:256], token=token) is True
 
 
+def _diagnostics(session):
+    """One bounded read of existing state; never activate or repair."""
+    try:
+        from mindie_knowledge.loop.diagnostics import snapshot
+
+        return snapshot(str(engine_config_path()), session=session)
+    except Exception as exc:
+        return dict(
+            status="unavailable",
+            error=dict(stage="runtime_diagnostics", type=type(exc).__name__),
+            hints=["Inspect the selected MindIE runtime. Native tools and independent SSH remain available; no recovery or retry was started."],
+        )
+
+
 def status_payload(session=None):
     if not _configured():
         payload = three_choices()
@@ -100,27 +114,31 @@ def status_payload(session=None):
         return payload
     from sharing import public_status
 
-    payload = dict(
-        configured=True,
-        sharing=public_status(),
-        first_use=first_use(),
-    )
+    try:
+        sharing_view, choice = public_status(), first_use()
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        return dict(
+            configured=None,
+            sharing=dict(enabled=None, status="unavailable"),
+            error=dict(stage="local_settings", type=type(exc).__name__),
+            config=str(config_path()),
+            diagnostics=_diagnostics(session),
+            hint="Inspect the existing adapter and community configuration. Native tools and independent SSH remain available; no setup or retry was started.",
+        )
+    payload = dict(configured=True, sharing=sharing_view, first_use=choice)
+    diagnostics = _diagnostics(session)
+    payload["diagnostics"] = diagnostics
     if session:
-        from admission import gate
-
-        lease = gate().active_lease(session)
-        if lease is None:
-            payload["this_session"] = dict(activated=False)
-        else:
-            failures = int(lease.get("failures") or 0)
-            paused = bool(lease.get("paused")) or (not lease.get("enabled")) or failures >= 3
-            payload["this_session"] = dict(
-                activated=True,
-                enabled=bool(lease.get("enabled")) and not paused,
-                failures=failures,
-                project_root=lease.get("project_root"),
-                paused=paused,
-            )
+        admission = diagnostics.get("admission") or {}
+        state = admission.get("status", "unavailable")
+        payload["this_session"] = dict(
+            status=state,
+            activated=state in {"active", "paused"},
+            enabled=state == "active" and admission.get("enabled") is True,
+            failures=admission.get("failures"),
+            project_root=admission.get("project_root"),
+            paused=state == "paused",
+        )
     stored = payload.get("first_use")
     if stored in {"read-only", "later", "contribute"}:
         payload["repeat"] = True
@@ -333,7 +351,8 @@ def op_recover(session, event):
     if not batch:
         return dict(
             run_outside_hook=True,
-            hint="pass --batch ID and one of inspect|reconcile|retry|compact",
+            hint="Use a batch_id from diagnostics.contributions with --batch ID and one of inspect|reconcile|retry|compact; no recovery was started.",
+            diagnostics=_diagnostics(session),
             note=(
                 "Unknown writes: contribution-reconcile. "
                 "Retry only a proven failed batch. Compact only a confirmed batch."

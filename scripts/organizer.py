@@ -20,10 +20,28 @@ HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
-from bounded import run
+from bounded import CommandCancelled, CommandTimedOut, OutputLimitExceeded, run
+from mindie_knowledge.loop.process import AGENT_ERROR_EXIT_CODES
 
 MAX_INPUT = 65536
 MAX_RESULT = 32768
+_DIAGNOSTICS = {
+    "configuration": "organizer configuration failed",
+    "deadline": "organizer invocation exceeded the deadline",
+    "native": "organizer native invocation failed",
+    "invalid_result": "organizer result was invalid",
+    "output_limit": "organizer output exceeded the bound",
+}
+
+
+class _Category(Exception):
+    """Stage marker with no provider text or credentials."""
+
+    def __init__(self, category):
+        super().__init__(category)
+        self.category = category
+
+
 ORGANIZE_FIELDS = {"entry_id", "title", "summary", "conditions", "content"}
 
 SYSTEM_PROMPT = """You organize one admitted task increment into zero to three public experience entries. Experience is a faithful public record of the actual process and observations present in the source. Title and summary are brief neutral search introductions only. Do not extract, summarize, or generalize lessons. Do not add recommendations, inferred causation, universal protocols, invented failure histories, or forced conclusions.
@@ -164,6 +182,8 @@ def native_environment():
     home = Path(selected or env.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
     settings_file = home / "settings.json"
     settings = json.loads(settings_file.read_text()) if settings_file.is_file() else {}
+    if not isinstance(settings, dict):
+        raise ValueError("native provider settings must be an object")
     allowed = {
         "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
         "ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL",
@@ -215,7 +235,10 @@ def run_native(payload):
         empty_mcp.write_text('{"mcpServers": {}}\n')
         claude_home = isolated / "claude-config"
         claude_home.mkdir()
-        env = native_environment()
+        try:
+            env = native_environment()
+        except (OSError, ValueError, RuntimeError, TypeError) as exc:
+            raise _Category("configuration") from exc
         for nested in (
             "CLAUDECODE",
             "CLAUDE_CODE_SESSION_ID",
@@ -225,8 +248,12 @@ def run_native(payload):
             env.pop(nested, None)
         env["CLAUDE_CONFIG_DIR"] = str(claude_home)
         env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
+        try:
+            binary = claude_bin()
+        except RuntimeError as exc:
+            raise _Category("native") from exc
         argv = [
-            claude_bin(),
+            binary,
             "--print",
             "--output-format",
             "json",
@@ -252,18 +279,30 @@ def run_native(payload):
         if effort:
             argv.extend(["--effort", effort])
         argv.append(prompt)
-        output = run(
-            argv,
-            "",
-            timeout=120,
-            env=env,
-            cwd=str(isolated),
-            max_output=MAX_RESULT,
-        )
-        public = public_result_text(output)
-        if not public.strip():
-            raise ValueError("organizer produced no public result")
-        return normalize(extract_json(public))
+        try:
+            output = run(
+                argv,
+                "",
+                timeout=120,
+                env=env,
+                cwd=str(isolated),
+                max_output=MAX_RESULT,
+            )
+        except CommandCancelled:
+            raise
+        except CommandTimedOut as exc:
+            raise _Category("deadline") from exc
+        except OutputLimitExceeded as exc:
+            raise _Category("output_limit") from exc
+        except (OSError, RuntimeError) as exc:
+            raise _Category("native") from exc
+        try:
+            public = public_result_text(output)
+            if not public.strip():
+                raise ValueError("organizer produced no public result")
+            return normalize(extract_json(public))
+        except ValueError as exc:
+            raise _Category("invalid_result") from exc
     finally:
         shutil.rmtree(isolated, ignore_errors=True)
 
@@ -271,16 +310,25 @@ def run_native(payload):
 def main():
     raw = sys.stdin.buffer.read(MAX_INPUT + 1)
     if len(raw) > MAX_INPUT:
-        raise SystemExit("organizer input exceeds limit")
-    payload = json.loads(raw.decode("utf-8"))
+        raise _Category("invalid_result")
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except ValueError as exc:
+        raise _Category("invalid_result") from exc
     if not isinstance(payload, dict):
-        raise SystemExit("organizer payload must be one JSON object")
+        raise _Category("invalid_result")
     print(json.dumps(run_native(payload), ensure_ascii=False))
 
 
 if __name__ == "__main__":
     try:
         main()
-    except (ValueError, OSError, RuntimeError, json.JSONDecodeError) as exc:
-        print(str(exc)[:400], file=sys.stderr)
+    except _Category as exc:
+        print(_DIAGNOSTICS[exc.category], file=sys.stderr)
+        raise SystemExit(AGENT_ERROR_EXIT_CODES[exc.category])
+    except CommandCancelled:
+        print("organizer invocation cancelled", file=sys.stderr)
+        raise SystemExit(130)
+    except Exception:
+        print("organizer failed unexpectedly", file=sys.stderr)
         raise SystemExit(2)
