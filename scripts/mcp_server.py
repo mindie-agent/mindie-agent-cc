@@ -44,7 +44,8 @@ KNOWLEDGE_TOOL_DEFS = [
         name="mindie_status",
         description=(
             "Read MindIE status and first-use choices for the current bound task. "
-            "Does not activate the task or enable sharing."
+            "Includes safe failure categories and this task's contribution batch IDs "
+            "for recovery inspection. Does not activate, enable sharing or retry work."
         ),
         inputSchema=dict(type="object", properties={}, additionalProperties=False),
     ),
