@@ -43,6 +43,7 @@ from genstate import (
     failed_path,
     generations_dir,
     launch_dir,
+    native_package_path,
     read_current,
     read_json,
     read_status,
@@ -401,7 +402,8 @@ def _readback(adapter: dict, package: Path, version: str, deadline: float,
     listing = plugin_list(adapter, timeout=_op_timeout(deadline, reserve, 30))
     markets = marketplace_list(adapter, timeout=_op_timeout(deadline, reserve, 30))
     return verify_readback(
-        adapter, package, version, listing=listing, markets=markets
+        adapter, package, version, listing=listing, markets=markets,
+        timeout=_op_timeout(deadline, reserve, 20),
     )
 
 
@@ -433,7 +435,8 @@ def native_install(adapter: dict, package: Path, deadline: float,
         raise
     except Exception as exc:
         try:
-            after = _readback(adapter, package, version, deadline, reserve)
+            after = _readback(adapter, native_package_path(adapter), version,
+                              deadline, reserve)
         except Exception as read_exc:
             raise CheckFailed(
                 f"native install uncertain ({str(exc)[:200]}); readback also "
