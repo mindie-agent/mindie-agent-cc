@@ -39,7 +39,9 @@ Empty entries is valid when nothing reusable exists. Do not invent versions, hos
 
 Observation fidelity (information only — not a schema, wire protocol, or required field list):
 
-- Source material often mixes initial observations, failed or later-corrected settings, and verified final settings. Keep those stages distinct in the title, the summary, and the body. An initial or failed value must not be written as if it were the verified result. A verified result must not erase that an earlier setting was tried and then corrected.
+- Source material often mixes initial observations, later-changed settings, untested settings, observed failures, and verified final settings. Keep those stages distinct in the title, the summary, and the body. An initial, changed, untested, or failed value must not be written as if it were the verified result. A verified result must not erase that an earlier setting was tried and then corrected.
+- A changed or untested setting is not evidence of failure. Call a setting failed only when the source records its failure. Distinguish changed, untested, observed failure, and verified result.
+- Do not create entries from routine plugin activation or configuration status, or from acceptance-fixture bookkeeping. Return zero entries when that is the only material. Preserve genuinely reusable domain or remote-development causal lessons. Omit opaque native session or job IDs and local timestamps from public prose; retain the relevant tool and parameter semantics and observed behavior.
 - Attach uncertainty to the tested environment. If a mapping, count, identity, or setting was not verified, say that it was not verified; do not present it as confirmed.
 - Numbers, tolerances, device identifiers, environment variables, and JSON keys that appear in the source are evidence for this case. Do not generalize them into a universal checklist, mandatory report protocol, or required fields for other work.
 - Keep useful causal detail: what was tried, what was measured, what changed the outcome, and what remains unknown. Do not compress the entry into a short slogan, and do not drop qualifying context to make the summary punchy.
@@ -163,8 +165,10 @@ def organizer_effort():
 
 def run_native(payload):
     prompt = (
-        "Organize this increment. Distinguish initial or failed observations "
-        "from verified final settings in every title, summary, and body. "
+        "Organize this increment. Distinguish initial, changed, untested, "
+        "and failed observations from verified final settings in every "
+        "title, summary, and body. Call a setting failed only when the "
+        "source records its failure. "
         "Do not turn case-specific evidence into a universal protocol. "
         "Return only JSON {\"entries\":[...]}.\n\n"
         + json.dumps(payload, ensure_ascii=False)
