@@ -30,6 +30,11 @@ _CHUNK = 8192
 
 
 def _spawn(command, stdin, env, cwd):
+    inherited = (
+        POSIX
+        and os.environ.get("MINDIE_MAINTENANCE_GROUP") == "1"
+        and os.getpgrp() == os.getpid()
+    )
     kwargs = dict(
         args=list(command),
         stdin=stdin,
@@ -39,14 +44,25 @@ def _spawn(command, stdin, env, cwd):
         cwd=cwd,
     )
     if POSIX:
-        kwargs["start_new_session"] = True
+        kwargs["start_new_session"] = not inherited
     else:
         kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-    return subprocess.Popen(**kwargs)
+    process = subprocess.Popen(**kwargs)
+    process._mindie_inherited_group = inherited
+    return process
 
 
 def _kill_tree(process, pgid=None):
     if POSIX:
+        if getattr(process, "_mindie_inherited_group", False):
+            # Killing the shared group here would kill this organizer before
+            # it can report its result. Core owns the entire group on exit.
+            if process.poll() is None:
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+            return
         try:
             os.killpg(pgid if pgid is not None else process.pid, signal.SIGKILL)
         except (OSError, ProcessLookupError):
