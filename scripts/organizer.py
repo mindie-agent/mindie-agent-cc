@@ -150,17 +150,54 @@ def claude_bin():
     raise RuntimeError("claude binary is not on PATH; organizer cannot run")
 
 
-def organizer_model():
+def native_environment():
+    """Read only provider/model settings from the selected native user profile.
+
+    An OS-started service has no interactive Claude process to materialize
+    these settings. Never import hooks, tools, MCP, project settings or the
+    complete profile into the isolated organizer.
+    """
+    env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
+    from paths import load_adapter_config
+
+    selected = load_adapter_config().get("claude_config_dir")
+    home = Path(selected or env.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+    settings_file = home / "settings.json"
+    settings = json.loads(settings_file.read_text()) if settings_file.is_file() else {}
+    allowed = {
+        "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL",
+        "CLAUDE_CODE_EFFORT_LEVEL", "MAX_THINKING_TOKENS",
+    }
+    provider = settings.get("env", {})
+    if not isinstance(provider, dict):
+        raise ValueError("native provider settings are not an object")
+    for key in allowed:
+        if key in provider:
+            if not isinstance(provider[key], str):
+                raise ValueError("native provider setting must be text")
+            env[key] = provider[key]
+    if isinstance(settings.get("model"), str):
+        env.setdefault("ANTHROPIC_MODEL", settings["model"])
+    if isinstance(settings.get("effortLevel"), str):
+        env.setdefault("CLAUDE_CODE_EFFORT_LEVEL", settings["effortLevel"])
+    return env
+
+
+def organizer_model(env=None):
+    env = os.environ if env is None else env
     for key in ("MINDIE_CC_ORGANIZER_MODEL", "ANTHROPIC_MODEL"):
-        value = os.environ.get(key)
+        value = env.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
     return None
 
 
-def organizer_effort():
+def organizer_effort(env=None):
+    env = os.environ if env is None else env
     for key in ("MINDIE_CC_ORGANIZER_EFFORT", "CLAUDE_CODE_EFFORT_LEVEL"):
-        value = os.environ.get(key)
+        value = env.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
     return None
@@ -178,7 +215,7 @@ def run_native(payload):
         empty_mcp.write_text('{"mcpServers": {}}\n')
         claude_home = isolated / "claude-config"
         claude_home.mkdir()
-        env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
+        env = native_environment()
         for nested in (
             "CLAUDECODE",
             "CLAUDE_CODE_SESSION_ID",
@@ -208,10 +245,10 @@ def run_native(payload):
             "--system-prompt",
             SYSTEM_PROMPT,
         ]
-        model = organizer_model()
+        model = organizer_model(env)
         if model:
             argv.extend(["--model", model])
-        effort = organizer_effort()
+        effort = organizer_effort(env)
         if effort:
             argv.extend(["--effort", effort])
         argv.append(prompt)

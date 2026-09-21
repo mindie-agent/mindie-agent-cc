@@ -36,7 +36,7 @@ class ManifestTests(unittest.TestCase):
 
     def test_runtime_pins(self):
         text = (ROOT / "runtime-requirements.txt").read_text()
-        self.assertIn("fbef7d5eaec9ebb6143b0a5fc4ba33a45296c41b", text)
+        self.assertIn("40063ebfc94a4b0fcf508a2a653af8b6403a1a0b", text)
         self.assertIn("13301ef7f52b53ffca0a6702a8a3c18f2edfcd52", text)
         self.assertNotIn("@main", text)
 

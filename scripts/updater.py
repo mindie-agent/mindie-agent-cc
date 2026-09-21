@@ -39,9 +39,11 @@ from genstate import (
     OperationLock,
     atomic_write,
     check_lock,
+    current_path,
     failed_path,
     generations_dir,
     launch_dir,
+    native_package_path,
     read_current,
     read_json,
     read_status,
@@ -62,7 +64,8 @@ INTERVAL_SECONDS = 300
 CHECK_BUDGET = 240.0
 ROLLBACK_BUDGET = 45.0
 FEED_BUDGET = 60.0
-RESERVE = ROLLBACK_BUDGET + FEED_BUDGET
+HANDOFF_BUDGET = 8.0
+RESERVE = ROLLBACK_BUDGET + FEED_BUDGET + HANDOFF_BUDGET
 SHA = r"[0-9a-f]{40}"
 COMPLETE = ".mindie-generation-complete"
 LAUNCHER = "mindie_launch.py"
@@ -74,37 +77,6 @@ PIP_ENV = dict(
     PIP_NO_INPUT="1",
     PIP_DISABLE_PIP_VERSION_CHECK="1",
 )
-
-IDLE_SNIPPET = """
-import json, sys
-sys.path.insert(0, sys.argv[1])
-try:
-    from knowledge_service import existing_service
-    from mindie_knowledge.loop.cli import rpc
-except Exception as exc:
-    sys.stderr.write(json.dumps({"fatal": f"runtime import failed: {exc}"}))
-    sys.exit(3)
-try:
-    connection = existing_service(sys.argv[2])
-except (OSError, FileNotFoundError):
-    connection = None
-except Exception as exc:
-    sys.stderr.write(json.dumps({"fatal": f"service probe failed: {type(exc).__name__}: {exc}"}))
-    sys.exit(4)
-if connection is None:
-    print(json.dumps({"idle": True, "service": "absent"}))
-    sys.exit(0)
-try:
-    result = rpc(connection, "stop_if_idle", {}, timeout=5)
-except Exception as exc:
-    sys.stderr.write(json.dumps({"fatal": f"stop_if_idle RPC failed: {exc}"}))
-    sys.exit(5)
-if not isinstance(result, dict) or not isinstance(result.get("idle"), bool):
-    sys.stderr.write(json.dumps({"fatal": "invalid stop_if_idle result"}))
-    sys.exit(6)
-print(json.dumps(result))
-"""
-
 
 _FEED_OK = frozenset({"synced", "unchanged"})
 _FEED_PENDING = frozenset({"busy", "deferred"})
@@ -388,24 +360,36 @@ def _generation_engine(current: dict) -> str:
 
 
 def stop_if_idle(adapter: dict, current: dict, deadline: float) -> dict:
-    scripts = str(Path(current["generation"]) / "scripts")
     engine = _generation_engine(current)
+    stop_budget = min(5, _remaining(deadline, RESERVE))
+    previous_handoff = read_status(adapter).get("service_handoff")
+    _record(adapter, service_handoff={"status": "pending",
+            "error": "interrupted-stop-or-restore-needs-attention",
+            "sha": current.get("sha")})
     try:
         output = bounded_run(
-            [current["python"], "-c", IDLE_SNIPPET, scripts, engine],
+            [current["python"], str(HERE / "service_handoff.py"), "stop", engine],
             "",
-            timeout=min(20, _remaining(deadline, RESERVE)),
+            timeout=stop_budget,
         )
     except Deferred:
         raise
     except Exception as exc:
-        raise Deferred(f"stop_if_idle probe failed closed: {str(exc)[:200]}")
+        _record(adapter, service_handoff={"status": "failed",
+                "error": "stop-outcome-unconfirmed", "sha": current.get("sha")})
+        raise CheckFailed("stop outcome unconfirmed; service needs attention") from None
     try:
-        result = json.loads(output.strip().splitlines()[-1])
-    except (ValueError, IndexError):
-        raise Deferred("stop_if_idle probe returned no parseable result")
-    if not isinstance(result, dict) or "fatal" in result:
-        raise Deferred(result.get("fatal", "stop_if_idle probe failed"))
+        result = json.loads(output.strip())
+        if (not isinstance(result, dict)
+                or type(result.get("idle")) is not bool
+                or result.get("service") not in {"absent", "busy", "stopped"}):
+            raise ValueError("invalid stop result")
+    except (ValueError, TypeError):
+        _record(adapter, service_handoff={"status": "failed",
+                "error": "invalid-stop-result", "sha": current.get("sha")})
+        raise CheckFailed("stop result unconfirmed; service needs attention") from None
+    if result.get("service") != "stopped":
+        _record(adapter, service_handoff=previous_handoff)
     if result.get("idle") is not True:
         raise Deferred("service has actual active work; switch deferred")
     return result
@@ -418,7 +402,8 @@ def _readback(adapter: dict, package: Path, version: str, deadline: float,
     listing = plugin_list(adapter, timeout=_op_timeout(deadline, reserve, 30))
     markets = marketplace_list(adapter, timeout=_op_timeout(deadline, reserve, 30))
     return verify_readback(
-        adapter, package, version, listing=listing, markets=markets
+        adapter, package, version, listing=listing, markets=markets,
+        timeout=_op_timeout(deadline, reserve, 20),
     )
 
 
@@ -450,7 +435,8 @@ def native_install(adapter: dict, package: Path, deadline: float,
         raise
     except Exception as exc:
         try:
-            after = _readback(adapter, package, version, deadline, reserve)
+            after = _readback(adapter, native_package_path(adapter), version,
+                              deadline, reserve)
         except Exception as read_exc:
             raise CheckFailed(
                 f"native install uncertain ({str(exc)[:200]}); readback also "
@@ -473,33 +459,44 @@ def switch(adapter: dict, current: dict, generation: Path, python: Path,
         "generation": str(generation),
     })
     native_attempted = False
+    stopped = False
+    final = None
     wait = min(lock_timeout, deadline - RESERVE - time.monotonic())
     if wait <= 0:
         raise LockTimeout("no time left for the exclusive switch lock")
     with OperationLock(adapter).exclusive(timeout=wait):
         try:
-            idle(adapter, current, deadline)
+            idle_result = idle(adapter, current, deadline)
+            stopped = idle_result.get("service") == "stopped"
             native_attempted = True
             install(adapter, generation / "host-package", deadline)
-            write_current({
+            final = {
                 "generation": str(generation),
                 "python": str(python),
                 "adapter_config": str(gen_adapter),
                 "sha": sha,
-            }, adapter)
+            }
+            write_current(final, adapter)
         except Exception:
+            final = None
             pointer_error = None
             try:
                 write_current(current, adapter)
             except Exception as exc:
                 pointer_error = f"pointer restore FAILED: {str(exc)[:200]}"
-            if native_attempted:
-                _rollback_native(adapter, current, install, deadline)
+            native_restored = not native_attempted or _rollback_native(
+                adapter, current, install, deadline)
+            if not pointer_error and native_restored:
+                final = current
             if pointer_error:
                 status = read_status(adapter)
                 status["pointer_restore"] = pointer_error
                 write_status(status, adapter)
             raise
+
+        finally:
+            if stopped:
+                _restore_stopped_service(adapter, final, deadline)
 
 
 def _previous_package(adapter: dict, previous: dict) -> Path:
@@ -514,9 +511,10 @@ def _previous_package(adapter: dict, previous: dict) -> Path:
 
 
 def _rollback_native(adapter: dict, previous: dict, install,
-                     deadline: float) -> None:
+                     deadline: float) -> bool:
     package = _previous_package(adapter, previous)
     status = read_status(adapter)
+    restored = False
     if not package.is_dir():
         status["rollback"] = (
             "no retained previous host package; native registry may still "
@@ -525,7 +523,8 @@ def _rollback_native(adapter: dict, previous: dict, install,
     else:
         try:
             prev_adapter = read_json(Path(previous["adapter_config"])) or adapter
-            install(prev_adapter, package, deadline, reserve=FEED_BUDGET)
+            install(prev_adapter, package, deadline, reserve=FEED_BUDGET + HANDOFF_BUDGET)
+            restored = True
             status["rollback"] = "previous native package restored with readback"
         except Exception as exc:
             status["rollback"] = (
@@ -533,10 +532,40 @@ def _rollback_native(adapter: dict, previous: dict, install,
                 "generation NOT proven restored"
             )
     write_status(status, adapter)
+    return restored
+
+
+def _restore_stopped_service(adapter, final, deadline):
+    """One attempt, only after our stop; never resolve a bootstrap fallback."""
+    try:
+        if final is None or read_json(current_path(adapter)) != final:
+            raise RuntimeError("committed generation or native rollback unproven")
+        selected = read_json(Path(final["adapter_config"]))
+        if not selected:
+            raise RuntimeError("committed adapter is unreadable")
+        env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+        env["MINDIE_CC_CONFIG"] = final["adapter_config"]
+        if selected.get("claude_config_dir"):
+            env["CLAUDE_CONFIG_DIR"] = selected["claude_config_dir"]
+        output = bounded_run(
+            [final["python"], str(HERE / "service_handoff.py"),
+             "restore", selected["engine_config"]], "", env=env,
+            timeout=_op_timeout(deadline, FEED_BUDGET, HANDOFF_BUDGET))
+        result = json.loads(output)
+        if result.get("status") not in {"restored", "not-needed"}:
+            raise RuntimeError("invalid restoration result")
+        result["sha"] = final.get("sha")
+    except Exception as exc:
+        result = {"status": "failed", "error": type(exc).__name__,
+                  "sha": (final or {}).get("sha")}
+    _record(adapter, service_handoff=result)
 
 
 def _record(adapter, **fields) -> dict:
     status = dict(read_status(adapter), at=time.time(), **fields)
+    if (status.get("service_handoff") or {}).get("status") in {"failed", "pending"}:
+        if status.get("result") in {"current", "switched"}:
+            status["result"] = "degraded"
     write_status(status, adapter)
     return status
 
@@ -561,9 +590,9 @@ def _check_once(adapter: dict, deadline: float, *, force, build, idle,
         print(json.dumps({"result": "suppressed-known-failed", "sha": sha}))
         return 0
     if sha == current.get("sha"):
-        _record(adapter, current_sha=sha, result="current")
-        print(json.dumps({"result": "current", "sha": sha}))
-        return 0
+        status = _record(adapter, current_sha=sha, result="current")
+        print(json.dumps(status))
+        return int(status["result"] == "degraded")
     try:
         generation, python, gen_adapter = stage_generation(
             sha, remote, adapter, deadline, build=build)
@@ -595,13 +624,12 @@ def _check_once(adapter: dict, deadline: float, *, force, build, idle,
                 result="failed", error=str(exc)[:500])
         print(json.dumps({"result": "failed", "error": str(exc)[:500]}))
         return 1
-    _record(adapter, current_sha=sha, result="switched", needs_host_reload=True,
+    status = _record(adapter, current_sha=sha, result="switched", needs_host_reload=True,
             note=("MCP/hook dispatch uses the new generation per call; "
                   "existing task authorization is preserved. Native "
                   "Skill/MCP/hook definitions refresh with the Claude host."))
-    print(json.dumps({"result": "switched", "sha": sha,
-                      "needs_host_reload": True}))
-    return 0
+    print(json.dumps(status))
+    return int(status["result"] == "degraded")
 
 
 def check(config=None, *, force=False, build=build_runtime,
