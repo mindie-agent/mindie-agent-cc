@@ -1,0 +1,15 @@
+{
+  "name": "mindie-agent",
+  "displayName": "MindIE Agent",
+  "version": "0.1.0",
+  "description": "MindIE Agent for Claude Code: explicit-task knowledge, optional public contribution, and independent remote-dev. Activates only from /mindie-agent:init.",
+  "author": {
+    "name": "MindIE Agent",
+    "url": "https://github.com/mindie-agent/mindie-agent-cc"
+  },
+  "homepage": "https://github.com/mindie-agent/mindie-agent-cc",
+  "repository": "https://github.com/mindie-agent/mindie-agent-cc",
+  "license": "MIT",
+  "keywords": ["mindie", "knowledge", "vllm-ascend", "remote-dev", "claude-code"],
+  "skills": "./skills/"
+}
