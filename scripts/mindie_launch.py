@@ -341,6 +341,7 @@ def _hook(op: str) -> int:
                 "helper_missing",
                 "missing_committed_file",
                 revision=current.get("sha"),
+                reportable=(op != "stop"),
             )
             return _hook_open("committed generation lacks bridge.py")
         remaining = deadline - time.monotonic()
@@ -357,6 +358,7 @@ def _hook(op: str) -> int:
                 category,
                 exception=exc,
                 revision=current.get("sha"),
+                reportable=(op != "stop"),
                 elapsed_ms=max(0, int((time.monotonic() - started) * 1000)),
             )
 
