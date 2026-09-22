@@ -104,7 +104,10 @@ def send(message):
 
 def failure(exc):
     text = f"Unavailable: {exc}. Continue independently."[:500]
-    return dict(content=[dict(type="text", text=text)], isError=True)
+    from diagnostic_support import attach
+
+    result = dict(content=[dict(type="text", text=text)], isError=True)
+    return attach(result, getattr(exc, "mindie_diagnostic", None))
 
 
 def _validated_job_ref(args):
@@ -154,11 +157,15 @@ def remote_stage_failure(args, name, stage, exc=None):
     for key in ("category", "submission_state"):
         if key in structured:
             text += f" {key}={structured[key]}."
-    return dict(
+    from diagnostic_support import attach
+
+    result = dict(
         content=[dict(type="text", text=text[:500])],
         isError=True,
         structuredContent=structured,
     )
+
+    return attach(result, getattr(exc, "mindie_diagnostic", None))
 
 
 def clamp_remote_args(args):
