@@ -28,6 +28,8 @@ def _read_small(path):
     """Read bounded regular metadata without following a final symlink."""
     fd = None
     try:
+        if Path(path).is_symlink():
+            return None
         flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
         fd = os.open(path, flags)
         info = os.fstat(fd)

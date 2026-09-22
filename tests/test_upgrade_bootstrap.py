@@ -67,6 +67,17 @@ class UpgradeBootstrapTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout), {'revision': SHA})
 
+    def test_metadata_rejects_symlink(self):
+        other = self.root / 'unrelated-build.json'
+        other.write_text(json.dumps({'revision': 'b' * 40, 'version': 'unrelated'}))
+        try:
+            (self.scripts / 'diagnostic-build.json').symlink_to(other)
+        except OSError:
+            self.skipTest('platform does not permit creating a symlink')
+        result = self.metadata()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), {'revision': SHA, 'version': '0.1.0+mindie.aaaaaaaaaaaa'})
+
     def test_sharing_off_stop_needs_no_input_or_current_generation(self):
         config = self.root / 'cc.json'
         config.write_text('{}')

@@ -50,8 +50,11 @@ def _bootstrap_diagnostics():
     generation = here.parent.parent / "generations" / here.name
     descriptor = None
     try:
+        marker = generation / ".mindie-generation-complete"
+        if marker.is_symlink():
+            return
         flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
-        descriptor = os.open(generation / ".mindie-generation-complete", flags)
+        descriptor = os.open(marker, flags)
         info = os.fstat(descriptor)
         if not stat.S_ISREG(info.st_mode) or info.st_size > 41:
             return
@@ -76,9 +79,12 @@ def _bootstrap_diagnostics():
 _diagnostic_path = _bootstrap_diagnostics()
 if _diagnostic_path is None:
     raise ModuleNotFoundError("diagnostic support is absent from this completed generation")
-_diagnostic_spec = importlib.util.spec_from_file_location("diagnostic_support", _diagnostic_path)
-diagnostic_support = importlib.util.module_from_spec(_diagnostic_spec)
-_diagnostic_spec.loader.exec_module(diagnostic_support)
+diagnostic_support = sys.modules.get("diagnostic_support")
+if getattr(diagnostic_support, "__file__", None) != str(_diagnostic_path):
+    _diagnostic_spec = importlib.util.spec_from_file_location("diagnostic_support", _diagnostic_path)
+    diagnostic_support = importlib.util.module_from_spec(_diagnostic_spec)
+    _diagnostic_spec.loader.exec_module(diagnostic_support)
+    sys.modules["diagnostic_support"] = diagnostic_support
 
 MAX_LINE = 128 * 1024
 MAX_HOOK_BYTES = 128 * 1024
