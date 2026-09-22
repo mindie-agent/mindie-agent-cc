@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -99,12 +100,34 @@ def _valid_tuple(data) -> dict | None:
         and Path(adapter_config).is_file()
     ):
         return None
-    return {
+    result = {
         "generation": generation,
         "python": python,
         "adapter_config": adapter_config,
         "sha": data.get("sha") if isinstance(data.get("sha"), str) else None,
     }
+    if "native_package" in data:
+        native_package = data.get("native_package")
+        native_path = Path(native_package) if isinstance(native_package, str) else None
+        sha = result["sha"]
+        generation_path = Path(generation)
+        owned_root = generation_path.parent.parent / "native-packages"
+        if (
+            native_path is None
+            or not native_path.is_absolute()
+            or not native_path.is_dir()
+            or native_path.is_symlink()
+            or not isinstance(sha, str)
+            or not re.fullmatch(r"[0-9a-f]{40}", sha)
+            or generation_path.name != sha
+            or generation_path.parent.name != "generations"
+            or native_path.parent.resolve() != owned_root.resolve()
+            or not re.fullmatch(re.escape(sha) + r"-[0-9a-f]{12}", native_path.name)
+        ):
+            raise ValueError("committed native_package is not an owned package for this generation: "
+                             + str(native_package)[:240])
+        result["native_package"] = native_package
+    return result
 
 
 def read_current(config=None) -> dict:

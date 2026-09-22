@@ -24,20 +24,52 @@ def _hex(value, length):
     return None
 
 
-def build_metadata():
-    """Read this package's diagnostic-build.json. No subprocess or network."""
+def _read_small(path):
+    """Read bounded regular metadata without following a final symlink."""
     fd = None
     try:
-        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "diagnostic-build.json")
+        if Path(path).is_symlink():
+            return None
         flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
         fd = os.open(path, flags)
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode) or info.st_size > 2048:
-            return {}
+            return None
         raw = os.read(fd, 2049)
         if len(raw) > 2048:
-            return {}
-        data = json.loads(raw.decode())
+            return None
+        return raw.decode()
+    except Exception:
+        return None
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except Exception:
+                pass
+
+
+def build_metadata():
+    """Use package metadata, or the same generation's older install records."""
+    here = Path(__file__).resolve().parent
+    try:
+        raw = _read_small(here / "diagnostic-build.json")
+        if raw is not None:
+            data = json.loads(raw)
+        else:
+            # Old updaters do not emit diagnostic-build.json. Their completed
+            # Git generation and stamped host manifest are existing facts.
+            generation = here.parent
+            if here.name != "scripts" or generation.parent.name != "generations":
+                return {}
+            revision = _hex(generation.name, 40)
+            marker = _read_small(generation / ".mindie-generation-complete")
+            if not revision or marker is None or marker.strip() != revision:
+                return {}
+            manifest = json.loads(_read_small(generation / "host-package" / ".claude-plugin" / "plugin.json") or "null")
+            data = {"revision": revision}
+            if isinstance(manifest, dict) and manifest.get("name") == "mindie-agent":
+                data["version"] = manifest.get("version")
         if not isinstance(data, dict):
             return {}
         revision = _hex(data.get("revision"), 40)
@@ -48,12 +80,6 @@ def build_metadata():
         return result
     except Exception:
         return {}
-    finally:
-        if fd is not None:
-            try:
-                os.close(fd)
-            except Exception:
-                pass
 
 
 def _warn():
