@@ -99,12 +99,24 @@ def _valid_tuple(data) -> dict | None:
         and Path(adapter_config).is_file()
     ):
         return None
-    return {
+    result = {
         "generation": generation,
         "python": python,
         "adapter_config": adapter_config,
         "sha": data.get("sha") if isinstance(data.get("sha"), str) else None,
     }
+    if "native_package" in data:
+        native_package = data.get("native_package")
+        native_path = Path(native_package) if isinstance(native_package, str) else None
+        if (
+            native_path is None
+            or not native_path.is_absolute()
+            or not native_path.is_dir()
+        ):
+            raise ValueError("committed native_package is not an existing absolute directory: "
+                             + str(native_package)[:240])
+        result["native_package"] = native_package
+    return result
 
 
 def read_current(config=None) -> dict:

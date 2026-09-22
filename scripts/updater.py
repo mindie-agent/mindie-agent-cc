@@ -431,19 +431,20 @@ def native_install(adapter: dict, package: Path, deadline: float,
     version = manifest.get("version")
     if not isinstance(version, str) or not version:
         raise CheckFailed("host package plugin.json lacks a version")
-    sha = Path(package).parent.name
-    launcher = launch_dir(adapter) / sha / LAUNCHER
+    explicit = adapter.get("sha")
+    if isinstance(explicit, str) and explicit:
+        launcher = launch_dir(adapter) / explicit / LAUNCHER
+    else:
+        launcher = launch_dir(adapter) / "bootstrap" / LAUNCHER
     if not launcher.is_file():
-        candidate = launch_dir(adapter) / (adapter.get("sha") or sha) / LAUNCHER
-        if candidate.is_file():
-            launcher = candidate
+        raise CheckFailed("expected launcher missing")
     try:
         return install_and_verify(
             package,
             version,
             adapter,
             deadline=deadline - reserve if reserve else deadline,
-            launcher=str(launcher) if launcher.is_file() else None,
+            launcher=str(launcher),
             config_file=adapter.get("base_config") or str(config_path()),
         )
     except CheckFailed:
@@ -465,7 +466,7 @@ def native_install(adapter: dict, package: Path, deadline: float,
 
 def switch(adapter: dict, current: dict, generation: Path, python: Path,
            gen_adapter: Path, sha: str, deadline: float,
-           idle, install, lock_timeout) -> None:
+           idle, install, lock_timeout, *, package: Path | None = None) -> None:
     receipts_dir(adapter).mkdir(parents=True, exist_ok=True)
     atomic_write(receipts_dir(adapter) / f"{sha}.json", {
         "sha": sha,
@@ -484,13 +485,16 @@ def switch(adapter: dict, current: dict, generation: Path, python: Path,
             idle_result = idle(adapter, current, deadline)
             stopped = idle_result.get("service") == "stopped"
             native_attempted = True
-            install(adapter, generation / "host-package", deadline)
+            target = Path(package) if package is not None else generation / "host-package"
+            install(dict(adapter, sha=sha), target, deadline)
             final = {
                 "generation": str(generation),
                 "python": str(python),
                 "adapter_config": str(gen_adapter),
                 "sha": sha,
             }
+            if package is not None:
+                final["native_package"] = str(Path(package).resolve())
             write_current(final, adapter)
         except Exception:
             final = None
@@ -515,6 +519,9 @@ def switch(adapter: dict, current: dict, generation: Path, python: Path,
 
 
 def _previous_package(adapter: dict, previous: dict) -> Path:
+    native = previous.get("native_package")
+    if isinstance(native, str) and native:
+        return Path(native)
     package = Path(previous["generation"]) / "host-package"
     if package.is_dir():
         return package
@@ -537,7 +544,8 @@ def _rollback_native(adapter: dict, previous: dict, install,
         )
     else:
         try:
-            prev_adapter = read_json(Path(previous["adapter_config"])) or adapter
+            prev_adapter = dict(read_json(Path(previous["adapter_config"])) or adapter)
+            prev_adapter["sha"] = previous.get("sha")
             install(prev_adapter, package, deadline, reserve=FEED_BUDGET + HANDOFF_BUDGET)
             restored = True
             status["rollback"] = "previous native package restored with readback"
@@ -596,15 +604,290 @@ def _update_diagnostic(stage, exc, revision=None):
 def _record(adapter, **fields) -> dict:
     status = dict(read_status(adapter), at=time.time(), **fields)
     if (status.get("service_handoff") or {}).get("status") in {"failed", "pending"}:
-        if status.get("result") in {"current", "switched"}:
+        if status.get("result") in {"current", "switched", "package-refreshed"}:
             status["result"] = "degraded"
     write_status(status, adapter)
     return status
 
 
+_PACKAGE_REFRESH_PHASE = "package-refresh"
+_PACKAGE_REFRESH_INTENT = "package refresh interrupted or unconfirmed"
+
+
+def _finish_current(adapter: dict, sha: str) -> int:
+    status = _record(adapter, current_sha=sha, result="current", error=None)
+    print(json.dumps(status))
+    return int(status["result"] == "degraded")
+
+
+def _package_refresh_eligible(current: dict, sha: str) -> bool:
+    """Only the updater generation whose COMPLETE marker is this exact SHA."""
+    if not isinstance(sha, str) or not re.fullmatch(SHA, sha):
+        return False
+    try:
+        generation = Path(current["generation"]).resolve()
+    except (KeyError, OSError, TypeError):
+        return False
+    if generation != HERE.parent.resolve():
+        return False
+    try:
+        recorded = (generation / COMPLETE).read_text().strip()
+    except OSError:
+        return False
+    return recorded == sha
+
+
+def _package_identity(package: Path, version: str, hooks: dict, mcp: dict, source: Path) -> bool:
+    from paths import PLUGIN_ID
+
+    manifest = read_json(package / ".claude-plugin" / "plugin.json")
+    got_hooks = read_json(package / "hooks" / "hooks.json")
+    got_mcp = read_json(package / ".mcp.json")
+    return (
+        isinstance(manifest, dict)
+        and manifest.get("name") == PLUGIN_ID
+        and manifest.get("version") == version
+        and got_hooks == hooks
+        and got_mcp == mcp
+        and {str(p.relative_to(source / "skills")): p.read_bytes()
+             for p in (source / "skills").rglob("*") if p.is_file()}
+            == {str(p.relative_to(package / "skills")): p.read_bytes()
+                for p in (package / "skills").rglob("*") if p.is_file()}
+    )
+
+
+def _plan_package_refresh(adapter: dict, current: dict, sha: str):
+    from native_claude import render_hooks, render_mcp
+
+    launcher = launch_dir(adapter) / sha / LAUNCHER
+    if not launcher.is_file():
+        raise CheckFailed("expected launcher missing")
+    python = str(current["python"])
+    selected = read_json(Path(current["adapter_config"]))
+    config_file = selected.get("base_config") if selected else None
+    if not isinstance(config_file, str) or not Path(config_file).is_absolute():
+        raise CheckFailed("committed adapter lacks an absolute base_config")
+    hooks = render_hooks(python, str(launcher), config_file)
+    mcp = render_mcp(python, str(launcher), config_file)
+    existing = Path(current.get("native_package") or Path(current["generation"]) / "host-package")
+    if existing.is_dir():
+        have_hooks = read_json(existing / "hooks" / "hooks.json")
+        have_mcp = read_json(existing / ".mcp.json")
+        if have_hooks == hooks and have_mcp == mcp:
+            return None
+    raw = json.dumps(
+        {"hooks": hooks, "mcp": mcp},
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    digest = hashlib.sha256(raw.encode()).hexdigest()[:12]
+    version = stamp_version(sha) + ".pkg." + digest
+    target = update_dir(adapter) / "native-packages" / f"{sha}-{digest}"
+    return {
+        "hooks": hooks,
+        "mcp": mcp,
+        "version": version,
+        "target": target,
+        "python": python,
+        "launcher": launcher,
+        "config_file": config_file,
+    }
+
+
+def _materialize_package(current: dict, planned: dict) -> Path:
+    from native_claude import write_host_package
+
+    target = Path(planned["target"])
+    source = Path(current["generation"])
+    def complete(path):
+        return _package_identity(path, planned["version"], planned["hooks"], planned["mcp"], source)
+    if target.exists():
+        if complete(target):
+            return target
+        raise CheckFailed(f"package refresh target is incomplete or corrupt: {target}")
+    # A crash during copy must not leave a reusable partial target. The intent
+    # is already durable; abandoned staging is never installed or overwritten.
+    temporary = target.with_name(target.name + f".staging-{os.getpid()}")
+    if temporary.exists():
+        raise CheckFailed(f"package refresh staging path already exists: {temporary}")
+    try:
+        write_host_package(source, temporary, python=planned["python"],
+                           launcher=planned["launcher"], version=planned["version"],
+                           config_file=planned["config_file"])
+        if not complete(temporary):
+            raise CheckFailed("rendered package is incomplete")
+        os.rename(temporary, target)
+    finally:
+        if temporary.exists():
+            shutil.rmtree(temporary)
+    return target
+
+
+def _restore_refresh_intent(adapter: dict, prior, sha: str) -> None:
+    path = failed_path(adapter)
+    current = read_json(path)
+    if not (
+        isinstance(current, dict)
+        and current.get("phase") == _PACKAGE_REFRESH_PHASE
+        and current.get("sha") == sha
+        and current.get("error") == _PACKAGE_REFRESH_INTENT
+    ):
+        return
+    if prior is None:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        return
+    atomic_write(path, prior)
+
+
+def _clear_refresh_intent(adapter: dict, sha: str) -> None:
+    path = failed_path(adapter)
+    current = read_json(path)
+    if (
+        isinstance(current, dict)
+        and current.get("phase") == _PACKAGE_REFRESH_PHASE
+        and current.get("sha") == sha
+    ):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _package_refresh_failed(adapter: dict, current: dict, sha: str, exc: BaseException) -> int:
+    diagnostic = _update_diagnostic("package_refresh", exc, revision=sha)
+    error = f"{type(exc).__name__}: {str(exc)[:400]}"
+    atomic_write(failed_path(adapter), {
+        "sha": sha, "phase": _PACKAGE_REFRESH_PHASE,
+        "at": time.time(), "error": error,
+    })
+    status = _record(adapter, current_sha=current.get("sha"), candidate_sha=sha,
+                     result="failed", phase=_PACKAGE_REFRESH_PHASE,
+                     error=error, diagnostic=diagnostic)
+    print(json.dumps({"result": status["result"], "phase": _PACKAGE_REFRESH_PHASE,
+                      "error": error, "diagnostic": diagnostic}))
+    return 1
+
+
+def _refresh_cleanup_failed(adapter, sha, exc, native_result):
+    diagnostic = _update_diagnostic("package_refresh_state_cleanup", exc, revision=sha)
+    status = _record(adapter, current_sha=sha, phase=_PACKAGE_REFRESH_PHASE,
+                     result="degraded", error="state-cleanup-failed",
+                     cleanup_error=f"{type(exc).__name__}: {str(exc)[:400]}",
+                     native_package_result=native_result, diagnostic=diagnostic)
+    print(json.dumps(status))
+    return 1
+
+
+def _refresh_current_package(adapter, current, sha, deadline, force, idle,
+                             install, lock_timeout) -> int:
+    failed = read_json(failed_path(adapter))
+    if not force and isinstance(failed, dict) and failed.get("sha") == sha \
+            and failed.get("phase") == _PACKAGE_REFRESH_PHASE:
+        _record(
+            adapter,
+            current_sha=sha,
+            candidate_sha=sha,
+            result="suppressed-known-failed",
+            error=failed.get("error"),
+            phase=_PACKAGE_REFRESH_PHASE,
+        )
+        print(json.dumps({
+            "result": "suppressed-known-failed",
+            "sha": sha,
+            "phase": _PACKAGE_REFRESH_PHASE,
+        }))
+        return 0
+    if not _package_refresh_eligible(current, sha):
+        return _finish_current(adapter, sha)
+    try:
+        planned = _plan_package_refresh(adapter, current, sha)
+    except Exception as exc:
+        return _package_refresh_failed(adapter, current, sha, exc)
+    if planned is None:
+        return _finish_current(adapter, sha)
+    prior = read_json(failed_path(adapter))
+    atomic_write(failed_path(adapter), {
+        "sha": sha,
+        "phase": _PACKAGE_REFRESH_PHASE,
+        "at": time.time(),
+        "error": _PACKAGE_REFRESH_INTENT,
+    })
+    try:
+        target = _materialize_package(current, planned)
+        switch(
+            adapter,
+            current,
+            Path(current["generation"]),
+            Path(current["python"]),
+            Path(current["adapter_config"]),
+            sha,
+            deadline,
+            idle,
+            install,
+            lock_timeout,
+            package=target,
+        )
+    except LockTimeout:
+        try:
+            _restore_refresh_intent(adapter, prior, sha)
+        except OSError as exc:
+            return _refresh_cleanup_failed(adapter, sha, exc, "not-attempted")
+        _record(
+            adapter,
+            current_sha=current.get("sha"),
+            candidate_sha=sha,
+            result="deferred-busy",
+            error="operation lock stayed shared",
+        )
+        print(json.dumps({"result": "deferred-busy", "sha": sha}))
+        return 0
+    except Deferred:
+        try:
+            _restore_refresh_intent(adapter, prior, sha)
+        except OSError as exc:
+            return _refresh_cleanup_failed(adapter, sha, exc, "not-attempted")
+        _record(
+            adapter,
+            current_sha=current.get("sha"),
+            candidate_sha=sha,
+            result="deferred",
+            error="package refresh deferred",
+        )
+        print(json.dumps({"result": "deferred", "sha": sha}))
+        return 0
+    except Exception as exc:
+        return _package_refresh_failed(adapter, current, sha, exc)
+    try:
+        _clear_refresh_intent(adapter, sha)
+    except OSError as exc:
+        return _refresh_cleanup_failed(adapter, sha, exc, "adopted")
+    status = _record(
+        adapter,
+        current_sha=sha,
+        result="package-refreshed",
+        native_package_result="adopted",
+        phase=_PACKAGE_REFRESH_PHASE,
+        error=None,
+        needs_host_reload=True,
+    )
+    print(json.dumps(status))
+    return int(status["result"] == "degraded")
+
+
 def _check_once(adapter: dict, deadline: float, *, force, build, idle,
                 install, lock_timeout) -> int:
-    current = read_current(adapter)
+    try:
+        current = read_current(adapter)
+    except ValueError as exc:
+        diagnostic = _update_diagnostic("select_current", exc)
+        status = _record(adapter, result="check-failed", phase="select-current",
+                         error=str(exc)[:400], diagnostic=diagnostic)
+        print(json.dumps(status))
+        return 1
     remote = (os.environ.get("MINDIE_CC_UPDATE_REMOTE")
               or adapter.get("update_remote") or DEFAULT_REMOTE)
     try:
@@ -624,9 +907,8 @@ def _check_once(adapter: dict, deadline: float, *, force, build, idle,
         print(json.dumps({"result": "suppressed-known-failed", "sha": sha}))
         return 0
     if sha == current.get("sha"):
-        status = _record(adapter, current_sha=sha, result="current")
-        print(json.dumps(status))
-        return int(status["result"] == "degraded")
+        return _refresh_current_package(
+            adapter, current, sha, deadline, force, idle, install, lock_timeout)
     try:
         generation, python, gen_adapter = stage_generation(
             sha, remote, adapter, deadline, build=build)

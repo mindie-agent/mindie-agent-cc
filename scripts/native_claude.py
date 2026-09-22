@@ -216,29 +216,39 @@ def verify_readback(config, package: Path, version: str, *, listing=None, market
                     f"installed manifest name={installed.get('name')!r} "
                     f"version={installed.get('version')!r}"
                 )
-        if launcher:
-            hooks = Path(install_path) / "hooks" / "hooks.json"
-            mcp = Path(install_path) / ".mcp.json"
-            try:
-                stop = json.loads(hooks.read_text())["hooks"]["Stop"][0]["hooks"][0]["command"]
-                servers = json.loads(mcp.read_text())["mcpServers"]
-            except (OSError, ValueError, KeyError, IndexError, TypeError):
-                problems.append("installed hooks or .mcp.json missing")
-            else:
-                if str(launcher) not in stop:
-                    problems.append(f"installed Stop hook launcher mismatch: {stop!r}")
-                if config_file and config_file not in stop:
-                    problems.append("installed Stop hook lacks adapter --config")
-                knowledge = servers.get("knowledge") or {}
-                args = knowledge.get("args") or []
-                if str(launcher) not in args:
-                    problems.append(f"installed knowledge MCP launcher mismatch: {args!r}")
-                if config_file and config_file not in args and config_file not in (
-                    (knowledge.get("env") or {}).values()
-                ):
-                    problems.append("installed knowledge MCP lacks adapter config")
-                if "remote" not in servers:
-                    problems.append("installed plugin lacks remote MCP surface")
+        hooks_path = Path(install_path) / "hooks" / "hooks.json"
+        mcp_path = Path(install_path) / ".mcp.json"
+        try:
+            installed_hooks = json.loads(hooks_path.read_text())
+            installed_mcp = json.loads(mcp_path.read_text())
+            target_hooks = json.loads((package / "hooks" / "hooks.json").read_text())
+            target_mcp = json.loads((package / ".mcp.json").read_text())
+        except (OSError, ValueError):
+            problems.append("installed hooks or .mcp.json missing")
+        else:
+            problems.extend(_declaration_problems(
+                installed_hooks, installed_mcp, target_hooks, target_mcp))
+            if launcher:
+                try:
+                    stop = installed_hooks["hooks"]["Stop"][0]["hooks"][0]["command"]
+                    servers = installed_mcp["mcpServers"]
+                except (KeyError, IndexError, TypeError):
+                    problems.append("installed hooks or .mcp.json missing")
+                else:
+                    if str(launcher) not in stop:
+                        problems.append("installed Stop hook launcher mismatch")
+                    if config_file and config_file not in stop:
+                        problems.append("installed Stop hook lacks adapter --config")
+                    knowledge = servers.get("knowledge") or {}
+                    args = knowledge.get("args") or []
+                    if str(launcher) not in args:
+                        problems.append("installed knowledge MCP launcher mismatch")
+                    if config_file and config_file not in args and config_file not in (
+                        (knowledge.get("env") or {}).values()
+                    ):
+                        problems.append("installed knowledge MCP lacks adapter config")
+                    if "remote" not in servers:
+                        problems.append("installed plugin lacks remote MCP surface")
     markets = marketplace_list(config, timeout=timeout) if markets is None else markets
     market = marketplace_record(markets)
     source_path = market.get("path") or market.get("installLocation")
@@ -256,6 +266,35 @@ def verify_readback(config, package: Path, version: str, *, listing=None, market
     if problems:
         raise RuntimeError("native readback mismatch: " + ", ".join(problems))
     return dict(plugin=record, marketplace=market)
+
+
+def _declaration_problems(installed_hooks, installed_mcp, target_hooks, target_mcp) -> list:
+    problems = []
+    if not all(isinstance(value, dict) for value in
+               (installed_hooks, installed_mcp, target_hooks, target_mcp)):
+        return ["installed or target declarations are not JSON objects"]
+    if installed_hooks != target_hooks:
+        expected_hooks = target_hooks.get("hooks")
+        found_hooks = installed_hooks.get("hooks")
+        expected = expected_hooks.get("UserPromptExpansion", []) if isinstance(expected_hooks, dict) else []
+        found = found_hooks.get("UserPromptExpansion", []) if isinstance(found_hooks, dict) else []
+        expected = expected if isinstance(expected, list) else []
+        found = found if isinstance(found, list) else []
+        expected_matchers = [
+            item.get("matcher") for item in expected if isinstance(item, dict)
+        ]
+        found_matchers = [
+            item.get("matcher") for item in found if isinstance(item, dict)
+        ]
+        missing = [matcher for matcher in expected_matchers if matcher not in found_matchers]
+        if missing:
+            shown = ",".join(str(matcher) for matcher in missing[:12])[:200]
+            problems.append("missing UserPromptExpansion matchers: " + shown)
+        else:
+            problems.append("installed hooks differ from target package")
+    if installed_mcp != target_mcp:
+        problems.append("installed .mcp.json differs from target package")
+    return problems
 
 
 def hook_command(python: str, launcher: str, op: str, config_file: str) -> str:
