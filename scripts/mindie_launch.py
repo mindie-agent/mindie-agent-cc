@@ -22,16 +22,63 @@ fails closed — unprotected dispatch is never executed.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import re
+import stat
 import sys
 import threading
 import time
 from pathlib import Path
 
 import bounded
-import diagnostic_support
+
+
+def _bootstrap_diagnostics():
+    """Older packagers copy only this launcher and bounded.py.
+
+    Resolve the missing shim from this launcher's own completed generation,
+    never from the mutable current pointer or a caller-selected config.
+    """
+    here = Path(__file__).resolve().parent
+    local = here / "diagnostic_support.py"
+    if local.is_file() and local.resolve() == local:
+        return local
+    if here.parent.name != "launch" or not re.fullmatch(r"[0-9a-f]{40}", here.name):
+        return
+    generation = here.parent.parent / "generations" / here.name
+    descriptor = None
+    try:
+        flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(generation / ".mindie-generation-complete", flags)
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > 41:
+            return
+        if os.read(descriptor, 42).decode().strip() != here.name:
+            return
+        scripts = generation / "scripts"
+        if scripts.resolve() != scripts or not (scripts / "diagnostic_support.py").is_file():
+            return
+        for name in ("diagnostic_support.py", "diagnostic_fallback.py"):
+            module = scripts / name
+            if not module.is_file() or module.resolve() != module:
+                return
+        sys.path.insert(1, str(scripts))
+        return scripts / "diagnostic_support.py"
+    except (OSError, UnicodeError):
+        return
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+_diagnostic_path = _bootstrap_diagnostics()
+if _diagnostic_path is None:
+    raise ModuleNotFoundError("diagnostic support is absent from this completed generation")
+_diagnostic_spec = importlib.util.spec_from_file_location("diagnostic_support", _diagnostic_path)
+diagnostic_support = importlib.util.module_from_spec(_diagnostic_spec)
+_diagnostic_spec.loader.exec_module(diagnostic_support)
 
 MAX_LINE = 128 * 1024
 MAX_HOOK_BYTES = 128 * 1024
