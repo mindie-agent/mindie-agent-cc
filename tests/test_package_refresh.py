@@ -67,10 +67,11 @@ class PackageRefreshTests(unittest.TestCase):
         return value
 
     def test_tuple_preserves_native_package(self):
-        package = self.tmp / "native"
-        package.mkdir()
-        (self.tmp / "gen").mkdir()
-        self._commit(self.tmp / "gen", native_package=str(package))
+        generation = self.genstate.generations_dir(self.adapter) / SHA
+        generation.mkdir(parents=True)
+        package = self.genstate.update_dir(self.adapter) / "native-packages" / (SHA + "-" + "b" * 12)
+        package.mkdir(parents=True)
+        self._commit(generation, native_package=str(package))
         read = self.genstate.read_current(self.adapter)
         self.assertEqual(read["native_package"], str(package))
         self.assertEqual(read["sha"], SHA)
@@ -80,6 +81,10 @@ class PackageRefreshTests(unittest.TestCase):
         self.genstate.atomic_write(self.genstate.current_path(self.adapter), bad)
         with self.assertRaisesRegex(ValueError, "committed native_package"):
             self.genstate.read_current(self.adapter)
+        for other in (self.tmp / "outside", package.parent / ("c" * 40 + "-" + "b" * 12)):
+            other.mkdir()
+            with self.assertRaisesRegex(ValueError, "committed native_package"):
+                self.genstate._valid_tuple(dict(read, native_package=str(other)))
         omitted = dict(read)
         omitted.pop("native_package")
         parsed = self.genstate._valid_tuple(omitted)
@@ -157,7 +162,7 @@ class PackageRefreshTests(unittest.TestCase):
         self.assertEqual(verified["plugin"]["version"], version)
 
     def _eligible_generation(self):
-        generation = self.tmp / "generation"
+        generation = self.genstate.generations_dir(self.adapter) / SHA
         shutil.copytree(ROOT / ".claude-plugin", generation / ".claude-plugin")
         (generation / self.updater.COMPLETE).write_text(SHA + "\n")
         _touch(generation / "skills/reporting-status/SKILL.md", "read-only status")
@@ -297,6 +302,22 @@ class PackageRefreshTests(unittest.TestCase):
         (package / "skills/reporting-status/SKILL.md").unlink()
         with self.assertRaisesRegex(self.updater.CheckFailed, "incomplete or corrupt"):
             self.updater._materialize_package(current, plan)
+
+    def test_matching_declarations_do_not_hide_corrupt_manifest_or_skills(self):
+        self._eligible_generation()
+        idle = lambda *_: {"idle": True, "service": "absent"}
+        self.assertEqual(self._run_check(idle, lambda *_args, **_kwargs: None)[0], 0)
+        current = self.genstate.read_current(self.adapter)
+        package = Path(current["native_package"])
+        manifest = package / ".claude-plugin/plugin.json"
+        original = manifest.read_bytes()
+        manifest.write_text(json.dumps({"name": "mindie-agent", "version": "wrong"}))
+        with self.assertRaisesRegex(self.updater.CheckFailed, "committed native package"):
+            self.updater._plan_package_refresh(self.adapter, current, SHA)
+        manifest.write_bytes(original)
+        (package / "skills/reporting-status/SKILL.md").unlink()
+        with self.assertRaisesRegex(self.updater.CheckFailed, "committed native package"):
+            self.updater._plan_package_refresh(self.adapter, current, SHA)
 
     def test_missing_launcher_does_not_skip_validation(self):
         package = self.tmp / "pkg"

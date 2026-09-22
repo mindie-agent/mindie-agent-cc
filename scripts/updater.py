@@ -669,12 +669,6 @@ def _plan_package_refresh(adapter: dict, current: dict, sha: str):
         raise CheckFailed("committed adapter lacks an absolute base_config")
     hooks = render_hooks(python, str(launcher), config_file)
     mcp = render_mcp(python, str(launcher), config_file)
-    existing = Path(current.get("native_package") or Path(current["generation"]) / "host-package")
-    if existing.is_dir():
-        have_hooks = read_json(existing / "hooks" / "hooks.json")
-        have_mcp = read_json(existing / ".mcp.json")
-        if have_hooks == hooks and have_mcp == mcp:
-            return None
     raw = json.dumps(
         {"hooks": hooks, "mcp": mcp},
         sort_keys=True,
@@ -684,6 +678,16 @@ def _plan_package_refresh(adapter: dict, current: dict, sha: str):
     digest = hashlib.sha256(raw.encode()).hexdigest()[:12]
     version = stamp_version(sha) + ".pkg." + digest
     target = update_dir(adapter) / "native-packages" / f"{sha}-{digest}"
+    source = Path(current["generation"])
+    existing = Path(current.get("native_package") or source / "host-package")
+    if existing.is_dir():
+        have_hooks = read_json(existing / "hooks" / "hooks.json")
+        have_mcp = read_json(existing / ".mcp.json")
+        if have_hooks == hooks and have_mcp == mcp:
+            expected_version = version if current.get("native_package") else stamp_version(sha)
+            if not _package_identity(existing, expected_version, hooks, mcp, source):
+                raise CheckFailed(f"committed native package is incomplete or corrupt: {existing}")
+            return None
     return {
         "hooks": hooks,
         "mcp": mcp,
