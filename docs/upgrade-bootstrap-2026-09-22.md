@@ -94,6 +94,16 @@ Hook result exactly. There were no model tool calls, retries, knowledge
 activation, uploads or reporting configuration writes. The effort setting is
 a client-side request; the provider's internal reasoning is not measured.
 
+The model's explanation overreached the returned evidence: it treated missing
+upload configuration as proof that no diagnostics had been collected, and
+called this project-level configuration. These are not product semantics:
+automatic upload is a shared user-level choice, while local logging is
+independent. A subsequent prompt-only clarification in the reporting-status
+Skill asks it to repeat the returned facts without those inferences. That
+clarification was reviewed, not rerun through another model. Native runtime
+acceptance remains tied to `a2f30a8`; subsequent changes are this Skill wording
+and acceptance documentation only.
+
 The owned provider settings were restored byte for byte, and no owned MCP or
 daemon processes remained. The isolated profile is retained without provider
 credentials; production Claude settings were not modified. Sharing stayed
