@@ -403,9 +403,12 @@ def read_material(
         text="\n\n".join(included),
         records=len(included),
     )
+    established = expected is not None or result.get("session_match") is True
     if result["end"] == start:
         result["status"] = "unchanged"
-    elif not recognized:
+    elif not recognized and not (
+        established and result["more"] and result["end"] > result["start"]
+    ):
         result.update(
             status="unknown-format",
             text="",

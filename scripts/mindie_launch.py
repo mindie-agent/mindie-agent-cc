@@ -139,18 +139,46 @@ def _state_dir(config=None) -> Path:
     return root / "mindie-agent" / "state-cc"
 
 
+def _record_hook(stage, category, op="stop"):
+    """One static diagnostic for an outer entry failure. Genuine off stays quiet."""
+    try:
+        diagnostic_support.failure(
+            "hook", stage, category, reportable=(op != "stop"),
+        )
+    except Exception:
+        pass
+
+
 def _sharing_enabled() -> bool:
-    config = _load_config()
-    if not isinstance(config, dict):
-        return False
-    community = config.get("community_config")
-    if not isinstance(community, str) or not os.path.isabs(community):
+    """True only when community sharing is explicitly enabled.
+
+    A missing adapter or community file, or an explicit off, is quiet.
+    An existing file that cannot be read or parsed is a configuration
+    failure, not off.
+    """
+    path = _config_path()
+    if not path.is_file():
         return False
     try:
-        data = json.loads(Path(community).read_text())
+        data = json.loads(path.read_text())
     except (OSError, ValueError):
+        _record_hook("sharing-probe", "configuration")
         return False
-    return isinstance(data, dict) and data.get("enabled") is True
+    if not isinstance(data, dict):
+        _record_hook("sharing-probe", "configuration")
+        return False
+    community = data.get("community_config")
+    if not isinstance(community, str) or not os.path.isabs(community):
+        return False
+    community_path = Path(community)
+    if not community_path.is_file():
+        return False
+    try:
+        raw = json.loads(community_path.read_text())
+    except (OSError, ValueError):
+        _record_hook("sharing-probe", "configuration")
+        return False
+    return isinstance(raw, dict) and raw.get("enabled") is True
 
 
 class LockUnavailable(RuntimeError):
@@ -361,15 +389,21 @@ def _hook(op: str) -> int:
         )
     lock_deadline = min(deadline, time.monotonic() + HOOK_LOCK_BUDGET)
     if lock_deadline <= time.monotonic():
-        return _fail_open() if op != "expansion" else _expansion_error(
-            "MindIE entry timed out waiting for the operation lock."
-        )
+        if op == "expansion":
+            return _expansion_error(
+                "MindIE entry timed out waiting for the operation lock."
+            )
+        if _config_path().is_file():
+            _record_hook("entry", "deadline", op)
+        return _fail_open()
     try:
         state = _state_dir()
         descriptor = _shared_lock(state, lock_deadline)
     except Exception:
         if op == "expansion":
             return _expansion_error("MindIE entry could not take the operation lock.")
+        if _config_path().is_file():
+            _record_hook("entry", "lock-unavailable", op)
         return _fail_open()
     try:
         try:
@@ -380,6 +414,8 @@ def _hook(op: str) -> int:
                     "MindIE runtime is not configured. Run python3 scripts/setup.py. "
                     "This hook does not install packages."
                 )
+            if _config_path().is_file():
+                _record_hook("entry", "generation-unavailable", op)
             return _fail_open()
         script = Path(current["generation"]) / "scripts" / "bridge.py"
 
@@ -401,6 +437,8 @@ def _hook(op: str) -> int:
         if remaining <= 0.05:
             if op == "expansion":
                 return _expansion_error("MindIE entry deadline exhausted.")
+            if _config_path().is_file():
+                _record_hook("entry", "deadline", op)
             return _fail_open()
         started = time.monotonic()
 
