@@ -63,6 +63,18 @@ class TranscriptTests(unittest.TestCase):
         self.assertIn("mcp__mindie_probe__echo", result["text"])
         self.assertNotIn("signature", result["text"])
 
+    def test_established_session_file_keeps_an_unrecognized_page(self):
+        path = self.tmp / f"{SESSION}.jsonl"
+        path.write_text("\n".join('{"type":"noise","n":%d}' % i for i in range(20)) + "\n")
+        with path.open("a", encoding="utf-8") as stream:
+            stream.write('{"type":"user","sessionId":"%s","message":{"role":"user","content":"later public"}}\n' % SESSION)
+        identity = transcript.identify(str(path))
+        result = transcript.read_material(
+            str(path), 0, session_id=SESSION, expected=identity, max_scan_bytes=1024,
+        )
+        self.assertNotEqual(result["status"], "unknown-format")
+        self.assertTrue(result["more"] or "later public" in result["text"])
+
     def test_partial_line_does_not_consume(self):
         with self.path.open("ab") as stream:
             stream.write(b'{"type":"assistant","sessionId":"' + SESSION.encode())

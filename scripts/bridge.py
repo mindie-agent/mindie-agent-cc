@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Claude plugin hooks. Activation is UserPromptExpansion, not MCP.
 
-Stop never exits 2, never starts the knowledge service, and checks claim
-bool. Default-off sharing returns {} before any transcript or capture state.
+Stop never exits 2 and never continues the model. It calls the shared
+capture handoff. Default-off sharing returns {} before any capture state.
 """
 
 from __future__ import annotations
@@ -109,7 +109,34 @@ def handle_pretool():
     return 0
 
 
+def _record_stop(stage, category, exc=None):
+    """Local diagnostic only. No transcript, token, or exception text."""
+    try:
+        import diagnostic_support
+
+        diagnostic_support.failure(
+            "capture.stop", stage=stage, category=category,
+            exception=exc, reportable=False,
+        )
+    except Exception:
+        pass
+
+
+def _observe_stop(result):
+    if not isinstance(result, dict):
+        _record_stop("handoff", "internal")
+        return
+    stage = result.get("stage")
+    if stage not in {"unavailable", "rejected"}:
+        return
+    reason = result.get("reason")
+    if not isinstance(reason, str) or not reason[:1].isalpha():
+        reason = "handoff"
+    _record_stop(stage, reason)
+
+
 def handle_stop():
+    attempted = False
     try:
         event = _read_event()
         if event.get("hook_event_name") not in {None, "Stop"}:
@@ -127,60 +154,64 @@ def handle_stop():
         import sharing as sharing_mod
         from admission import gate
         from identity import require_session
-        from knowledge_service import existing_service
-        from mindie_knowledge.loop.cli import rpc
         from paths import engine_config_path as engine_path
 
         session = require_session(event.get("session_id"))
         admission = gate()
+        inspected = admission.inspect(session)
+        if inspected.get("status") == "unavailable":
+            _record_stop("admission", "unavailable")
+            _print({})
+            return 0
+        if inspected.get("status") != "active":
+            _print({})
+            return 0
         try:
             lease = admission.check(session)
         except ValueError:
+            _record_stop("admission", "unavailable")
             _print({})
             return 0
-        cwd = event.get("cwd") if isinstance(event.get("cwd"), str) else lease.get("project_root")
-        if not sharing_mod.capture_allowed(lease, cwd):
+        attempted = True
+        if not sharing_mod.capture_allowed(lease, None):
             _print({})
             return 0
         turn = event.get("prompt_id")
-        if not isinstance(turn, str) or not turn:
+        if not isinstance(turn, str) or not turn or len(turn) > 256:
+            _record_stop("identity", "missing_identity")
             _print({})
             return 0
         transcript = event.get("transcript_path")
-        if not isinstance(transcript, str) or not os.path.isabs(transcript):
+        summary = event.get("last_assistant_message")
+        forwarded = dict(
+            hook_event_name="Stop",
+            identity_kind="turn",
+            session_id=session,
+            turn_id=turn,
+            mindie_activation=lease.get("token"),
+            harness="claude",
+            budget_seconds=0.8,
+        )
+        if isinstance(transcript, str) and os.path.isabs(transcript) and len(transcript) <= 4096:
+            forwarded["transcript_path"] = transcript
+        if isinstance(summary, str) and summary.strip():
+            if len(summary) > 32768:
+                if "transcript_path" not in forwarded:
+                    _record_stop("material", "summary_rejected")
+                    _print({})
+                    return 0
+            else:
+                forwarded["last_assistant_message"] = summary
+        if "transcript_path" not in forwarded and "last_assistant_message" not in forwarded:
+            _record_stop("material", "no_capturable_material")
             _print({})
             return 0
-        token = lease.get("token")
-        if not isinstance(token, str):
-            _print({})
-            return 0
-        if admission.claim(session, "stop", str(turn)[:256], token=token) is not True:
-            _print({})
-            return 0
-        try:
-            connection = existing_service(engine_path())
-            rpc(
-                connection,
-                "capture",
-                dict(
-                    session_id=session,
-                    turn_id=str(turn)[:256],
-                    transcript_path=transcript,
-                    summary="",
-                    cwd=cwd,
-                    _session_id=session,
-                    _activation=token,
-                ),
-                timeout=0.8,
-            )
-            admission.finish(session, token, True)
-        except Exception:
-            try:
-                admission.finish(session, token, False)
-            except Exception:
-                pass
-    except Exception:
-        pass
+        from mindie_knowledge.loop.cli import capture_hook
+
+        _observe_stop(capture_hook(str(engine_path()), forwarded))
+    except Exception as exc:
+        if attempted:
+            _record_stop("handoff", "internal", exc)
     _print({})
     return 0
 
