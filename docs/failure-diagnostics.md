@@ -3,7 +3,7 @@
 Native status reports existing knowledge configuration, service/storage health,
 this task's admission, a shared maintenance pause, and the latest five captures
 and contribution batches associated with the bound task. An absent identity
-returns no task records. Failed batch IDs let recover inspect the existing write;
+returns no task records. A transient local or network failure is recovered by the existing worker; status is how that problem is seen. Failed batch IDs can be inspected with the optional recover command;
 unknown publication results must be reconciled before any explicit retry.
 
 Status does not initialize databases, start models/services, activate a task,

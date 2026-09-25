@@ -1,8 +1,10 @@
 ---
 name: recover
-description: Inspect, reconcile, retry a proven-failed contribution, or compact a confirmed batch.
+description: Optional explicit inspection of one contribution batch, not ordinary recovery of a transient local or network failure.
 disable-model-invocation: true
 ---
+
+Use this only when the user explicitly invokes it. A transient local or network sharing failure is recovered by the existing worker; sharing status is how a problem is seen. Authentication, trust, rejected content, or invalid configuration can need an explicit user or operator action.
 
 The UserPromptExpansion hook names exactly one core CLI command. Do not run recovery inside the hook.
 

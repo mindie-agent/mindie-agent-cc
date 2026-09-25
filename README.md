@@ -15,6 +15,10 @@ native plugin support. The installer creates its own pinned persistent runtime,
 retains the plugin source, installs and reads back the native package, and
 registers model-free update checks. Community contribution stays off.
 
+The knowledge interpreter also needs SQLite 3.43.0 or newer with FTS5 and
+`contentless_delete` support. Installation checks the actual SQLite library;
+the Python version alone does not establish this capability.
+
 ```bash
 git clone https://github.com/mindie-agent/mindie-agent-cc.git
 cd mindie-agent-cc
