@@ -1,11 +1,15 @@
-"""Community sharing via the shared core validator. Default off."""
+"""Community sharing via the shared core validator. Default off.
+
+The settings file is profile-shared: ``consent.resolve_community_path``
+adopts a legacy per-adapter file once and then converges every read/write.
+"""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-from paths import community_config_path
+from consent import resolve_community_path
 
 
 def _settings_mod():
@@ -15,7 +19,7 @@ def _settings_mod():
 
 
 def load(config=None):
-    path = community_config_path(config)
+    path = resolve_community_path() if config is None else config
     return _settings_mod().load(path)
 
 
@@ -48,7 +52,7 @@ def write_enabled(
 ):
     if visibility != "public":
         raise ValueError("community sharing requires public visibility")
-    path = community_config_path(config)
+    path = resolve_community_path() if config is None else config
     settings = _settings_mod().write(
         path,
         enabled=True,
@@ -63,7 +67,7 @@ def write_enabled(
 
 
 def write_disabled(config=None):
-    path = community_config_path(config)
+    path = resolve_community_path() if config is None else config
     previous = {}
     try:
         previous = json.loads(Path(path).read_text())
