@@ -41,10 +41,12 @@ claude plugin install mindie-agent@mindie-agent-cc --json -y
 claude plugin list --json
 ```
 
-Explicit task entry is `/mindie-agent:init`. First use offers recommended
-public contribution, read-only knowledge, or later configuration. There is no
-default consent; the selected choice persists. Contribution needs explicit
-repository, account, project root and public visibility:
+Explicit task entry is the mindie-agent skill (Claude Code may show it bare or
+namespaced; `/mindie-agent:init` is its alias). First use offers recommended
+public contribution, read-only knowledge, or later configuration — once. There
+is no default consent; the selected choice persists for the installation and
+is never re-asked, including after restarts, upgrades or failures. Contribution
+needs explicit repository, account, project root and public visibility:
 
 ```text
 /mindie-agent:sharing-enable --repository owner/repo --account USER --project-root /absolute/path --visibility public

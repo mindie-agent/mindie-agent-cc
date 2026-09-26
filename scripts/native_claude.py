@@ -16,6 +16,7 @@ from bounded import run
 from paths import CONFIG_ENV, MARKETPLACE, PLUGIN_ID, PLUGIN_QUALIFIED, claude_config_dir
 
 COMMANDS = (
+    "mindie-agent",
     "init",
     "status",
     "deactivate",

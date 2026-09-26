@@ -80,16 +80,18 @@ def three_choices() -> dict:
             dict(
                 id="read-only",
                 summary="Read-only knowledge; no contribution",
-                next="Run /mindie-agent:init read-only",
+                next="Invoke the mindie-agent entry with read-only",
             ),
             dict(
                 id="later",
                 summary="Configure later (sharing stays off)",
-                next="Run /mindie-agent:init later",
+                next="Invoke the mindie-agent entry with later",
             ),
         ],
         setup="python3 scripts/setup.py --config ~/.config/mindie-agent/cc.json",
         note=(
+            "One-time setup: the choice persists for this installation and is "
+            "never asked again, including after restarts, upgrades or failures. "
             "Enabling contribution requires explicit public repository, account, "
             "project root, and visibility. There is no automatic yes."
         ),

@@ -313,11 +313,10 @@ def _knowledge_status_payload(session=None):
         state = admission.get("status", "unavailable")
         payload["this_session"] = dict(
             status=state,
-            activated=state in {"active", "paused"},
+            bound=state == "active",
             enabled=state == "active" and admission.get("enabled") is True,
             failures=admission.get("failures"),
             project_root=admission.get("project_root"),
-            paused=state == "paused",
         )
     stored = payload.get("first_use")
     if stored in {"read-only", "later", "contribute"}:
@@ -330,7 +329,7 @@ def _knowledge_status_payload(session=None):
         payload["setup"] = extra["setup"]
         payload["hint"] = (
             "Sharing is off: no Stop capture or organizer. "
-            "Knowledge retrieval works after /mindie-agent:init."
+            "Knowledge retrieval works after invoking the mindie-agent entry once in this task."
         )
     update = _updater_view()
     if update:
@@ -397,37 +396,21 @@ def _prepare_capture_service():
 
 
 def _configured_init_activation(session, cwd, ident):
+    """Entry binding for a configured task: automatic, idempotent, and never
+    a consent prompt. The persistent install-level choice is untouched."""
     from admission import activate, gate
 
     root = _project_root(cwd)
-    try:
-        lease = activate(session, project_root=root, root_session=session)
-    except ValueError as exc:
-        text = str(exc)
-        if "paused" not in text.lower():
-            raise
-        payload = status_payload(session)
-        payload["activation"] = dict(
-            session=session,
-            enabled=False,
-            paused=True,
-            hint=text[:300],
-        )
-        return payload
+    lease = activate(session, project_root=root, root_session=session)
     claimed = gate().claim(session, "plugin_command", ident[:256], token=lease["token"]) is True
     payload = status_payload(session)
     if not claimed:
         payload["already"] = True
-    paused = bool(lease.get("paused"))
-    service = "off"
-    if not paused and _sharing_on():
-        service = _prepare_capture_service()
-    payload["activation"] = dict(
+    service = _prepare_capture_service() if _sharing_on() else "off"
+    payload["binding"] = dict(
         session=lease["session"],
-        enabled=bool(lease.get("enabled")) and not paused,
-        failures=lease.get("failures", 0),
+        enabled=bool(lease.get("enabled")),
         project_root=lease["project_root"],
-        paused=paused,
         service=service,
     )
     return payload

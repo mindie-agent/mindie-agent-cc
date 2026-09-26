@@ -200,7 +200,10 @@ def knowledge_call(name, args, session):
 
     engine = load_engine_config()
     if Admission(admission_path(engine)).active_lease(session) is None:
-        raise ValueError("session is not manually activated")
+        raise ValueError(
+            "this task is not bound yet; invoke the mindie-agent entry once in "
+            "this task — the saved install-level choice is reused, nothing is re-asked"
+        )
     method = name.removeprefix("knowledge_")
     try:
         connection = existing_service(engine_config_path())
