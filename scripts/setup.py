@@ -103,6 +103,35 @@ OFFICIAL_REPOSITORIES = {
     "remote-dev": "https://github.com/mindie-agent/remote-dev",
 }
 
+_COMMIT_RE = re.compile(r"[0-9a-f]{40}")
+
+
+def parse_local_candidates(values):
+    """Explicit development/test declarations: ``NAME=COMMIT`` (full SHA).
+
+    A declared dependency may verify against a local git source carrying
+    that exact commit instead of the official repository. This never widens
+    the production contract: the default install path does not accept it, an
+    undeclared dependency still requires the official identity, and a local
+    install without git VCS metadata (a plain directory install records only
+    ``dir_info``) has no commit source and is always rejected.
+    """
+    candidates = {}
+    for value in values or ():
+        name, sep, commit = str(value).partition("=")
+        if not sep or name not in OFFICIAL_REPOSITORIES:
+            raise ValueError(
+                "--allow-local-candidate requires NAME=COMMIT with NAME one of "
+                + ", ".join(sorted(OFFICIAL_REPOSITORIES))
+            )
+        commit = commit.strip().lower()
+        if not _COMMIT_RE.fullmatch(commit):
+            raise ValueError("--allow-local-candidate requires a full 40-hex commit")
+        if name in candidates:
+            raise ValueError("duplicate --allow-local-candidate for " + name)
+        candidates[name] = commit
+    return candidates
+
 
 def runtime_pins(requirements=None):
     """One version source, restricted to the two reviewed official Git repos."""
@@ -129,24 +158,36 @@ _PIN_TEMPLATE = """
 import json
 from importlib.metadata import distribution
 want = {pins!r}
+local = {local!r}
 missing = []
 for name, pin in want.items():
     try:
         dist = distribution(name)
         direct = json.loads(dist.read_text("direct_url.json") or "{{}}")
         vcs = direct.get("vcs_info") or {{}}
-        if (direct.get("url") not in (pin["url"], pin["url"] + ".git")
-                or vcs.get("vcs") != "git" or vcs.get("commit_id") != pin["commit"]):
-            missing.append(f"{{name}} does not match the required official Git commit")
+        url = direct.get("url") or ""
+        official = (url in (pin["url"], pin["url"] + ".git")
+                    and vcs.get("vcs") == "git" and vcs.get("commit_id") == pin["commit"])
+        declared = local.get(name)
+        candidate = (declared is not None and url.startswith("file://")
+                     and vcs.get("vcs") == "git" and vcs.get("commit_id") == declared)
+        if not (official or candidate):
+            if declared is not None:
+                missing.append(
+                    f"{{name}} matches neither the official Git commit nor the "
+                    "declared local candidate commit"
+                )
+            else:
+                missing.append(f"{{name}} does not match the required official Git commit")
     except Exception as exc:
         missing.append(f"{{name}} ({{type(exc).__name__}})")
 print("MISSING: " + "; ".join(missing) if missing else "OK")
 """
 
 
-def probe_runtime(python, pins=None):
+def probe_runtime(python, pins=None, local_candidates=None):
     pins = runtime_pins() if pins is None else pins
-    pin_script = _PIN_TEMPLATE.format(pins=pins)
+    pin_script = _PIN_TEMPLATE.format(pins=pins, local=local_candidates or {})
     try:
         pin_result = run([python, "-c", pin_script], "", timeout=15)
     except Exception as exc:
@@ -299,11 +340,22 @@ def main():
                         help="do not register the automatic update check")
     parser.add_argument("--no-native-install", action="store_true",
                         help="configure MindIE files only; skip claude plugin install")
+    parser.add_argument(
+        "--allow-local-candidate",
+        action="append",
+        metavar="NAME=COMMIT",
+        help=(
+            "development/test only: accept a local git install of NAME at "
+            "exactly COMMIT (full SHA, git VCS metadata required) instead of "
+            "the official repository commit; production installs do not use this"
+        ),
+    )
     args = parser.parse_args()
     if sys.version_info < (3, 11):
         parser.error("Python 3.11+ is required")
     try:
         pins = runtime_pins()
+        local_candidates = parse_local_candidates(args.allow_local_candidate)
     except (OSError, ValueError) as exc:
         parser.error(str(exc))
     community = community_settings(args, parser)
@@ -313,10 +365,15 @@ def main():
         python = str(Path(args.knowledge_python).expanduser())
         if not os.path.isabs(python):
             python = str(Path(python).absolute())
-        probe_runtime(python, pins)
+        probe_runtime(python, pins, local_candidates)
     else:
+        if local_candidates:
+            parser.error(
+                "--allow-local-candidate requires --knowledge-python; the "
+                "bootstrap venv always installs the official requirements"
+            )
         python = build_bootstrap_runtime(domain_root)
-        probe_runtime(python, pins)
+        probe_runtime(python, pins, local_candidates)
     if not re.fullmatch(r"[a-z][a-z0-9-]{0,63}", args.domain):
         parser.error("invalid domain name")
     engine_config = config.with_name(config.stem + ".engine.json")
@@ -450,6 +507,10 @@ def main():
             "claude plugin install/update mindie-agent@mindie-agent-cc --json -y."
         ),
     )
+    if local_candidates:
+        # Development/test provenance: this install verified a declared local
+        # candidate commit, not the official repository identity.
+        report["local_candidates"] = dict(local_candidates)
     print(json.dumps(report, indent=2, default=str))
     if native_error:
         raise SystemExit(1)
