@@ -1,9 +1,14 @@
-"""Community sharing via the shared core validator. Default off.
+"""Community sharing via the shared core validator and write boundary.
 
 The settings file is the declared ``community_config`` authority, resolved
-read-only; profile convergence and the ``consent_config`` extension stamp
-happen at explicit boundaries (``consent.migrate_community``), never inside
-a status read.
+read-only; profile convergence and the ``consent_config`` stamp happen at
+explicit boundaries (``consent.migrate_community``), never inside a status
+read. Managed mutations go through core's locked ``settings.write`` — one
+lock protocol, no adapter fork. Because a boundary migration can repoint
+the authority while a write is in flight, each mutation confirms the
+current pointer after its first locked write and re-applies exactly once
+on the converged file when it moved — the user's intent is never left on a
+retired legacy file.
 """
 
 from __future__ import annotations
@@ -11,7 +16,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from consent import community_write_lock, consent_path, resolve_community_path
+from consent import consent_path, resolve_community_path
 
 
 def _settings_mod():
@@ -42,6 +47,23 @@ def capture_allowed(lease, cwd, config=None) -> bool:
     return True
 
 
+def _write_mutation(config, mutate):
+    """One locked settings mutation on the current authority.
+
+    ``mutate(path)`` performs the core ``settings.write`` (which holds the
+    file's cross-process lock for the whole read-merge-write). If a
+    concurrent boundary migration repointed the authority during the first
+    write, the mutation is applied once more on the converged path; the
+    stale-file write is inert because every consumer follows the pointer.
+    """
+    path = resolve_community_path() if config is None else config
+    settings = mutate(path)
+    current = resolve_community_path() if config is None else config
+    if current != path:
+        settings = mutate(current)
+    return settings
+
+
 def write_enabled(
     *,
     repository,
@@ -54,12 +76,9 @@ def write_enabled(
 ):
     if visibility != "public":
         raise ValueError("community sharing requires public visibility")
-    # Resolve inside the profile write lock: a concurrent migration may
-    # repoint the authority; whoever holds the lock second must write the
-    # converged file, never the stale declared one.
-    with community_write_lock():
-        path = resolve_community_path() if config is None else config
-        settings = _settings_mod().write(
+
+    def enable(path):
+        return _settings_mod().write(
             path,
             enabled=True,
             repository=repository,
@@ -70,14 +89,12 @@ def write_enabled(
             fork=fork,
             consent_config=str(consent_path()),
         )
-    return settings.public_status()
+
+    return _write_mutation(config, enable).public_status()
 
 
 def write_disabled(config=None):
-    # Resolve and read previous state inside the profile write lock (see
-    # write_enabled): the authority may move under a concurrent migration.
-    with community_write_lock():
-        path = resolve_community_path() if config is None else config
+    def disable(path):
         previous = {}
         try:
             previous = json.loads(Path(path).read_text())
@@ -85,7 +102,7 @@ def write_disabled(config=None):
             previous = dict(schema="mindie-community-config/1", repository="local/unconfigured")
         repository = previous.get("repository") or "local/unconfigured"
         roots = previous.get("project_roots") or []
-        settings = _settings_mod().write(
+        return _settings_mod().write(
             path,
             enabled=False,
             repository=repository,
@@ -94,4 +111,5 @@ def write_disabled(config=None):
             previous=previous,
             consent_config=str(consent_path()),
         )
-    return settings.public_status()
+
+    return _write_mutation(config, disable).public_status()

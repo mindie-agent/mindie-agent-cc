@@ -431,15 +431,6 @@ def _apply_native_choice(payload, native_choice, session=None):
     return payload
 
 
-def _sharing_on() -> bool:
-    try:
-        from sharing import public_status
-
-        return public_status().get("enabled") is True
-    except Exception:
-        return False
-
-
 def _capture_permitted() -> bool:
     """The whole capture chain (schema, enabled, generation, scope, and the
     consent authority when the config carries consent_config) as the shared
@@ -464,13 +455,28 @@ def _prepare_capture_service():
         return f"prepare-failed:{type(exc).__name__}"
 
 
+def _finish_contribution(result: dict) -> dict:
+    """Shared tail of every contribution enablement: persist the choice,
+    converge the community authority at this explicit boundary, and wake the
+    capture service only when capture can actually persist."""
+    import consent as consent_mod
+
+    try:
+        consent_mod.record_choice("contribute")
+    except consent_mod.ConsentError as exc:
+        result["consent_error"] = dict(state=exc.state, error=str(exc))
+    migration = consent_mod.migrate_community()
+    if migration.get("conflict") or migration.get("errors") or migration.get("migrated"):
+        result["community_migration"] = migration
+    result["service"] = _prepare_capture_service()
+    return result
+
+
 def _apply_contribute(payload, session, event, configured):
     """First contribution through the unified entry itself: the user picks
     contribute and names the public destination in the same invocation —
     no separate sharing command to learn. Native slash origin is still the
     trust boundary; model arguments never enable sharing."""
-    import consent as consent_mod
-
     if not configured:
         payload["contribute"] = dict(
             recorded=False,
@@ -492,17 +498,27 @@ def _apply_contribute(payload, session, event, configured):
     except (ValueError, OSError) as exc:
         payload["contribute"] = dict(recorded=False, error=str(exc)[:200])
         return payload
-    try:
-        consent_mod.record_choice("contribute")
-    except consent_mod.ConsentError as exc:
-        payload["consent_error"] = dict(state=exc.state, error=str(exc))
-    migration = consent_mod.migrate_community()
     payload.update(first_use="contribute", choices=[], repeat=True)
     payload["sharing"] = result
-    if migration.get("conflict") or migration.get("errors") or migration.get("migrated"):
-        payload["community_migration"] = migration
-    payload["service"] = _prepare_capture_service()
-    return payload
+    return _finish_contribution(payload)
+
+
+def _record_reporting_decision(enable: bool) -> dict:
+    """Configure the real reporter and persist the decision only when the
+    service reached the intended state. Shared by the reporting-* commands
+    and the unified entry's reporting tokens."""
+    import consent as consent_mod
+    import diagnostic_support
+
+    python = load_adapter_config()["python"]
+    result = diagnostic_support.configure_reporting(enable, python)
+    if result.get("enabled") is enable:
+        try:
+            consent_mod.record_reporting("enabled" if enable else "disabled")
+        except consent_mod.ConsentError as exc:
+            result = dict(result)
+            result["consent_error"] = dict(state=exc.state, error=str(exc))
+    return result
 
 
 def _apply_reporting_token(payload, token, configured):
@@ -530,15 +546,7 @@ def _apply_reporting_token(payload, token, configured):
             payload["consent_error"] = dict(state=exc.state, error=str(exc))
         payload["reporting"] = diagnostic_support.reporting_status()
         return payload
-    python = load_adapter_config()["python"]
-    result = diagnostic_support.configure_reporting(token == "reporting-enable", python)
-    if result.get("enabled") is (token == "reporting-enable"):
-        try:
-            consent_mod.record_reporting(value)
-        except consent_mod.ConsentError as exc:
-            result = dict(result)
-            result["consent_error"] = dict(state=exc.state, error=str(exc))
-    payload["reporting"] = result
+    payload["reporting"] = _record_reporting_decision(token == "reporting-enable")
     return payload
 
 
@@ -637,23 +645,11 @@ def op_sharing_enable(session, event):
         return payload
     if not _configured():
         raise ValueError("MindIE is not configured; run scripts/setup.py first")
-    import consent as consent_mod
     import sharing as sharing_mod
 
     parsed = _parse_sharing(event.get("command_args") or "")
     result = sharing_mod.write_enabled(**parsed)
-    result = dict(result)
-    try:
-        set_first_use("contribute")
-    except consent_mod.ConsentError as exc:
-        # Sharing was written, but the consent authority is damaged: the
-        # fault is surfaced, never silently overwritten.
-        result["consent_error"] = dict(state=exc.state, error=str(exc))
-    migration = consent_mod.migrate_community()
-    if migration.get("conflict") or migration.get("errors") or migration.get("migrated"):
-        result["community_migration"] = migration
-    result["service"] = _prepare_capture_service()
-    return result
+    return _finish_contribution(dict(result))
 
 
 def op_sharing_disable(session, event):
@@ -745,7 +741,6 @@ def op_recover(session, event):
 def op_reporting(session, event, command):
     """Native slash only. Does not ensure the reporter inside the Hook."""
     first = consume_slash(session, event, command)
-    import consent as consent_mod
     import diagnostic_support
 
     if command == "reporting-status":
@@ -754,15 +749,7 @@ def op_reporting(session, event, command):
         return dict(diagnostic_support.reporting_status(), already=True)
     if not _configured():
         raise ValueError("MindIE is not configured; run scripts/setup.py first")
-    python = load_adapter_config()["python"]
-    result = diagnostic_support.configure_reporting(command == "reporting-enable", python)
-    if result.get("enabled") is (command == "reporting-enable"):
-        try:
-            consent_mod.record_reporting("enabled" if command == "reporting-enable" else "disabled")
-        except consent_mod.ConsentError as exc:
-            result = dict(result)
-            result["consent_error"] = dict(state=exc.state, error=str(exc))
-    return result
+    return _record_reporting_decision(command == "reporting-enable")
 
 
 def dispatch_event(event: dict) -> dict:

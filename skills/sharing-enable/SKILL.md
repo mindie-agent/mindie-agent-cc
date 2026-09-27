@@ -1,8 +1,12 @@
 ---
 name: sharing-enable
-description: Opt in to public community contribution for authorized project roots.
+description: Compatibility alias of the unified entry's contribute choice (public community contribution for authorized project roots).
 disable-model-invocation: true
 ---
+
+Alias kept for compatibility: the unified entry's contribute choice is the
+same operation — `/mindie-agent contribute --repository owner/repo
+--account USER --project-root /absolute/path --visibility public`.
 
 Required arguments: --repository owner/repo --account USER --project-root /absolute/path --visibility public
 Optional: --branch main --fork owner/repo

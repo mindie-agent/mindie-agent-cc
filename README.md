@@ -46,11 +46,16 @@ namespaced; `/mindie-agent:init` is its alias). First use offers recommended
 public contribution, read-only knowledge, or later configuration — once. There
 is no default consent; the selected choice persists for the installation and
 is never re-asked, including after restarts, upgrades or failures. Contribution
-needs explicit repository, account, project root and public visibility:
+needs explicit repository, account, project root and public visibility, named
+in the same entry invocation:
 
 ```text
-/mindie-agent:sharing-enable --repository owner/repo --account USER --project-root /absolute/path --visibility public
+/mindie-agent contribute --repository owner/repo --account USER --project-root /absolute/path --visibility public
 ```
+
+The first setup also offers the independent reporting choice once
+(`/mindie-agent reporting-enable`, `reporting-disable` or `reporting-later`);
+any recorded decision persists.
 
 Component checks: `python3 -m unittest discover -s tests -v`. These are not host acceptance.
 

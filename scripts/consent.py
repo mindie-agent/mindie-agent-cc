@@ -222,20 +222,6 @@ def marker_exists() -> bool:
     return bool(marker is not None and marker.exists())
 
 
-def install_traces() -> bool:
-    """Any evidence this installation was set up before — consent (any
-    state), community settings (shared or legacy, any state) or a legacy
-    marker. A cold install has none; everything else is an existing
-    installation and never re-runs first-time onboarding."""
-    marker = _marker_path()
-    if consent_path().exists() or (marker is not None and marker.exists()):
-        return True
-    if shared_community_path().exists():
-        return True
-    legacy = _legacy_community_path()
-    return bool(legacy is not None and legacy.exists())
-
-
 def resolve_community_path() -> Path:
     """The declared community settings authority, resolved read-only.
 
@@ -303,33 +289,27 @@ def _repoint_community_keys(effective: Path, result: dict) -> None:
             result["errors"].append(f"{target}: {type(exc).__name__}")
 
 
-def community_write_lock(anchor=None):
-    """Bounded cross-process lock serializing ALL community settings writes
-    in this profile.
-
-    The lock anchors at the profile-canonical path (never at the file being
-    written): the declared authority can move during adoption, so a
-    per-target lock would let a migration and a concurrent enable/disable
-    serialize against two different files and lose each other. One stable
-    anchor covers stamp, enable/disable and install writes alike. Reuses the
-    shared store's lock discipline (sibling ``.lock`` file, flock/msvcrt,
-    bounded wait, never unlinked). This is the adapter-side half of review
-    item 6; the shared core write boundary proposed in DESIGN-ISSUES.md
-    replaces this interim wiring when published.
+def community_write_lock(path):
+    """The shared settings lock for one file (sibling ``<file>.lock``), the
+    same key and bounded flock/msvcrt implementation the core's
+    ``settings.write``/``update_extensions`` hold — never a second protocol.
+    For callers that mutate the file OUTSIDE core's write paths (setup's
+    bootstrap writer). Holders take it exactly once per mutation; managed
+    mutations themselves go through core's locked ``settings.write``.
     """
-    base = Path(anchor) if anchor is not None else shared_community_path()
-    return consent_store._UpdateLock(Path(str(base) + ".lock"))
+    return consent_store._UpdateLock(Path(str(path) + ".lock"))
 
 
 def _ensure_consent_extension(effective: Path, result: dict) -> None:
     """Stamp the ``consent_config`` extension (absolute path of the profile
-    consent authority) onto a valid settings document, preserving every
-    other field including the generation. A damaged or missing document is
-    left alone: missing is an honest state and corrupt is a fault, neither
-    is repaired here. The field grants no extra permission; an explicit
-    enabled=false always wins at the core gate. Caller holds the profile
-    community write lock (``migrate_community``), so the re-read and write
-    cannot interleave with an enable/disable."""
+    consent authority) onto a valid settings document via the shared core
+    write boundary (``settings.update_extensions``: serialized with
+    ``settings.write``, extension keys only, ``generation`` untouched, so
+    accepted work is never revoked by wiring). A damaged or missing
+    document is left alone: missing is an honest state and corrupt is a
+    fault, neither is repaired here. The field grants no extra permission;
+    an explicit enabled=false always wins at the core gate. Runtimes older
+    than the shared boundary fall back to the adapter's atomic write."""
     state, data = _read_json(effective)
     if state != "ok" or data.get("schema") != COMMUNITY_SCHEMA:
         if state not in {"missing"}:
@@ -338,6 +318,22 @@ def _ensure_consent_extension(effective: Path, result: dict) -> None:
     authority = str(consent_path())
     if data.get("consent_config") == authority:
         return
+    try:
+        from mindie_knowledge.loop import settings as core_settings
+
+        stamp = getattr(core_settings, "update_extensions", None)
+        if stamp is not None:
+            stamp(effective, consent_config=authority)
+            result["consent_config"] = "stamped"
+            return
+    except ImportError:
+        pass
+    except Exception as exc:
+        result["errors"].append(
+            f"consent_config stamp failed: {type(exc).__name__}: {str(exc)[:120]}"
+        )
+        return
+    # Transitional fallback for runtimes predating update_extensions.
     data["consent_config"] = authority
     try:
         _store(effective, data)
@@ -352,10 +348,7 @@ def migrate_community() -> dict:
     """One explicit-boundary migration of the community settings authority.
 
     Called only from install (setup.py), upgrade/entry (op_init) and
-    settings-change operations — never from a status/load read. The whole
-    migration holds the profile community write lock, so a concurrent
-    enable/disable either lands first (and is adopted) or runs after (and
-    writes the repointed authority): no ordering loses a field. Idempotent:
+    settings-change operations — never from a status/load read. Idempotent:
 
     - declared path missing from the adapter config: honest fault, no action
       and no search for another possibly-enabled file;
@@ -366,18 +359,15 @@ def migrate_community() -> dict:
       reported for diagnosis;
     - afterwards every config copy (base and current generation, adapter
       and engine) points at the one effective authority, and a valid
-      settings document carries the ``consent_config`` extension.
+      settings document carries the ``consent_config`` extension through
+      the shared core stamp (``settings.update_extensions``).
+
+    Concurrency: the managed writes (``sharing.write_*``) detect a
+    repointed authority after their locked write and re-apply once on the
+    converged file, and the stamp serializes with those writes inside the
+    core — no adapter lock fork is held around any of them.
     """
     result = dict(migrated=False, conflict=False, repointed=[], errors=[])
-    try:
-        with community_write_lock():
-            return _migrate_community_locked(result)
-    except ConsentError as exc:
-        result["errors"].append(f"community migration lock: {exc}")
-        return result
-
-
-def _migrate_community_locked(result: dict) -> dict:
     try:
         declared = community_config_path()
     except FileNotFoundError:

@@ -43,7 +43,7 @@ def ensure_service(engine_file=None):
 def prepare_service(engine_file=None):
     """Spawn ensure_service in its own process group. Do not wait.
 
-    Used from explicit init/sharing-enable when contribution is on.
+    Used from explicit entry/contribute operations when contribution is on.
     Stop never starts the service. The child is not in the Hook tree.
     """
     path = str(Path(engine_file or engine_config_path()).resolve())
