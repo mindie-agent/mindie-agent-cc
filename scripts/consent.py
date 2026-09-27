@@ -292,55 +292,35 @@ def _repoint_community_keys(effective: Path, result: dict) -> None:
 def community_write_lock(path):
     """The shared settings lock for one file (sibling ``<file>.lock``), the
     same key and bounded flock/msvcrt implementation the core's
-    ``settings.write``/``update_extensions`` hold — never a second protocol.
-    For callers that mutate the file OUTSIDE core's write paths (setup's
-    bootstrap writer). Holders take it exactly once per mutation; managed
-    mutations themselves go through core's locked ``settings.write``.
+    ``CommunityWriteContext`` holds — never a second protocol. Only for the
+    setup bootstrap writer, which cannot import the selected runtime; every
+    installed path uses core's locked write boundary instead.
     """
     return consent_store._UpdateLock(Path(str(path) + ".lock"))
 
 
-def _ensure_consent_extension(effective: Path, result: dict) -> None:
+def _stamp_consent_extension(ctx, effective: Path, result: dict) -> None:
     """Stamp the ``consent_config`` extension (absolute path of the profile
-    consent authority) onto a valid settings document via the shared core
-    write boundary (``settings.update_extensions``: serialized with
-    ``settings.write``, extension keys only, ``generation`` untouched, so
-    accepted work is never revoked by wiring). A damaged or missing
-    document is left alone: missing is an honest state and corrupt is a
-    fault, neither is repaired here. The field grants no extra permission;
-    an explicit enabled=false always wins at the core gate. Runtimes older
-    than the shared boundary fall back to the adapter's atomic write."""
-    state, data = _read_json(effective)
-    if state != "ok" or data.get("schema") != COMMUNITY_SCHEMA:
-        if state not in {"missing"}:
-            result["consent_config"] = f"skipped ({state})"
+    consent authority) through the held write context: extension keys only,
+    ``generation`` untouched, so accepted work is never revoked by wiring.
+    A missing document is an honest state (nothing stamped); a damaged one
+    is a fault, never repaired. The field grants no extra permission; an
+    explicit enabled=false always wins at the core gate."""
+    state = ctx.read(effective)
+    if state.state == "missing":
+        return
+    if state.state not in {"enabled", "disabled"}:
+        result["consent_config"] = f"skipped ({state.state})"
         return
     authority = str(consent_path())
-    if data.get("consent_config") == authority:
+    if state.raw.get("consent_config") == authority:
         return
     try:
-        from mindie_knowledge.loop import settings as core_settings
-
-        stamp = getattr(core_settings, "update_extensions", None)
-        if stamp is not None:
-            stamp(effective, consent_config=authority)
-            result["consent_config"] = "stamped"
-            return
-    except ImportError:
-        pass
-    except Exception as exc:
+        ctx.update_extensions(effective, consent_config=authority)
+        result["consent_config"] = "stamped"
+    except (ValueError, ConsentError) as exc:
         result["errors"].append(
             f"consent_config stamp failed: {type(exc).__name__}: {str(exc)[:120]}"
-        )
-        return
-    # Transitional fallback for runtimes predating update_extensions.
-    data["consent_config"] = authority
-    try:
-        _store(effective, data)
-        result["consent_config"] = "stamped"
-    except OSError as exc:
-        result["errors"].append(
-            f"consent_config stamp failed: {type(exc).__name__}"
         )
 
 
@@ -348,7 +328,12 @@ def migrate_community() -> dict:
     """One explicit-boundary migration of the community settings authority.
 
     Called only from install (setup.py), upgrade/entry (op_init) and
-    settings-change operations — never from a status/load read. Idempotent:
+    settings-change operations — never from a status/load read. The whole
+    resolve → copy → repoint → stamp sequence holds the shared
+    ``CommunityWriteContext`` anchored at the profile's canonical community
+    path — the one lock key every writer of this profile uses — so a
+    concurrent enable/disable serializes against the migration instead of
+    losing either update. Idempotent:
 
     - declared path missing from the adapter config: honest fault, no action
       and no search for another possibly-enabled file;
@@ -359,15 +344,28 @@ def migrate_community() -> dict:
       reported for diagnosis;
     - afterwards every config copy (base and current generation, adapter
       and engine) points at the one effective authority, and a valid
-      settings document carries the ``consent_config`` extension through
-      the shared core stamp (``settings.update_extensions``).
-
-    Concurrency: the managed writes (``sharing.write_*``) detect a
-    repointed authority after their locked write and re-apply once on the
-    converged file, and the stamp serializes with those writes inside the
-    core — no adapter lock fork is held around any of them.
+      settings document carries the ``consent_config`` extension.
     """
     result = dict(migrated=False, conflict=False, repointed=[], errors=[])
+    try:
+        from mindie_knowledge.loop import settings as core_settings
+
+        context = core_settings.CommunityWriteContext
+    except (ImportError, AttributeError):
+        result["errors"].append(
+            "selected runtime lacks the shared community write context"
+        )
+        return result
+    canonical = shared_community_path()
+    try:
+        with context(canonical) as ctx:
+            return _migrate_community_in_context(ctx, canonical, result)
+    except ConsentError as exc:
+        result["errors"].append(f"community migration lock: {exc}")
+        return result
+
+
+def _migrate_community_in_context(ctx, canonical: Path, result: dict) -> dict:
     try:
         declared = community_config_path()
     except FileNotFoundError:
@@ -376,7 +374,6 @@ def migrate_community() -> dict:
     except ValueError as exc:
         result["errors"].append(str(exc))
         return result
-    canonical = shared_community_path()
     effective = declared
     if declared != canonical:
         declared_state, declared_data = _read_json(declared)
@@ -420,6 +417,6 @@ def migrate_community() -> dict:
             )
             return result
     _repoint_community_keys(effective, result)
-    _ensure_consent_extension(effective, result)
+    _stamp_consent_extension(ctx, effective, result)
     result["effective"] = str(effective)
     return result

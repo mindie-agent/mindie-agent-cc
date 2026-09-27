@@ -267,26 +267,43 @@ def community_settings(args, parser):
 
 
 def write_community(path, community):
+    """Bootstrap writer for the community settings file.
+
+    Runs before the selected runtime can be imported, so it uses the
+    byte-identical consent-store lock protocol directly: same canonical
+    ``<file>.lock`` key and the same read-merge-replace transaction inside
+    one acquisition as the core write boundary (a concurrent stamped or
+    managed update is not lost). The installer default-off file is never a
+    saved user choice and never overwrites an existing one.
+    """
     import consent as consent_mod
 
     authority = str(Path(path).with_name("mindie-consent.json").resolve())
-    if community is None:
-        data = dict(
-            schema="mindie-community-config/1",
-            enabled=False,
-            generation=secrets.token_hex(16),
-            enabled_at=None,
-            repository=None,
-            branch="main",
-            project_roots=[],
-            idle_seconds=300,
-            consent_config=authority,
-        )
-    else:
-        data = dict(community, consent_config=authority)
     with consent_mod.community_write_lock(path):
-        write_private(path, data, replace=path.exists() and community is not None)
-    return "enabled" if community is not None else "off"
+        if community is None:
+            data = dict(
+                schema="mindie-community-config/1",
+                enabled=False,
+                generation=secrets.token_hex(16),
+                enabled_at=None,
+                repository=None,
+                branch="main",
+                project_roots=[],
+                idle_seconds=300,
+                consent_config=authority,
+            )
+            write_private(path, data)
+            return "off"
+        try:
+            on_disk = json.loads(Path(path).read_text())
+            base = on_disk if isinstance(on_disk, dict) else {}
+        except (OSError, ValueError):
+            base = {}
+        data = dict(base)
+        data.update(community)
+        data["consent_config"] = authority
+        write_private(path, data, replace=path.exists())
+        return "enabled"
     return "enabled" if community is not None else "off"
 
 
