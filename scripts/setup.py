@@ -274,7 +274,13 @@ def write_community(path, community):
     ``<file>.lock`` key and the same read-merge-replace transaction inside
     one acquisition as the core write boundary (a concurrent stamped or
     managed update is not lost). The installer default-off file is never a
-    saved user choice and never overwrites an existing one.
+    saved user choice and never overwrites an existing one. An existing
+    file that is unreadable, unparseable, not one JSON object, or not the
+    ``mindie-community-config/1`` schema is a damaged authority: an
+    explicit failure with the original bytes preserved, never an implicit
+    repair. A parseable current-schema document — even with malformed
+    managed values — may be deliberately rewritten by this managed
+    mutation; a missing file is a valid first setup.
     """
     import consent as consent_mod
 
@@ -296,15 +302,23 @@ def write_community(path, community):
             return "off"
         try:
             on_disk = json.loads(Path(path).read_text())
-            base = on_disk if isinstance(on_disk, dict) else {}
-        except (OSError, ValueError):
+            if not isinstance(on_disk, dict):
+                raise ValueError("community settings must be one JSON object")
+            if on_disk.get("schema") != "mindie-community-config/1":
+                raise ValueError("community settings schema is not mindie-community-config/1")
+            base = on_disk
+        except FileNotFoundError:
             base = {}
+        except (OSError, ValueError) as exc:
+            raise SystemExit(
+                f"existing community settings are unreadable or damaged: {path}; "
+                f"nothing was written ({exc})"
+            )
         data = dict(base)
         data.update(community)
         data["consent_config"] = authority
         write_private(path, data, replace=path.exists())
         return "enabled"
-    return "enabled" if community is not None else "off"
 
 
 def build_bootstrap_runtime(domain_root: Path) -> str:
