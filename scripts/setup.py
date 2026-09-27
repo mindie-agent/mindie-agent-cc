@@ -267,6 +267,7 @@ def community_settings(args, parser):
 
 
 def write_community(path, community):
+    authority = str(Path(path).with_name("mindie-consent.json"))
     if community is None:
         write_private(
             path,
@@ -279,9 +280,11 @@ def write_community(path, community):
                 branch="main",
                 project_roots=[],
                 idle_seconds=300,
+                consent_config=authority,
             ),
         )
         return "off"
+    community = dict(community, consent_config=authority)
     write_private(path, community, replace=path.exists())
     return "enabled"
 
@@ -383,8 +386,25 @@ def main():
             parser.error(
                 "configuration already exists; pass --community-* to configure sharing"
             )
+        # Install boundary: converge the community authority before applying
+        # the explicit new settings. A scope conflict is reported, never
+        # merged or resolved by overwrite order.
+        os.environ["MINDIE_CC_CONFIG"] = str(config)
+        import consent as consent_mod
+
+        migration = consent_mod.migrate_community()
+        if migration.get("conflict"):
+            print(json.dumps(dict(
+                config=str(config), updated=None,
+                community_migration=migration,
+                error="community settings conflict; align or remove one file explicitly",
+            ), indent=2))
+            raise SystemExit(1)
         sharing = write_community(community_config, community)
-        print(json.dumps(dict(config=str(config), sharing=sharing, updated="community"), indent=2))
+        report = dict(config=str(config), sharing=sharing, updated="community")
+        if migration.get("migrated") or migration.get("errors"):
+            report["community_migration"] = migration
+        print(json.dumps(report, indent=2))
         return
     admission = domain_root / "admission.sqlite3"
     transcript = (PLUGIN_ROOT / "scripts" / "transcript.py").resolve()

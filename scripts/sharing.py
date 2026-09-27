@@ -1,7 +1,9 @@
 """Community sharing via the shared core validator. Default off.
 
-The settings file is profile-shared: ``consent.resolve_community_path``
-adopts a legacy per-adapter file once and then converges every read/write.
+The settings file is the declared ``community_config`` authority, resolved
+read-only; profile convergence and the ``consent_config`` extension stamp
+happen at explicit boundaries (``consent.migrate_community``), never inside
+a status read.
 """
 
 from __future__ import annotations
@@ -9,7 +11,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from consent import resolve_community_path
+from consent import consent_path, resolve_community_path
 
 
 def _settings_mod():
@@ -62,6 +64,7 @@ def write_enabled(
         visibility="public",
         account=account,
         fork=fork,
+        consent_config=str(consent_path()),
     )
     return settings.public_status()
 
@@ -82,5 +85,6 @@ def write_disabled(config=None):
         project_roots=roots,
         branch=previous.get("branch", "main"),
         previous=previous,
+        consent_config=str(consent_path()),
     )
     return settings.public_status()

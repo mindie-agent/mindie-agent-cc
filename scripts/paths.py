@@ -37,6 +37,28 @@ def load_adapter_config() -> dict:
     return data
 
 
+def base_config_path() -> Path:
+    """The stable base adapter configuration.
+
+    Hook/MCP children of a real install run with ``MINDIE_CC_CONFIG`` pointing
+    at a generation copy under ``state/update/generations/<sha>/config/``; the
+    copy's ``base_config`` key names the stable profile file. Profile-shared
+    authorities (consent, community settings) anchor at the base config's
+    directory, never at a per-generation directory, so an upgrade generation
+    cannot strand them. Falls back to the effective config when no absolute
+    ``base_config`` is recorded (bootstrap or unconfigured layouts).
+    """
+    path = config_path()
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return path
+    base = data.get("base_config") if isinstance(data, dict) else None
+    if isinstance(base, str) and os.path.isabs(base):
+        return Path(base)
+    return path
+
+
 def engine_config_path(config=None) -> Path:
     config = config if config is not None else load_adapter_config()
     value = config.get("engine_config")

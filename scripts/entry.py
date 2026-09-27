@@ -436,7 +436,11 @@ def _configured_init_activation(session, cwd, ident):
     """Entry binding for a configured task: automatic, idempotent, and never
     a consent prompt. The persistent install-level choice is untouched."""
     from admission import activate, gate
+    import consent as consent_mod
 
+    # Entry接入边界: converge the community authority once (no-op when
+    # converged); a conflict or fault is surfaced, never repaired silently.
+    migration = consent_mod.migrate_community()
     root = _project_root(cwd)
     lease = activate(session, project_root=root, root_session=session)
     claimed = gate().claim(session, "plugin_command", ident[:256], token=lease["token"]) is True
@@ -450,6 +454,8 @@ def _configured_init_activation(session, cwd, ident):
         project_root=lease["project_root"],
         service=service,
     )
+    if migration.get("conflict") or migration.get("errors") or migration.get("migrated"):
+        payload["community_migration"] = migration
     return payload
 
 
@@ -494,12 +500,16 @@ def op_sharing_enable(session, event):
         return payload
     if not _configured():
         raise ValueError("MindIE is not configured; run scripts/setup.py first")
+    import consent as consent_mod
     import sharing as sharing_mod
 
     parsed = _parse_sharing(event.get("command_args") or "")
     result = sharing_mod.write_enabled(**parsed)
     set_first_use("contribute")
+    migration = consent_mod.migrate_community()
     result = dict(result)
+    if migration.get("conflict") or migration.get("errors") or migration.get("migrated"):
+        result["community_migration"] = migration
     result["service"] = _prepare_capture_service()
     return result
 
@@ -513,6 +523,10 @@ def op_sharing_disable(session, event):
 
     result = sharing_mod.write_disabled()
     consent_mod.record_choice("disabled")
+    migration = consent_mod.migrate_community()
+    if migration.get("conflict") or migration.get("errors") or migration.get("migrated"):
+        result = dict(result)
+        result["community_migration"] = migration
     return result
 
 
