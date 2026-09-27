@@ -287,6 +287,7 @@ def write_community(path, community):
     with consent_mod.community_write_lock(path):
         write_private(path, data, replace=path.exists() and community is not None)
     return "enabled" if community is not None else "off"
+    return "enabled" if community is not None else "off"
 
 
 def build_bootstrap_runtime(domain_root: Path) -> str:

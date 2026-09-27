@@ -54,8 +54,11 @@ def write_enabled(
 ):
     if visibility != "public":
         raise ValueError("community sharing requires public visibility")
-    path = resolve_community_path() if config is None else config
-    with community_write_lock(path):
+    # Resolve inside the profile write lock: a concurrent migration may
+    # repoint the authority; whoever holds the lock second must write the
+    # converged file, never the stale declared one.
+    with community_write_lock():
+        path = resolve_community_path() if config is None else config
         settings = _settings_mod().write(
             path,
             enabled=True,
@@ -71,15 +74,17 @@ def write_enabled(
 
 
 def write_disabled(config=None):
-    path = resolve_community_path() if config is None else config
-    previous = {}
-    try:
-        previous = json.loads(Path(path).read_text())
-    except (OSError, ValueError):
-        previous = dict(schema="mindie-community-config/1", repository="local/unconfigured")
-    repository = previous.get("repository") or "local/unconfigured"
-    roots = previous.get("project_roots") or []
-    with community_write_lock(path):
+    # Resolve and read previous state inside the profile write lock (see
+    # write_enabled): the authority may move under a concurrent migration.
+    with community_write_lock():
+        path = resolve_community_path() if config is None else config
+        previous = {}
+        try:
+            previous = json.loads(Path(path).read_text())
+        except (OSError, ValueError):
+            previous = dict(schema="mindie-community-config/1", repository="local/unconfigured")
+        repository = previous.get("repository") or "local/unconfigured"
+        roots = previous.get("project_roots") or []
         settings = _settings_mod().write(
             path,
             enabled=False,

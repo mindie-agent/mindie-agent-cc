@@ -303,17 +303,22 @@ def _repoint_community_keys(effective: Path, result: dict) -> None:
             result["errors"].append(f"{target}: {type(exc).__name__}")
 
 
-def community_write_lock(path):
-    """Bounded cross-process lock for writes to the community settings file.
+def community_write_lock(anchor=None):
+    """Bounded cross-process lock serializing ALL community settings writes
+    in this profile.
 
-    Reuses the shared store's lock discipline (sibling ``.lock`` file,
-    flock/msvcrt, bounded wait, never unlinked) so the ``consent_config``
-    stamp and adapter sharing writes cannot lose each other's fields. This
-    is the adapter-side half of review item 6; the shared settings write
-    boundary owned by core is proposed in this lane's DESIGN-ISSUES.md and
+    The lock anchors at the profile-canonical path (never at the file being
+    written): the declared authority can move during adoption, so a
+    per-target lock would let a migration and a concurrent enable/disable
+    serialize against two different files and lose each other. One stable
+    anchor covers stamp, enable/disable and install writes alike. Reuses the
+    shared store's lock discipline (sibling ``.lock`` file, flock/msvcrt,
+    bounded wait, never unlinked). This is the adapter-side half of review
+    item 6; the shared core write boundary proposed in DESIGN-ISSUES.md
     replaces this interim wiring when published.
     """
-    return consent_store._UpdateLock(Path(str(path) + ".lock"))
+    base = Path(anchor) if anchor is not None else shared_community_path()
+    return consent_store._UpdateLock(Path(str(base) + ".lock"))
 
 
 def _ensure_consent_extension(effective: Path, result: dict) -> None:
@@ -322,25 +327,21 @@ def _ensure_consent_extension(effective: Path, result: dict) -> None:
     other field including the generation. A damaged or missing document is
     left alone: missing is an honest state and corrupt is a fault, neither
     is repaired here. The field grants no extra permission; an explicit
-    enabled=false always wins at the core gate. The re-read and write hold
-    the community write lock so a concurrent enable/disable is not lost."""
+    enabled=false always wins at the core gate. Caller holds the profile
+    community write lock (``migrate_community``), so the re-read and write
+    cannot interleave with an enable/disable."""
+    state, data = _read_json(effective)
+    if state != "ok" or data.get("schema") != COMMUNITY_SCHEMA:
+        if state not in {"missing"}:
+            result["consent_config"] = f"skipped ({state})"
+        return
+    authority = str(consent_path())
+    if data.get("consent_config") == authority:
+        return
+    data["consent_config"] = authority
     try:
-        with community_write_lock(effective):
-            state, data = _read_json(effective)
-            if state != "ok" or data.get("schema") != COMMUNITY_SCHEMA:
-                if state not in {"missing"}:
-                    result["consent_config"] = f"skipped ({state})"
-                return
-            authority = str(consent_path())
-            if data.get("consent_config") == authority:
-                return
-            data["consent_config"] = authority
-            _store(effective, data)
+        _store(effective, data)
         result["consent_config"] = "stamped"
-    except ConsentError as exc:
-        result["errors"].append(
-            f"consent_config stamp failed: {exc}"
-        )
     except OSError as exc:
         result["errors"].append(
             f"consent_config stamp failed: {type(exc).__name__}"
@@ -351,7 +352,10 @@ def migrate_community() -> dict:
     """One explicit-boundary migration of the community settings authority.
 
     Called only from install (setup.py), upgrade/entry (op_init) and
-    settings-change operations — never from a status/load read. Idempotent:
+    settings-change operations — never from a status/load read. The whole
+    migration holds the profile community write lock, so a concurrent
+    enable/disable either lands first (and is adopted) or runs after (and
+    writes the repointed authority): no ordering loses a field. Idempotent:
 
     - declared path missing from the adapter config: honest fault, no action
       and no search for another possibly-enabled file;
@@ -365,6 +369,15 @@ def migrate_community() -> dict:
       settings document carries the ``consent_config`` extension.
     """
     result = dict(migrated=False, conflict=False, repointed=[], errors=[])
+    try:
+        with community_write_lock():
+            return _migrate_community_locked(result)
+    except ConsentError as exc:
+        result["errors"].append(f"community migration lock: {exc}")
+        return result
+
+
+def _migrate_community_locked(result: dict) -> dict:
     try:
         declared = community_config_path()
     except FileNotFoundError:
