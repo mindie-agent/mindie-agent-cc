@@ -3,6 +3,16 @@
   "hooks": {
     "UserPromptExpansion": [
       {
+        "matcher": "mindie-agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/mindie_launch.py\" hook expansion",
+            "timeout": 2
+          }
+        ]
+      },
+      {
         "matcher": "mindie-agent:mindie-agent",
         "hooks": [
           {

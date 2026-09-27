@@ -51,7 +51,7 @@ def _parse_sharing(text):
             raise ValueError("unknown sharing flag: " + item)
     if not repository or not roots or visibility != "public" or not account:
         raise ValueError(
-            "sharing-enable requires --repository owner/repo, "
+            "contribution requires --repository owner/repo, "
             "--account USER, --project-root /absolute/path, and --visibility public"
         )
     return dict(
@@ -375,11 +375,15 @@ def status_payload(session=None):
     payload = dict(_knowledge_status_payload(session))
     payload["reporting"] = diagnostic_support.reporting_status()
     saved = consent_mod.load()
-    # Reporting is offered once, inside the first setup, never repeatedly.
+    # Reporting is offered once inside the first setup and stays offered
+    # while genuinely undecided; an installer default-off is NOT a saved
+    # choice and must not mask it. Any recorded decision (enabled, disabled
+    # or later) persists and is never re-asked; a damaged authority shows
+    # the fault above instead of a fresh offer.
     if (
         payload["reporting"].get("status") == "not_configured"
-        and saved["state"] == "missing"
-        and not consent_mod.install_traces()
+        and saved["state"] in {"ok", "missing"}
+        and saved["reporting"] is None
     ):
         payload["reporting_choice"] = diagnostic_support.reporting_hint()
     return payload
@@ -396,8 +400,15 @@ def _init_choice_from_native(arguments):
     if not text:
         return None
     token = text.split()[0]
-    if token in {"read-only", "later"}:
+    if token in {"contribute", "read-only", "later"}:
         return token
+    return None
+
+
+def _reporting_token_from_native(arguments):
+    for token in (arguments or "").split():
+        if token in {"reporting-enable", "reporting-disable", "reporting-later"}:
+            return token
     return None
 
 
@@ -429,9 +440,21 @@ def _sharing_on() -> bool:
         return False
 
 
+def _capture_permitted() -> bool:
+    """The whole capture chain (schema, enabled, generation, scope, and the
+    consent authority when the config carries consent_config) as the shared
+    core gate reads it. The service is only woken when capture can persist."""
+    try:
+        from sharing import load
+
+        return bool(load().allows_capture())
+    except Exception:
+        return False
+
+
 def _prepare_capture_service():
     """Contribution-on only. Detached, model-free, not waited in the Hook."""
-    if not _sharing_on():
+    if not _capture_permitted():
         return "off"
     try:
         from knowledge_service import prepare_service
@@ -439,6 +462,84 @@ def _prepare_capture_service():
         return prepare_service()
     except Exception as exc:
         return f"prepare-failed:{type(exc).__name__}"
+
+
+def _apply_contribute(payload, session, event, configured):
+    """First contribution through the unified entry itself: the user picks
+    contribute and names the public destination in the same invocation —
+    no separate sharing command to learn. Native slash origin is still the
+    trust boundary; model arguments never enable sharing."""
+    import consent as consent_mod
+
+    if not configured:
+        payload["contribute"] = dict(
+            recorded=False,
+            note=(
+                "Contribution requires an installed runtime first: "
+                "python3 scripts/setup.py --config ~/.config/mindie-agent/cc.json"
+            ),
+        )
+        return payload
+    import sharing as sharing_mod
+
+    try:
+        parsed = _parse_sharing(event.get("command_args") or "")
+    except ValueError as exc:
+        payload["contribute"] = dict(recorded=False, error=str(exc))
+        return payload
+    try:
+        result = sharing_mod.write_enabled(**parsed)
+    except (ValueError, OSError) as exc:
+        payload["contribute"] = dict(recorded=False, error=str(exc)[:200])
+        return payload
+    try:
+        consent_mod.record_choice("contribute")
+    except consent_mod.ConsentError as exc:
+        payload["consent_error"] = dict(state=exc.state, error=str(exc))
+    migration = consent_mod.migrate_community()
+    payload.update(first_use="contribute", choices=[], repeat=True)
+    payload["sharing"] = result
+    if migration.get("conflict") or migration.get("errors") or migration.get("migrated"):
+        payload["community_migration"] = migration
+    payload["service"] = _prepare_capture_service()
+    return payload
+
+
+def _apply_reporting_token(payload, token, configured):
+    """The independent reporting choice, decided inside the same entry. A
+    real service change is recorded only when the service reached the
+    intended state; later/disable persist without touching the service."""
+    import consent as consent_mod
+    import diagnostic_support
+
+    value = {
+        "reporting-enable": "enabled",
+        "reporting-disable": "disabled",
+        "reporting-later": "later",
+    }[token]
+    if token == "reporting-later" or not configured:
+        if token == "reporting-enable":
+            payload["reporting"] = dict(
+                recorded=False,
+                note="Reporting enable requires an installed runtime first: python3 scripts/setup.py",
+            )
+            return payload
+        try:
+            consent_mod.record_reporting(value)
+        except consent_mod.ConsentError as exc:
+            payload["consent_error"] = dict(state=exc.state, error=str(exc))
+        payload["reporting"] = diagnostic_support.reporting_status()
+        return payload
+    python = load_adapter_config()["python"]
+    result = diagnostic_support.configure_reporting(token == "reporting-enable", python)
+    if result.get("enabled") is (token == "reporting-enable"):
+        try:
+            consent_mod.record_reporting(value)
+        except consent_mod.ConsentError as exc:
+            result = dict(result)
+            result["consent_error"] = dict(state=exc.state, error=str(exc))
+    payload["reporting"] = result
+    return payload
 
 
 def _configured_init_activation(session, cwd, ident):
@@ -456,7 +557,7 @@ def _configured_init_activation(session, cwd, ident):
     payload = status_payload(session)
     if not claimed:
         payload["already"] = True
-    service = _prepare_capture_service() if _sharing_on() else "off"
+    service = _prepare_capture_service()
     payload["binding"] = dict(
         session=lease["session"],
         enabled=bool(lease.get("enabled")),
@@ -471,6 +572,7 @@ def _configured_init_activation(session, cwd, ident):
 def op_init(session, event):
     slash_command(event)
     native_choice = _init_choice_from_native(event.get("command_args"))
+    reporting_token = _reporting_token_from_native(event.get("command_args"))
     ident = f"init:{_prompt_id(event)}"
     cwd = event.get("cwd")
     import consent as consent_mod
@@ -483,11 +585,15 @@ def op_init(session, event):
             payload = status_payload(session)
             payload["already"] = True
             return payload
-        if native_choice is None:
+        if native_choice == "contribute":
+            payload = _apply_contribute(status_payload(session), session, event, False)
+        elif native_choice is None:
             payload = status_payload(session)
             payload["runtime"] = "unconfigured"
         else:
             payload = _apply_native_choice(status_payload(session), native_choice, session)
+        if reporting_token is not None:
+            payload = _apply_reporting_token(payload, reporting_token, False)
         if legacy.get("status") in {"conflict", "error", "migrated"}:
             payload["consent_migration"] = {
                 key: legacy[key] for key in ("status", "detail", "error", "sources")
@@ -495,12 +601,18 @@ def op_init(session, event):
             }
         return payload
     payload = _configured_init_activation(session, cwd, ident)
+    if native_choice == "contribute":
+        payload = _apply_contribute(payload, session, event, True)
+    else:
+        payload = _apply_native_choice(payload, native_choice, session)
+    if reporting_token is not None:
+        payload = _apply_reporting_token(payload, reporting_token, True)
     if legacy.get("status") in {"conflict", "error", "migrated"}:
         payload["consent_migration"] = {
             key: legacy[key] for key in ("status", "detail", "error", "sources")
             if legacy.get(key)
         }
-    return _apply_native_choice(payload, native_choice, session)
+    return payload
 
 
 def op_status(session, event):

@@ -11,10 +11,20 @@ account, or project scope. Do not call tools to bind or to enable sharing.
 
 Invoking the entry binds the current task internally and automatically,
 reusing the saved install-level choice. First use offers the one-time
-choices only if no choice was ever saved:
-1. Recommended: contribute public experience for the current project via `/mindie-agent:sharing-enable --repository owner/repo --account USER --project-root /absolute/path --visibility public`.
+choices only if no choice was ever saved, and every choice completes
+through this same entry:
+1. Recommended: contribute public experience for the current project — the
+   user names the public destination in ordinary conversation and invokes
+   the entry with `contribute --repository owner/repo --account USER
+   --project-root /absolute/path --visibility public`.
 2. Read-only knowledge; no contribution (`/mindie-agent read-only`).
 3. Configure later; sharing stays off (`/mindie-agent later`).
+
+The first setup also offers the independent reporting choice once
+(`/mindie-agent reporting-enable`, `reporting-disable`, or
+`reporting-later`); it is separate from knowledge contribution, an
+installer default-off is not a decision, and any recorded decision
+persists without being re-asked.
 
 There is no automatic yes. A saved choice persists across sessions, forks,
 restarts, upgrades and failures — it is never re-asked, and failure counts

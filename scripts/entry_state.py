@@ -78,7 +78,7 @@ def three_choices() -> dict:
                 recommended=True,
                 summary="Contribute public experience for the current project",
                 next=(
-                    "/mindie-agent:sharing-enable --repository owner/repo "
+                    "Invoke the mindie-agent entry with contribute --repository owner/repo "
                     "--account USER --project-root /absolute/path --visibility public"
                 ),
             ),

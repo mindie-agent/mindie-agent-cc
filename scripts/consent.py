@@ -303,25 +303,44 @@ def _repoint_community_keys(effective: Path, result: dict) -> None:
             result["errors"].append(f"{target}: {type(exc).__name__}")
 
 
+def community_write_lock(path):
+    """Bounded cross-process lock for writes to the community settings file.
+
+    Reuses the shared store's lock discipline (sibling ``.lock`` file,
+    flock/msvcrt, bounded wait, never unlinked) so the ``consent_config``
+    stamp and adapter sharing writes cannot lose each other's fields. This
+    is the adapter-side half of review item 6; the shared settings write
+    boundary owned by core is proposed in this lane's DESIGN-ISSUES.md and
+    replaces this interim wiring when published.
+    """
+    return consent_store._UpdateLock(Path(str(path) + ".lock"))
+
+
 def _ensure_consent_extension(effective: Path, result: dict) -> None:
     """Stamp the ``consent_config`` extension (absolute path of the profile
     consent authority) onto a valid settings document, preserving every
     other field including the generation. A damaged or missing document is
     left alone: missing is an honest state and corrupt is a fault, neither
     is repaired here. The field grants no extra permission; an explicit
-    enabled=false always wins at the core gate."""
-    state, data = _read_json(effective)
-    if state != "ok" or data.get("schema") != COMMUNITY_SCHEMA:
-        if state not in {"missing"}:
-            result["consent_config"] = f"skipped ({state})"
-        return
-    authority = str(consent_path())
-    if data.get("consent_config") == authority:
-        return
-    data["consent_config"] = authority
+    enabled=false always wins at the core gate. The re-read and write hold
+    the community write lock so a concurrent enable/disable is not lost."""
     try:
-        _store(effective, data)
+        with community_write_lock(effective):
+            state, data = _read_json(effective)
+            if state != "ok" or data.get("schema") != COMMUNITY_SCHEMA:
+                if state not in {"missing"}:
+                    result["consent_config"] = f"skipped ({state})"
+                return
+            authority = str(consent_path())
+            if data.get("consent_config") == authority:
+                return
+            data["consent_config"] = authority
+            _store(effective, data)
         result["consent_config"] = "stamped"
+    except ConsentError as exc:
+        result["errors"].append(
+            f"consent_config stamp failed: {exc}"
+        )
     except OSError as exc:
         result["errors"].append(
             f"consent_config stamp failed: {type(exc).__name__}"

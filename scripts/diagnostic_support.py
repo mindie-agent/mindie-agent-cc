@@ -244,10 +244,14 @@ def reporting_hint():
         "optional": True, "recommended": True,
         "independent_of_knowledge_contribution": True,
         "enable": "/mindie-agent:reporting-enable",
-        "status": "/mindie-agent:reporting-status",
         "disable": "/mindie-agent:reporting-disable",
+        "later": "/mindie-agent reporting-later",
+        "status": "/mindie-agent:reporting-status",
         "repository": REPOSITORY,
         "note": ("Optionally report sanitized product fault code metadata to the public "
                  "repository. Prompts, transcripts, commands, environment and credentials "
-                 "are excluded. This is a separate shared user choice; consult its status."),
+                 "are excluded. This is a separate shared user choice decided once; the "
+                 "entry also accepts reporting-enable/reporting-disable/reporting-later. "
+                 "Enabled, disabled and later all persist and are never re-asked. "
+                 "Consult its status anytime."),
     }

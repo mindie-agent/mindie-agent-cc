@@ -267,26 +267,26 @@ def community_settings(args, parser):
 
 
 def write_community(path, community):
-    authority = str(Path(path).with_name("mindie-consent.json"))
+    import consent as consent_mod
+
+    authority = str(Path(path).with_name("mindie-consent.json").resolve())
     if community is None:
-        write_private(
-            path,
-            dict(
-                schema="mindie-community-config/1",
-                enabled=False,
-                generation=secrets.token_hex(16),
-                enabled_at=None,
-                repository=None,
-                branch="main",
-                project_roots=[],
-                idle_seconds=300,
-                consent_config=authority,
-            ),
+        data = dict(
+            schema="mindie-community-config/1",
+            enabled=False,
+            generation=secrets.token_hex(16),
+            enabled_at=None,
+            repository=None,
+            branch="main",
+            project_roots=[],
+            idle_seconds=300,
+            consent_config=authority,
         )
-        return "off"
-    community = dict(community, consent_config=authority)
-    write_private(path, community, replace=path.exists())
-    return "enabled"
+    else:
+        data = dict(community, consent_config=authority)
+    with consent_mod.community_write_lock(path):
+        write_private(path, data, replace=path.exists() and community is not None)
+    return "enabled" if community is not None else "off"
 
 
 def build_bootstrap_runtime(domain_root: Path) -> str:
