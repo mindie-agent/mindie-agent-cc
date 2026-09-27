@@ -1,35 +1,34 @@
-"""Install-level one-time choices: the single persistent consent authority.
+"""Thin adapter wiring over the shared consent store.
 
-One small JSON document (``mindie-consent/1``) per installation profile,
-stored beside the base adapter configuration so every adapter sharing this
-profile reads the same saved choice. An independently isolated profile has
-its own file and never inherits another profile's choice. Hook/MCP children
-run against a per-generation config copy, so anchoring always resolves the
-base config directory (``paths.base_config_path``): an upgrade generation
-must not strand the saved choice.
+The persistent choice document (``mindie-consent/1``) is implemented ONCE by
+the knowledge core (``mindie_knowledge/consent_store.py``); this adapter
+carries a byte-identical bootstrap copy (``scripts/consent_store.py``) because
+the entry hook runs before the selected runtime can be loaded. Only path
+anchoring and legacy-candidate collection live here — no third hand-written
+policy.
 
-The adapter first-use marker only deduplicates native slash attempts; the
-user's choice lives here and is imported from legacy records exactly once.
-A missing, unreadable, corrupt and explicitly disabled state stay strictly
-apart: damaged saved state is a fault (read-only help keeps working, writes
-stop), never a fresh install and never a guessed opt-in or opt-out.
+One document per installation profile, stored beside the base adapter
+configuration so every adapter sharing this profile reads the same saved
+choice. An independently isolated profile has its own file and never inherits
+another profile's choice. Hook/MCP children run against a per-generation
+config copy, so anchoring always resolves the base config directory
+(``paths.base_config_path``): an upgrade generation must not strand the saved
+choice.
 
-Community settings reads use the declared ``community_config`` path as-is.
-Migrating a legacy per-adapter file into the profile-shared location, and
-pointing every config copy (base and current generation, adapter and
-engine) at the one authority, happens only at explicit install/upgrade/
-entry boundaries via ``migrate_community`` — never inside a status/load
-read, and never by falling back to another file when the declared
-authority is unreadable.
+Reads are pure: a status/load never migrates, repairs or probes another
+authority. Legacy import (``migrate_consent``) and community convergence
+(``migrate_community``) run only at explicit install/upgrade/entry
+boundaries. The adapter first-use marker only deduplicates native slash
+attempts; it is a one-time migration candidate, never a consent source.
 """
 
 from __future__ import annotations
 
 import json
 import os
-import time
 from pathlib import Path
 
+import consent_store
 from paths import (
     base_config_path,
     community_config_path,
@@ -37,9 +36,10 @@ from paths import (
     first_use_path,
 )
 
-SCHEMA = "mindie-consent/1"
-CHOICES = ("contribute", "read-only", "later", "disabled")
-REPORTING = ("enabled", "disabled", "later")
+ConsentError = consent_store.ConsentError
+SCHEMA = consent_store.SCHEMA
+CHOICES = consent_store.CHOICES
+REPORTING = consent_store.REPORTING
 COMMUNITY_SCHEMA = "mindie-community-config/1"
 
 
@@ -83,6 +83,40 @@ def _read_json(path: Path):
     return "ok", data
 
 
+def load() -> dict:
+    """Pure read of the persistent choice in the adapter's legacy shape.
+
+    ``state`` is ``ok``/``missing``/``unreadable``/``corrupt``; an invalid
+    saved choice value is corrupt, not absent. Zero side effects: no import,
+    no repair, no migration (that is ``migrate_consent`` at an explicit
+    boundary only).
+    """
+    raw = consent_store.read(consent_path())
+    return dict(
+        state=raw["state"],
+        choice=raw["choice"],
+        reporting=raw["reporting"],
+        path=raw["path"],
+        error=raw["error"],
+    )
+
+
+def record_choice(choice: str) -> str:
+    """Explicit user choice; preserves reporting and untouched metadata.
+
+    Raises ``ConsentError`` when the saved authority is corrupt or
+    unreadable — a damaged file is never silently cleared by an update.
+    """
+    consent_store.record_choice(consent_path(), choice)
+    return choice
+
+
+def record_reporting(value: str) -> str:
+    """Explicit reporting choice; preserves the contribution choice."""
+    consent_store.record_reporting(consent_path(), value)
+    return value
+
+
 def _marker_path():
     try:
         return first_use_path()
@@ -107,7 +141,7 @@ def _legacy_generation_record():
 
     Real installs handed hook children a generation config copy, so older
     revisions wrote the authority beside it. It is the same schema and the
-    newest explicit record, imported once into the profile location.
+    newest explicit record, a one-time migration candidate.
     """
     try:
         generation = config_path().parent / "mindie-consent.json"
@@ -147,86 +181,39 @@ def _legacy_community_path():
         return None
 
 
-def _import_legacy_once(path: Path) -> None:
-    record = (
-        _legacy_generation_record()
-        or _legacy_marker_choice()
-        or _legacy_community_choice()
-    )
-    if record is None:
-        return
-    data = {
-        "schema": SCHEMA,
-        "choice": record["choice"],
-        "choice_at": time.time(),
-        "migrated_from": "legacy",
-    }
-    if record.get("reporting") is not None:
-        data["reporting"] = record["reporting"]
-        data["reporting_at"] = time.time()
-    _store(path, data)
+def _legacy_candidates():
+    """Validated legacy choice records, newest-explicit first, each naming
+    its source. Anything unreadable or malformed simply has no evidence."""
+    candidates = []
+    generation = _legacy_generation_record()
+    if generation is not None:
+        candidates.append(dict(
+            choice=generation.get("choice"),
+            reporting=generation.get("reporting"),
+            source="generation-consent",
+        ))
+    marker = _legacy_marker_choice()
+    if marker is not None:
+        candidates.append(dict(
+            choice=marker["choice"], reporting=None, source="first-use-marker",
+        ))
+    community = _legacy_community_choice()
+    if community is not None:
+        candidates.append(dict(
+            choice=community["choice"], reporting=None, source="community-enabled",
+        ))
+    return candidates
 
 
-def load() -> dict:
-    """Read the persistent choice, importing legacy state exactly once.
+def migrate_consent() -> dict:
+    """One explicit-boundary import of legacy choices via the shared store.
 
-    Returns ``state`` of ``ok``/``missing``/``unreadable``/``corrupt`` plus
-    the saved ``choice`` and ``reporting`` values when valid. An invalid
-    saved choice value is corrupt, not absent.
+    An existing valid authority always wins (``kept``); missing evidence is
+    ``absent``; conflicting legacy sources are a diagnosable ``conflict``;
+    a damaged authority is an ``error``. Nothing is guessed and the original
+    data is preserved on every no-write outcome.
     """
-    path = consent_path()
-    if not path.exists():
-        try:
-            _import_legacy_once(path)
-        except OSError:
-            pass  # an unwritable profile stays truthful below
-    state, data = _read_json(path)
-    result = dict(state=state, choice=None, reporting=None, path=str(path),
-                  error=None)
-    if state != "ok":
-        if state == "corrupt":
-            result["error"] = "consent file is damaged"
-        elif state == "unreadable":
-            result["error"] = "consent file is unreadable"
-        return result
-    if data.get("schema") != SCHEMA:
-        result.update(state="corrupt", error="unsupported consent schema")
-        return result
-    choice = data.get("choice")
-    if choice is not None and choice not in CHOICES:
-        result.update(state="corrupt", error="unknown consent choice")
-        return result
-    reporting = data.get("reporting")
-    if reporting is not None and reporting not in REPORTING:
-        result.update(state="corrupt", error="unknown reporting choice")
-        return result
-    result.update(choice=choice, reporting=reporting)
-    return result
-
-
-def record_choice(choice: str) -> str:
-    if choice not in CHOICES:
-        raise ValueError("choice must be contribute, read-only, later or disabled")
-    current = load()
-    data = {}
-    if current["state"] == "ok":
-        data = dict(_read_json(consent_path())[1])
-    data.update(schema=SCHEMA, choice=choice, choice_at=time.time())
-    data.pop("migrated_from", None)
-    _store(consent_path(), data)
-    return choice
-
-
-def record_reporting(value: str) -> str:
-    if value not in REPORTING:
-        raise ValueError("reporting must be enabled, disabled or later")
-    current = load()
-    data = {}
-    if current["state"] == "ok":
-        data = dict(_read_json(consent_path())[1])
-    data.update(schema=SCHEMA, reporting=value, reporting_at=time.time())
-    _store(consent_path(), data)
-    return value
+    return consent_store.migrate(consent_path(), _legacy_candidates())
 
 
 def marker_exists() -> bool:

@@ -400,10 +400,16 @@ def main():
                 error="community settings conflict; align or remove one file explicitly",
             ), indent=2))
             raise SystemExit(1)
+        legacy = consent_mod.migrate_consent()
         sharing = write_community(community_config, community)
         report = dict(config=str(config), sharing=sharing, updated="community")
         if migration.get("migrated") or migration.get("errors"):
             report["community_migration"] = migration
+        if legacy.get("status") not in {"kept", "absent"}:
+            report["consent_migration"] = {
+                key: legacy[key] for key in ("status", "detail", "error", "sources")
+                if legacy.get(key)
+            }
         print(json.dumps(report, indent=2))
         return
     admission = domain_root / "admission.sqlite3"
@@ -468,6 +474,12 @@ def main():
         },
         adapter_value,
     )
+    # Install boundary: import any legacy saved choice exactly once through
+    # the shared store (a valid existing authority is kept; conflicts and
+    # damaged state are reported, never guessed).
+    import consent as consent_mod
+
+    legacy = consent_mod.migrate_consent()
     native = "skipped"
     native_error = None
     if not args.no_native_install:
@@ -531,6 +543,11 @@ def main():
         # Development/test provenance: this install verified a declared local
         # candidate commit, not the official repository identity.
         report["local_candidates"] = dict(local_candidates)
+    if legacy.get("status") not in {"kept", "absent"}:
+        report["consent_migration"] = {
+            key: legacy[key] for key in ("status", "detail", "error", "sources")
+            if legacy.get(key)
+        }
     print(json.dumps(report, indent=2, default=str))
     if native_error:
         raise SystemExit(1)

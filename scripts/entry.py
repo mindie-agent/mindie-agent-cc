@@ -401,10 +401,19 @@ def _init_choice_from_native(arguments):
     return None
 
 
-def _apply_native_choice(payload, native_choice):
+def _apply_native_choice(payload, native_choice, session=None):
     if native_choice is None:
         return payload
-    stored = set_first_use(native_choice)
+    import consent as consent_mod
+
+    try:
+        stored = set_first_use(native_choice)
+    except consent_mod.ConsentError as exc:
+        # A damaged saved authority is never silently cleared: the fault
+        # payload shows the real state instead of recording over it.
+        payload = status_payload(session)
+        payload["consent_error"] = dict(state=exc.state, error=str(exc))
+        return payload
     payload["first_use"] = stored
     payload["choices"] = []
     payload["repeat"] = True
@@ -438,8 +447,8 @@ def _configured_init_activation(session, cwd, ident):
     from admission import activate, gate
     import consent as consent_mod
 
-    # Entry接入边界: converge the community authority once (no-op when
-    # converged); a conflict or fault is surfaced, never repaired silently.
+    # Entry attach boundary: converge the community authority once (no-op
+    # when converged); a conflict or fault is surfaced, never repaired.
     migration = consent_mod.migrate_community()
     root = _project_root(cwd)
     lease = activate(session, project_root=root, root_session=session)
@@ -464,6 +473,11 @@ def op_init(session, event):
     native_choice = _init_choice_from_native(event.get("command_args"))
     ident = f"init:{_prompt_id(event)}"
     cwd = event.get("cwd")
+    import consent as consent_mod
+
+    # Entry attach boundary: import any legacy saved choice exactly once
+    # (kept/absent are quiet; conflict/error surface for diagnosis).
+    legacy = consent_mod.migrate_consent()
     if not _configured():
         if not consume_prompt(ident):
             payload = status_payload(session)
@@ -472,10 +486,21 @@ def op_init(session, event):
         if native_choice is None:
             payload = status_payload(session)
             payload["runtime"] = "unconfigured"
-            return payload
-        return _apply_native_choice(status_payload(session), native_choice)
+        else:
+            payload = _apply_native_choice(status_payload(session), native_choice, session)
+        if legacy.get("status") in {"conflict", "error", "migrated"}:
+            payload["consent_migration"] = {
+                key: legacy[key] for key in ("status", "detail", "error", "sources")
+                if legacy.get(key)
+            }
+        return payload
     payload = _configured_init_activation(session, cwd, ident)
-    return _apply_native_choice(payload, native_choice)
+    if legacy.get("status") in {"conflict", "error", "migrated"}:
+        payload["consent_migration"] = {
+            key: legacy[key] for key in ("status", "detail", "error", "sources")
+            if legacy.get(key)
+        }
+    return _apply_native_choice(payload, native_choice, session)
 
 
 def op_status(session, event):
@@ -505,9 +530,14 @@ def op_sharing_enable(session, event):
 
     parsed = _parse_sharing(event.get("command_args") or "")
     result = sharing_mod.write_enabled(**parsed)
-    set_first_use("contribute")
-    migration = consent_mod.migrate_community()
     result = dict(result)
+    try:
+        set_first_use("contribute")
+    except consent_mod.ConsentError as exc:
+        # Sharing was written, but the consent authority is damaged: the
+        # fault is surfaced, never silently overwritten.
+        result["consent_error"] = dict(state=exc.state, error=str(exc))
+    migration = consent_mod.migrate_community()
     if migration.get("conflict") or migration.get("errors") or migration.get("migrated"):
         result["community_migration"] = migration
     result["service"] = _prepare_capture_service()
@@ -522,7 +552,11 @@ def op_sharing_disable(session, event):
     import sharing as sharing_mod
 
     result = sharing_mod.write_disabled()
-    consent_mod.record_choice("disabled")
+    try:
+        consent_mod.record_choice("disabled")
+    except consent_mod.ConsentError as exc:
+        result = dict(result)
+        result["consent_error"] = dict(state=exc.state, error=str(exc))
     migration = consent_mod.migrate_community()
     if migration.get("conflict") or migration.get("errors") or migration.get("migrated"):
         result = dict(result)
@@ -611,7 +645,11 @@ def op_reporting(session, event, command):
     python = load_adapter_config()["python"]
     result = diagnostic_support.configure_reporting(command == "reporting-enable", python)
     if result.get("enabled") is (command == "reporting-enable"):
-        consent_mod.record_reporting("enabled" if command == "reporting-enable" else "disabled")
+        try:
+            consent_mod.record_reporting("enabled" if command == "reporting-enable" else "disabled")
+        except consent_mod.ConsentError as exc:
+            result = dict(result)
+            result["consent_error"] = dict(state=exc.state, error=str(exc))
     return result
 
 
