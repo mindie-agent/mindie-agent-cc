@@ -16,7 +16,10 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
+import inspect
+
 import setup
+from support import explicit_local_candidate_args
 
 CAPABILITY = "FTS5 contentless_delete=1 (SQLite >=3.43.0)"
 
@@ -131,7 +134,13 @@ class FtsProbeTests(unittest.TestCase):
             self.assertEqual(direct.stdout, "OK\n")
             with patch.object(setup, "PROBE_SCRIPT", fault):
                 with self.assertRaises(SystemExit) as caught:
-                    setup.probe_runtime(sys.executable)
+                    kwargs = {}
+                    declared = explicit_local_candidate_args()
+                    if declared and "local_candidates" in inspect.signature(setup.probe_runtime).parameters:
+                        kwargs["local_candidates"] = {
+                            "mindie-knowledge": declared[-1].split("=", 1)[1]
+                        }
+                    setup.probe_runtime(sys.executable, **kwargs)
                     continued.append("write")
         self.assertEqual(continued, [])
         self.assertIn("knowledge runtime probe failed", str(caught.exception.code))

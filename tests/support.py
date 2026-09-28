@@ -10,6 +10,32 @@ SCRIPTS = ROOT / "scripts"
 FIXTURES = ROOT / "tests" / "fixtures"
 
 
+def knowledge_install():
+    """(url, git commit or None) from the running interpreter. No writes."""
+    from importlib.metadata import distribution
+
+    raw = distribution("mindie-knowledge").read_text("direct_url.json") or ""
+    data = json.loads(raw) if raw else {}
+    vcs = data.get("vcs_info") or {}
+    commit = vcs.get("commit_id") if vcs.get("vcs") == "git" else None
+    return data.get("url") or "", commit
+
+
+def explicit_local_candidate_args():
+    """Declare the installed file-git commit so the identity gate can pass.
+
+    Empty when that install is already the official pin. A directory install
+    with no commit id gets nothing here; production rejection stays in force.
+    """
+    url, commit = knowledge_install()
+    if not (isinstance(commit, str) and len(commit) == 40 and str(url).startswith("file:")):
+        return []
+    official = "https://github.com/mindie-agent/knowledge"
+    if str(url).rstrip("/") in {official, official + ".git"}:
+        return []
+    return ["--allow-local-candidate", f"mindie-knowledge={commit}"]
+
+
 def env_for(config=None, extra=None):
     env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
     if config is not None:

@@ -46,15 +46,38 @@ class ConsentTests(unittest.TestCase):
         self.assertTrue(payload["repeat"])
 
     def test_legacy_marker_choice_migrates_once(self):
+        """Status does not migrate. Entry attach imports the marker once."""
         from paths import first_use_path
+        import consent
+        import entry
 
-        first_use_path().parent.mkdir(parents=True, exist_ok=True)
-        first_use_path().write_text(json.dumps({"choice": "read-only"}))
+        marker = first_use_path()
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(json.dumps({"choice": "read-only"}))
         payload = self._payload()
-        self.assertEqual(payload["first_use"], "read-only")
+        self.assertIsNone(payload.get("first_use"))
         self.assertEqual(payload["choices"], [])
-        first_use_path().unlink()
-        self.assertEqual(self._payload()["first_use"], "read-only")
+        self.assertFalse(consent.consent_path().exists())
+        project = self.tmp / "project"
+        project.mkdir()
+        event = dict(
+            hook_event_name="UserPromptExpansion",
+            expansion_type="slash_command",
+            command_name="mindie-agent",
+            command_source="plugin",
+            command_args="",
+            session_id="645fae2e-ef23-4e7d-9559-f4dd0cb9db6a",
+            prompt_id="143eccc4-86da-4095-bfa9-9b8f3416b31f",
+            cwd=str(project.resolve()),
+            transcript_path=str((project / "transcript.jsonl").resolve()),
+        )
+        entered = entry.dispatch_event(event)
+        self.assertEqual(consent.load().get("choice"), "read-only")
+        self.assertEqual(entered.get("choices"), [])
+        marker.unlink()
+        again = self._payload()
+        self.assertEqual(again.get("first_use"), "read-only")
+        self.assertEqual(again.get("choices"), [])
 
     def test_corrupt_marker_does_not_reonboard(self):
         from paths import first_use_path
@@ -85,14 +108,20 @@ class ConsentTests(unittest.TestCase):
         self.assertEqual(payload["sharing"]["state"], "corrupt")
 
     def test_kimi_choice_is_reused_in_this_profile(self):
-        kimi_scripts = ROOT.parent / "kimi" / "scripts"
+        raw = os.environ.get("MINDIE_TEST_KIMI_SCRIPTS")
+        self.assertTrue(
+            raw,
+            "set MINDIE_TEST_KIMI_SCRIPTS to the other adapter's scripts directory",
+        )
+        kimi_scripts = Path(raw)
+        self.assertTrue((kimi_scripts / "consent.py").is_file(), kimi_scripts)
         (self.tmp / "kimi.json").write_text(json.dumps({}))
         env = dict(os.environ)
         env.pop("MINDIE_CC_CONFIG", None)
         env["MINDIE_KIMI_CONFIG"] = str(self.tmp / "kimi.json")
         code = (
             "import sys;sys.path.insert(0,sys.argv[1]);"
-            "import entry_state;entry_state.set_first_use('later')"
+            "import consent;consent.record_choice('later')"
         )
         result = subprocess.run(
             [sys.executable, "-c", code, str(kimi_scripts)],

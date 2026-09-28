@@ -6,6 +6,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from support import explicit_local_candidate_args
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -27,6 +29,7 @@ class SetupTests(unittest.TestCase):
                     "--no-schedule",
                     "--no-native-install",
                     "--no-public-feed",
+                    *explicit_local_candidate_args(),
                 ],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
