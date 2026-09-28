@@ -65,9 +65,13 @@ def _store(path: Path, data: dict) -> None:
 
 
 def _read_json(path: Path):
-    """(state, data): ok / missing / unreadable / corrupt. Never raises."""
+    """(state, data): ok / missing / unreadable / corrupt. Never raises.
+
+    Reads go through the shared store's ``_read_bytes`` so authority reads
+    share the same delete-tolerant open as every other consumer (Windows
+    delete sharing; POSIX plain read)."""
     try:
-        raw = path.read_bytes()
+        raw = consent_store._read_bytes(path)
     except FileNotFoundError:
         return "missing", None
     except OSError:
@@ -382,7 +386,7 @@ def _migrate_community_in_context(ctx, canonical: Path, result: dict) -> dict:
             try:
                 canonical.parent.mkdir(parents=True, exist_ok=True)
                 tmp = canonical.with_suffix(canonical.suffix + ".tmp")
-                tmp.write_bytes(declared.read_bytes())
+                tmp.write_bytes(consent_store._read_bytes(declared))
                 os.replace(tmp, canonical)
                 try:
                     canonical.chmod(0o600)
@@ -399,7 +403,7 @@ def _migrate_community_in_context(ctx, canonical: Path, result: dict) -> dict:
             effective = canonical
             result["migrated"] = True
         elif declared_state == "ok" and canonical_exists:
-            if declared.read_bytes() == canonical.read_bytes():
+            if consent_store._read_bytes(declared) == consent_store._read_bytes(canonical):
                 effective = canonical
                 result["migrated"] = True
             else:
