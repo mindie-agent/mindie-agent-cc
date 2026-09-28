@@ -1,4 +1,4 @@
-"""MindIE-owned paths for the Claude Code adapter. Never writes ~/.claude."""
+"""MindIE-owned paths for the Kimi adapter. Never writes ~/.kimi-code."""
 
 from __future__ import annotations
 
@@ -7,56 +7,28 @@ import os
 from pathlib import Path
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
+IDENTITY = r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}\Z"
+NONCE = r"[A-Za-z0-9][A-Za-z0-9._-]{7,127}\Z"
 PLUGIN_ID = "mindie-agent"
-MARKETPLACE = "mindie-agent-cc"
-PLUGIN_QUALIFIED = f"{PLUGIN_ID}@{MARKETPLACE}"
-CONFIG_ENV = "MINDIE_CC_CONFIG"
+MCP_QUALIFIED_PREFIX = "mcp__plugin-mindie-agent_"
 
 
 def config_path() -> Path:
-    override = os.environ.get(CONFIG_ENV)
+    override = os.environ.get("MINDIE_KIMI_CONFIG")
     if override:
         return Path(override).expanduser().absolute()
-    return (
-        Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
-        / "mindie-agent"
-        / "cc.json"
-    ).absolute()
+    return (Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+            / "mindie-agent" / "kimi.json").absolute()
 
 
 def load_adapter_config() -> dict:
     path = config_path()
     if not path.is_file():
-        raise FileNotFoundError(
-            "MindIE Claude Code adapter configuration is missing. "
-            "Run: python3 scripts/setup.py --config PATH"
-        )
+        raise FileNotFoundError("MindIE Kimi adapter configuration is missing")
     data = json.loads(path.read_text())
     if not isinstance(data, dict):
         raise ValueError("adapter configuration must be one JSON object")
     return data
-
-
-def base_config_path() -> Path:
-    """The stable base adapter configuration.
-
-    Hook/MCP children of a real install run with ``MINDIE_CC_CONFIG`` pointing
-    at a generation copy under ``state/update/generations/<sha>/config/``; the
-    copy's ``base_config`` key names the stable profile file. Profile-shared
-    authorities (consent, community settings) anchor at the base config's
-    directory, never at a per-generation directory, so an upgrade generation
-    cannot strand them. Falls back to the effective config when no absolute
-    ``base_config`` is recorded (bootstrap or unconfigured layouts).
-    """
-    path = config_path()
-    try:
-        data = json.loads(path.read_text())
-    except (OSError, ValueError):
-        return path
-    base = data.get("base_config") if isinstance(data, dict) else None
-    if isinstance(base, str) and os.path.isabs(base):
-        return Path(base)
-    return path
 
 
 def engine_config_path(config=None) -> Path:
@@ -100,7 +72,7 @@ def default_state_dir() -> Path:
     return (
         Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
         / "mindie-agent"
-        / "state-cc"
+        / "state"
     )
 
 
@@ -113,15 +85,25 @@ def state_dir(config=None) -> Path:
     if isinstance(value, str) and os.path.isabs(value):
         return Path(value)
     engine = load_engine_config(config)
-    return Path(engine["root"]) / "cc-adapter"
+    return Path(engine["root"]) / "kimi-adapter"
 
 
 def first_use_path() -> Path:
-    return state_dir() / "cc.first-use.json"
+    """Stable first-use state. Lives under state_dir, NOT beside the
+    (possibly generation-specific) adapter config, so it survives
+    generation switches."""
+    return state_dir() / "kimi.first-use.json"
+
+
+def kimi_home_from_env() -> Path | None:
+    value = os.environ.get("KIMI_CODE_HOME")
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return Path(value).expanduser()
 
 
 def plugin_root_from_env() -> Path:
-    value = os.environ.get("CLAUDE_PLUGIN_ROOT")
+    value = os.environ.get("KIMI_PLUGIN_ROOT")
     if isinstance(value, str) and value.strip():
         return Path(value)
     return PLUGIN_ROOT
@@ -133,14 +115,3 @@ def configured_python(config=None) -> str:
     if not isinstance(python, str) or not python:
         raise ValueError("adapter configuration has no runtime interpreter")
     return python
-
-
-def claude_config_dir(config=None):
-    try:
-        config = config if config is not None else load_adapter_config()
-    except FileNotFoundError:
-        return None
-    value = config.get("claude_config_dir")
-    if isinstance(value, str) and os.path.isabs(value):
-        return value
-    return None

@@ -1,7 +1,27 @@
 {
-  "description": "MindIE Agent Claude Code hooks. Activation is UserPromptExpansion for /mindie-agent:init only. Stop never continues the model.",
+  "description": "MindIE Agent Claude Code hooks. Entry binding is UserPromptExpansion for the mindie-agent entry only. Stop never continues the model.",
   "hooks": {
     "UserPromptExpansion": [
+      {
+        "matcher": "mindie-agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/mindie_launch.py\" hook expansion",
+            "timeout": 2
+          }
+        ]
+      },
+      {
+        "matcher": "mindie-agent:mindie-agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/mindie_launch.py\" hook expansion",
+            "timeout": 2
+          }
+        ]
+      },
       {
         "matcher": "mindie-agent:init",
         "hooks": [

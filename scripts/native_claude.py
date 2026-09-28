@@ -15,19 +15,6 @@ from pathlib import Path
 from bounded import run
 from paths import CONFIG_ENV, MARKETPLACE, PLUGIN_ID, PLUGIN_QUALIFIED, claude_config_dir
 
-COMMANDS = (
-    "init",
-    "status",
-    "deactivate",
-    "sharing-enable",
-    "sharing-disable",
-    "recover",
-    "reporting-status",
-    "reporting-enable",
-    "reporting-disable",
-)
-
-
 def claude_bin():
     explicit = os.environ.get("MINDIE_CC_BIN")
     if explicit:
@@ -312,14 +299,19 @@ def mcp_args(python: str, launcher: str, surface: str, config_file: str) -> dict
 
 
 def render_hooks(python: str, launcher: str, config_file: str) -> dict:
+    from identity import COMMANDS as ACCEPTED
+
     expansion = hook_command(python, launcher, "expansion", config_file)
     pretool = hook_command(python, launcher, "pretool", config_file)
     stop = hook_command(python, launcher, "stop", config_file)
     expansion_hooks = []
-    for name in COMMANDS:
+    # The accepted command names are the single source (identity.COMMANDS);
+    # every form the hook parser accepts must have a matcher — bare and
+    # host-namespaced alike.
+    for name in sorted(ACCEPTED):
         expansion_hooks.append(
             {
-                "matcher": f"mindie-agent:{name}",
+                "matcher": name,
                 "hooks": [{"type": "command", "command": expansion, "timeout": 2}],
             }
         )

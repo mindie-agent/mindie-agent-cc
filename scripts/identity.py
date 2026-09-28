@@ -25,6 +25,10 @@ CALL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}\Z")
 MAX_HOOK_BYTES = 128 * 1024
 
 COMMANDS = {
+    # The single user entry is the mindie-agent skill itself; Claude Code may
+    # present a plugin skill bare or namespaced — both map to the entry op.
+    "mindie-agent": "init",
+    "mindie-agent:mindie-agent": "init",
     "mindie-agent:init": "init",
     "mindie-agent:status": "status",
     "mindie-agent:deactivate": "deactivate",

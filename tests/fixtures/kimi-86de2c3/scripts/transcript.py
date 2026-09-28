@@ -1,9 +1,10 @@
-"""Claude Code public-record parser (session JSONL). Adapter-owned.
+"""Kimi Code public-record parser (wire.jsonl). Adapter-owned.
 
-Public records are top-level type user/assistant with camel-case sessionId
-and ISO timestamps. Thinking, redacted_thinking, isMeta, sidechains,
-attachments, system, queue-operation, atis-latch and last-prompt are
-excluded. The caller names exactly one file supplied by a trusted hook.
+Native probe times (`time`, `metadata.created_at`, `state.createdAt`) are
+Unix milliseconds. Core capture boundaries are seconds. Convert before
+filtering. Fork exclusion uses the fork session's state.createdAt only;
+copied metadata.created_at is the source time and must not prove a boundary.
+User role material is origin.kind == 'user' only (injection/system excluded).
 """
 
 from __future__ import annotations
@@ -11,34 +12,28 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 
-MAX_WINDOW = 256 * 1024
 MAX_TEXT = 48 * 1024
 MAX_RECORDS = 200
 ANCHOR_BYTES = 512
 RECORD_LIMIT = 1024 * 1024
 MS_THRESHOLD = 1e12
-PUBLIC_TYPES = {"user", "assistant"}
-SKIP_TYPES = {
-    "attachment",
-    "system",
-    "queue-operation",
-    "atis-latch",
-    "last-prompt",
+KNOWN = {
+    "metadata",
+    "context.append_message",
+    "context.append_loop_event",
+    "context.undo",
+    "context.apply_compaction",
+    "context.clear",
+    "turn.prompt",
+    "turn.ended",
+    "turn.steer",
+    "turn.cancel",
 }
-SKIP_BLOCKS = {"thinking", "redacted_thinking"}
-COMMAND_BLOCK = re.compile(
-    r"<command-[a-zA-Z0-9_-]+>.*?</command-[a-zA-Z0-9_-]+>",
-    re.DOTALL,
-)
-SESSION_FILE = re.compile(
-    r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\.jsonl\Z"
-)
+USER_ORIGINS = {"user"}
 
 
 @dataclass(frozen=True)
@@ -112,23 +107,12 @@ def identify(path) -> FileIdentity | None:
 
 
 def to_seconds(raw):
-    if type(raw) in (int, float) and raw > 0:
-        value = float(raw)
-        if value >= MS_THRESHOLD:
-            value = value / 1000.0
-        return value
-    if not isinstance(raw, str) or not raw:
+    if type(raw) not in (int, float) or raw <= 0:
         return None
-    text = raw.strip()
-    if text.endswith("Z"):
-        text = text[:-1] + "+00:00"
-    try:
-        stamp = datetime.fromisoformat(text)
-    except ValueError:
-        return None
-    if stamp.tzinfo is None:
-        stamp = stamp.replace(tzinfo=timezone.utc)
-    return stamp.timestamp()
+    value = float(raw)
+    if value >= MS_THRESHOLD:
+        value = value / 1000.0
+    return value
 
 
 def _clip(text, limit):
@@ -143,94 +127,122 @@ def _clip(text, limit):
 
 
 def _session_in_path(path) -> str | None:
-    match = SESSION_FILE.search(Path(path).name)
-    return match.group(1) if match else None
-
-
-def _block_text(block):
-    if not isinstance(block, dict):
+    parts = Path(path).resolve().parts
+    if "sessions" not in parts:
         return None
-    btype = block.get("type")
-    if btype in SKIP_BLOCKS:
-        return None
-    if btype == "text" and isinstance(block.get("text"), str):
-        return ("text", block["text"])
-    if btype == "tool_use":
-        name = block.get("name") if isinstance(block.get("name"), str) else ""
-        ident = block.get("id") if isinstance(block.get("id"), str) else ""
-        args = block.get("input")
-        return (
-            "tool",
-            f"{_clip(name, 120)} call_id={_clip(ident, 256)} {_clip(args, 8192)}",
-        )
-    if btype == "tool_result":
-        ident = block.get("tool_use_id") if isinstance(block.get("tool_use_id"), str) else ""
-        content = block.get("content")
-        output = ""
-        if isinstance(content, str):
-            output = content
-        elif isinstance(content, list):
-            chunks = []
-            for item in content:
-                if isinstance(item, dict) and item.get("type") == "text":
-                    text = item.get("text")
-                    if isinstance(text, str):
-                        chunks.append(text)
-            output = "\n".join(chunks)
-        return ("output", f"call_id={_clip(ident, 256)} {_clip(output, 8192)}")
+    index = parts.index("sessions")
+    if index + 2 < len(parts):
+        return parts[index + 2]
     return None
 
 
-def _message_content(record):
-    message = record.get("message")
-    if isinstance(message, dict):
-        return message.get("content")
-    return record.get("content")
+def _timestamp(record):
+    return to_seconds(record.get("time")) or to_seconds(record.get("created_at"))
 
 
-def _is_command_only(text: str) -> bool:
-    leftover = COMMAND_BLOCK.sub("", text).strip()
-    return not leftover
+def _record_turn_id(record):
+    """This record's own native turnId (loop events carry it on the event).
+    Body-evidence label only; never carried across records, never guessed."""
+    ident = record.get("turnId")
+    if type(ident) is int and 0 <= ident < 10**15:
+        return ident
+    event = record.get("event")
+    if isinstance(event, dict):
+        ident = event.get("turnId")
+        if type(ident) is int and 0 <= ident < 10**15:
+            return ident
+    return None
+
+
+def _text_parts(content):
+    if not isinstance(content, list):
+        return ""
+    chunks = []
+    for item in content:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") == "text" and isinstance(item.get("text"), str):
+            chunks.append(item["text"])
+    return "\n".join(chunks)
+
+
+def _origin_kind(message):
+    origin = message.get("origin") if isinstance(message, dict) else None
+    if isinstance(origin, dict):
+        kind = origin.get("kind")
+        return kind if isinstance(kind, str) else None
+    return None
 
 
 def _extract(record):
     rtype = record.get("type")
-    if rtype not in PUBLIC_TYPES:
-        return None
-    if record.get("isSidechain") is True:
-        return None
-    if record.get("isMeta") is True:
-        return None
-    content = _message_content(record)
-    if isinstance(content, str):
-        text = content.strip()
-        if not text or _is_command_only(text):
+    if rtype == "metadata":
+        return ("meta", None)
+    if rtype == "context.append_message":
+        message = record.get("message")
+        if not isinstance(message, dict):
             return None
-        kind = "user" if rtype == "user" else "assistant"
-        return (kind, _clip(text, 12288))
-    if not isinstance(content, list):
+        role = message.get("role")
+        if role == "user":
+            if _origin_kind(message) not in USER_ORIGINS:
+                return None
+            text = _text_parts(message.get("content"))
+            return ("user", _clip(text, 12288)) if text.strip() else None
+        if role == "assistant":
+            text = _text_parts(message.get("content"))
+            return ("assistant", _clip(text, 12288)) if text.strip() else None
         return None
-    chunks = []
-    kind = "user" if rtype == "user" else "assistant"
-    for block in content:
-        extracted = _block_text(block)
-        if extracted is None:
-            continue
-        bkind, text = extracted
-        if not isinstance(text, str) or not text.strip():
-            continue
-        if bkind == "tool":
-            chunks.append(("tool", text))
-        elif bkind == "output":
-            chunks.append(("output", text))
-        else:
-            chunks.append((kind, text))
-    if not chunks:
+    if rtype == "context.append_loop_event":
+        event = record.get("event")
+        if not isinstance(event, dict):
+            return None
+        etype = event.get("type")
+        if etype == "content.part":
+            part = event.get("part")
+            if not isinstance(part, dict):
+                return None
+            if part.get("type") == "think":
+                return None
+            if part.get("type") == "text" and isinstance(part.get("text"), str):
+                text = part["text"].strip()
+                return ("assistant", _clip(text, 12288)) if text else None
+            return None
+        if etype == "tool.call":
+            name = event.get("name")
+            if not isinstance(name, str) or not name.strip():
+                return None
+            call = _clip(event.get("toolCallId") or event.get("tool_call_id") or "", 256)
+            args = event.get("args")
+            return ("tool", f"{_clip(name, 120)} call_id={call} {_clip(args, 8192)}")
+        if etype == "tool.result":
+            call = _clip(event.get("toolCallId") or event.get("tool_call_id") or "", 256)
+            result = event.get("result")
+            output = ""
+            if isinstance(result, dict):
+                output = result.get("output")
+            elif isinstance(result, str):
+                output = result
+            return ("output", f"call_id={call} {_clip(output, 8192)}")
         return None
-    if len(chunks) == 1:
-        return chunks[0]
-    joined = "\n".join(item[1] for item in chunks)
-    return (chunks[0][0], _clip(joined, 12288))
+    return None
+
+
+def _fork_boundary(path) -> float | None:
+    """Inherited material ends at the fork session's createdAt (seconds)."""
+    try:
+        state_path = Path(path).resolve().parents[2] / "state.json"
+        data = json.loads(state_path.read_text())
+    except (OSError, ValueError, IndexError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    parent = data.get("forkedFrom") or data.get("forked_from")
+    if not parent:
+        return None
+    created = to_seconds(data.get("createdAt") or data.get("created_at"))
+    if created is None:
+        raise ValueError("forked session lacks state.createdAt; inherited material not read")
+    return created
 
 
 def read_material(
@@ -277,6 +289,11 @@ def read_material(
     included = []
     text_size = 0
     begun = time.monotonic()
+    try:
+        fork_time = _fork_boundary(path)
+    except ValueError as exc:
+        result.update(status="unknown-format", coverage_note=str(exc), text="")
+        return result
     try:
         with open(path, "rb") as stream:
             stat = os.fstat(stream.fileno())
@@ -363,15 +380,12 @@ def read_material(
                 extracted = None
                 stamp = None
                 if isinstance(record, dict):
-                    rtype = record.get("type")
-                    if rtype in PUBLIC_TYPES or rtype in SKIP_TYPES:
+                    if record.get("type") in KNOWN:
                         recognized += 1
-                    stamp = to_seconds(record.get("timestamp"))
-                    rec_session = record.get("sessionId") or record.get("session_id")
-                    if session_id and rec_session and rec_session != session_id:
+                    stamp = _timestamp(record)
+                    extracted = _extract(record)
+                    if fork_time is not None and (stamp is None or stamp < fork_time):
                         extracted = None
-                    else:
-                        extracted = _extract(record)
                 if extracted and extracted[1]:
                     if boundary is not None and (stamp is None or stamp < boundary):
                         if stamp is None:
@@ -379,8 +393,10 @@ def read_material(
                         extracted = None
                     else:
                         kind, text = extracted
+                        turn_id = _record_turn_id(record)
                         label = (
                             f"[{kind} timestamp={stamp if stamp is not None else 'unknown'} "
+                            f"turn={turn_id if turn_id is not None else 'unknown'} "
                             f"bytes={offset}:{stream.tell()}]"
                         )
                         rendered = label + "\n" + text
@@ -410,15 +426,25 @@ def read_material(
         text="\n\n".join(included),
         records=len(included),
     )
-    established = expected is not None or result.get("session_match") is True
     if result["end"] == start:
-        result["status"] = "unchanged"
-    elif not recognized and not (
-        established and result["more"] and result["end"] > result["start"]
-    ):
+        # A trailing half-written record is pending material, not proof of
+        # no-new-material: report partial/more and leave the cursor unmoved
+        # for a finite deferred read. Only a truly empty page is unchanged.
+        if not result["partial"]:
+            result["status"] = "unchanged"
+    elif not recognized and start == 0 and not result["more"]:
+        # Whole-file unknown-format only with whole-file evidence: a first
+        # page scanned to EOF without one recognized record. A positive
+        # offset is not proof of recognition either, so continuation pages
+        # never judge; the cumulative verdict belongs to the core cursor.
         result.update(
             status="unknown-format",
             text="",
-            coverage_note="no recognized native Claude transcript signature",
+            coverage_note="no recognized native Kimi wire signature",
+        )
+    elif not recognized:
+        result["coverage_note"] = (
+            "page held no recognized records while bytes remain; "
+            "format verdict deferred to the owning cursor"
         )
     return result

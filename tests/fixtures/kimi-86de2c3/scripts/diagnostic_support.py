@@ -10,8 +10,8 @@ import stat
 import sys
 from pathlib import Path
 
-COMPONENT = "mindie-agent-cc"
-HOST = "claude-code"
+COMPONENT = "mindie-agent-kimi"
+HOST = "kimi"
 REPOSITORY = "mindie-agent/mindie-agent"
 _STORAGE = "MindIE diagnostic storage unavailable; original outcome unchanged."
 _warned = False
@@ -24,62 +24,130 @@ def _hex(value, length):
     return None
 
 
-def _read_small(path):
-    """Read bounded regular metadata without following a final symlink."""
+_VERSION_RE = re.compile(r"[0-9A-Za-z][0-9A-Za-z.+-]{0,79}")
+
+
+def _read_small(path, limit=2048):
+    """Bounded regular-file read; rejects symlinks where O_NOFOLLOW is available.
+
+    FileNotFoundError if the path is absent. None if present but unusable
+    (non-regular, oversize, unreadable, or a symlink on those platforms). No writes.
+    """
     fd = None
     try:
-        if Path(path).is_symlink():
-            return None
         flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
         fd = os.open(path, flags)
         info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode) or info.st_size > 2048:
+        if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
             return None
-        raw = os.read(fd, 2049)
-        if len(raw) > 2048:
+        raw = os.read(fd, limit + 1)
+        if len(raw) > limit:
             return None
-        return raw.decode()
-    except Exception:
+        return raw
+    except FileNotFoundError:
+        raise
+    except OSError:
         return None
     finally:
         if fd is not None:
             try:
                 os.close(fd)
-            except Exception:
+            except OSError:
                 pass
 
 
-def build_metadata():
-    """Use package metadata, or the same generation's older install records."""
-    here = Path(__file__).resolve().parent
+def _own_generation():
+    """Generation that owns this module, or None.
+
+    scripts/diagnostic_support.py -> parent of scripts.
+    update/launch/<id>/diagnostic_support.py -> update/generations/<same id>.
+    """
+    directory = os.path.dirname(os.path.abspath(__file__))
+    parent = os.path.dirname(directory)
+    if os.path.basename(directory) == "scripts":
+        return parent
+    if os.path.basename(parent) != "launch":
+        return None
+    update = os.path.dirname(parent)
+    if os.path.basename(update) != "update":
+        return None
+    return os.path.join(update, "generations", os.path.basename(directory))
+
+
+def _version_of(raw):
     try:
-        raw = _read_small(here / "diagnostic-build.json")
-        if raw is not None:
-            data = json.loads(raw)
-        else:
-            # Old updaters do not emit diagnostic-build.json. Their completed
-            # Git generation and stamped host manifest are existing facts.
-            generation = here.parent
-            if here.name != "scripts" or generation.parent.name != "generations":
-                return {}
-            revision = _hex(generation.name, 40)
-            marker = _read_small(generation / ".mindie-generation-complete")
-            if not revision or marker is None or marker.strip() != revision:
-                return {}
-            manifest = json.loads(_read_small(generation / "host-package" / ".claude-plugin" / "plugin.json") or "null")
-            data = {"revision": revision}
-            if isinstance(manifest, dict) and manifest.get("name") == "mindie-agent":
-                data["version"] = manifest.get("version")
-        if not isinstance(data, dict):
-            return {}
-        revision = _hex(data.get("revision"), 40)
-        version = data.get("version")
-        result = {"revision": revision} if revision else {}
-        if isinstance(version, str) and re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z.+-]{0,79}", version):
-            result["version"] = version
-        return result
-    except Exception:
+        data = json.loads(raw.decode())
+    except (UnicodeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    version = data.get("version")
+    if isinstance(version, str) and _VERSION_RE.fullmatch(version):
+        return version
+    return None
+
+
+def _generation_metadata():
+    """Installed host-package version and completed-generation revision.
+
+    Used only when diagnostic-build.json is absent. No current.json, git, or writes.
+    """
+    generation = _own_generation()
+    if not generation:
         return {}
+    result = {}
+    plugin = os.path.join(generation, "host-package", "kimi.plugin.json")
+    try:
+        raw = _read_small(plugin, 16384)
+    except FileNotFoundError:
+        raw = None
+    if raw:
+        version = _version_of(raw)
+        if version:
+            result["version"] = version
+    base = os.path.basename(generation)
+    if _hex(base, 40):
+        marker = os.path.join(generation, ".mindie-generation-complete")
+        try:
+            raw = _read_small(marker)
+        except FileNotFoundError:
+            raw = None
+        if raw is not None:
+            try:
+                text = raw.decode()
+            except UnicodeError:
+                text = None
+            # Updater writes the sha plus a single trailing newline.
+            if text in (base, base + "\n"):
+                result["revision"] = base
+    return result
+
+
+def build_metadata():
+    """Read this package's diagnostic-build.json. No subprocess or network.
+
+    An explicit adjacent file stays authoritative. Only a genuinely missing
+    file falls back to this generation's host package and completion marker.
+    """
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "diagnostic-build.json")
+    try:
+        raw = _read_small(path)
+    except FileNotFoundError:
+        return _generation_metadata()
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw.decode())
+    except (UnicodeError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    revision = _hex(data.get("revision"), 40)
+    version = data.get("version")
+    result = {"revision": revision} if revision else {}
+    if isinstance(version, str) and _VERSION_RE.fullmatch(version):
+        result["version"] = version
+    return result
 
 
 def _warn():
@@ -244,14 +312,10 @@ def reporting_hint():
         "optional": True, "recommended": True,
         "independent_of_knowledge_contribution": True,
         "enable": "/mindie-agent:reporting-enable",
-        "disable": "/mindie-agent:reporting-disable",
-        "later": "/mindie-agent reporting-later",
         "status": "/mindie-agent:reporting-status",
+        "disable": "/mindie-agent:reporting-disable",
         "repository": REPOSITORY,
         "note": ("Optionally report sanitized product fault code metadata to the public "
                  "repository. Prompts, transcripts, commands, environment and credentials "
-                 "are excluded. This is a separate shared user choice decided once; the "
-                 "entry also accepts reporting-enable/reporting-disable/reporting-later. "
-                 "Enabled, disabled and later all persist and are never re-asked. "
-                 "Consult its status anytime."),
+                 "are excluded. This is a separate shared user choice; consult its status."),
     }

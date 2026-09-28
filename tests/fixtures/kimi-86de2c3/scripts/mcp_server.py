@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Adapter-owned MCP: knowledge tools and general remote-dev.
 
-Identity is never taken from tool arguments. Native PreToolUse binds
-claudecode/toolUseId; this process consumes it once. Knowledge calls
-require a shared active lease. Remote-dev requires the bind only.
+Identity is never taken from tool arguments. A fresh request_nonce is bound
+by native PreToolUse to the hook session_id, then consumed here. Attempts
+are persisted before dispatch. Missing, ambiguous, or replayed nonces fail
+closed. Remote-dev does not require knowledge activation.
 """
 
 from __future__ import annotations
@@ -18,15 +19,8 @@ HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
-from identity import (
-    KNOWLEDGE_TOOLS,
-    canonical_native_name,
-    claim_bind,
-    finish_bind,
-    is_knowledge_tool,
-    meta_tool_use_id,
-)
-from paths import load_engine_config, state_dir
+from identity import claim_nonce, finish_nonce, require_nonce
+from paths import load_adapter_config, load_engine_config, state_dir
 
 MAX_LINE = 128 * 1024
 MAX_YIELD_TIME_MS = 30000
@@ -38,16 +32,66 @@ REMOTE_ERROR_CATEGORIES = frozenset({
     "worker_capacity",
 })
 JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{2,95}$")
+NONCE_PROP = {
+    "type": "string",
+    "minLength": 8,
+    "maxLength": 128,
+    "description": "Fresh per-call nonce. Native PreToolUse binds it; do not pass a session id.",
+}
 
-KNOWLEDGE_TOOL_DEFS = [
+KNOWLEDGE_TOOLS = [
     dict(
-        name="mindie_status",
+        name="mindie_entry",
         description=(
-            "Read MindIE status and first-use choices for the current bound task. "
-            "Includes safe failure categories and this task's contribution batch IDs "
-            "for recovery inspection. Does not activate, enable sharing or retry work."
+            "Native MindIE entry. Mutations require the current /mindie-agent "
+            "invocation; op=status can diagnose an already bound task. "
+            "Requires a fresh request_nonce. Never pass a session id. "
+            "op=init binds this task internally and returns first-use choices "
+            "once or status; op=choose stores the one-time knowledge choice "
+            "(contribute/read-only/later/disabled) and optionally the "
+            "independent reporting choice. A conversational contribution "
+            "naming the public repository and account enables sharing for the "
+            "current project; via the entry itself the destination comes from "
+            "the native arguments (/mindie-agent contribute owner/repo "
+            "account). A saved choice persists across sessions, "
+            "restarts, upgrades and failures and is never re-asked. "
+            "Status includes safe task failure categories and contribution batch IDs for recover inspection; it never retries work."
         ),
-        inputSchema=dict(type="object", properties={}, additionalProperties=False),
+        inputSchema=dict(
+            type="object",
+            properties=dict(
+                op={
+                    "type": "string",
+                    "enum": [
+                        "init",
+                        "choose",
+                        "status",
+                        "deactivate",
+                        "sharing-enable",
+                        "sharing-disable",
+                        "sharing-status",
+                        "recover",
+                        "reporting-status",
+                        "reporting-enable",
+                        "reporting-disable",
+                    ],
+                },
+                request_nonce=NONCE_PROP,
+                choice={"type": "string", "enum": ["contribute", "read-only", "later", "disabled"]},
+                repository={
+                    "type": "string",
+                    "description": "Public owner/repo the user stated for contribution.",
+                },
+                account={
+                    "type": "string",
+                    "description": "Public account name the user stated for contribution.",
+                },
+                reporting={"type": "string", "enum": ["enabled", "disabled", "later"]},
+                arguments={"type": "string"},
+            ),
+            required=["op", "request_nonce"],
+            additionalProperties=False,
+        ),
     ),
     dict(
         name="knowledge_query",
@@ -58,8 +102,9 @@ KNOWLEDGE_TOOL_DEFS = [
                 query={"type": "string"},
                 limit={"type": "integer", "minimum": 1, "maximum": 20},
                 conditions={"type": "object"},
+                request_nonce=NONCE_PROP,
             ),
-            required=["query"],
+            required=["query", "request_nonce"],
             additionalProperties=False,
         ),
     ),
@@ -86,8 +131,9 @@ KNOWLEDGE_TOOL_DEFS = [
                     "maximum": 32768,
                     "description": "Maximum Unicode characters in this page.",
                 },
+                request_nonce=NONCE_PROP,
             ),
-            required=["ref"],
+            required=["ref", "request_nonce"],
             additionalProperties=False,
         ),
     ),
@@ -100,8 +146,9 @@ KNOWLEDGE_TOOL_DEFS = [
                 ref={"type": "string"},
                 rating={"type": "string", "enum": ["up", "down"]},
                 reason={"type": "string"},
+                request_nonce=NONCE_PROP,
             ),
-            required=["ref", "rating"],
+            required=["ref", "rating", "request_nonce"],
             additionalProperties=False,
         ),
     ),
@@ -192,19 +239,40 @@ def clamp_remote_args(args):
     return body
 
 
+def reject_native_identity_args(args, surface):
+    """Native task ownership is never taken from tool arguments.
+
+    Knowledge rejects session_id/sessionId/thread_id. Remote-dev keeps
+    session_id as a job_id alias for status/stop/write_stdin; sessionId
+    and thread_id stay disallowed on every surface.
+    """
+    if "sessionId" in args or "thread_id" in args:
+        raise ValueError("tool arguments must not include native session identity")
+    if "session_id" in args and surface != "remote":
+        raise ValueError("tool arguments must not include native session identity")
+
+
+def strip_nonce(args, surface=None):
+    args = dict(args)
+    nonce = require_nonce(args.pop("request_nonce", None))
+    reject_native_identity_args(args, surface)
+    return nonce, args
+
+
 def knowledge_call(name, args, session):
-    from knowledge_service import ensure_service, existing_service
-    from mindie_knowledge.loop.activation import Admission
+    from knowledge_service import existing_service, ensure_service
     from mindie_knowledge.loop.cli import rpc
+    from mindie_knowledge.loop.activation import Admission
     from paths import admission_path, engine_config_path
 
     engine = load_engine_config()
     if Admission(admission_path(engine)).active_lease(session) is None:
         raise ValueError(
-            "this task is not bound yet; invoke the mindie-agent entry once in "
-            "this task — the saved install-level choice is reused, nothing is re-asked"
+            "this task is not bound yet; invoke /mindie-agent once in this "
+            "task — the saved install-level choice is reused, nothing is re-asked"
         )
     method = name.removeprefix("knowledge_")
+
     try:
         connection = existing_service(engine_config_path())
     except (OSError, ValueError, RuntimeError):
@@ -223,11 +291,16 @@ def remote_tools():
     tools = []
     for item in list_tools():
         schema = dict(item.get("inputSchema") or {"type": "object", "properties": {}})
+        properties = dict(schema.get("properties") or {})
+        properties["request_nonce"] = NONCE_PROP
+        required = list(schema.get("required") or [])
+        if "request_nonce" not in required:
+            required.append("request_nonce")
         tools.append(
             dict(
                 name=item["name"],
                 description=item.get("description", item["name"]),
-                inputSchema=schema,
+                inputSchema=dict(schema, properties=properties, required=required),
             )
         )
     return tools
@@ -239,13 +312,6 @@ def remote_call(name, args, session):
 
     root = state_dir() / "remote" / session
     root.mkdir(parents=True, exist_ok=True)
-    for inherited in (
-        "CLAUDE_SESSION_ID",
-        "CLAUDE_CODE_SESSION_ID",
-        "CODEX_SESSION_ID",
-        "CODEX_RUN_ID",
-    ):
-        os.environ.pop(inherited, None)
     os.environ["REMOTE_DEV_SESSION_ID"] = session
     os.environ["REMOTE_DEV_STATE_DIR"] = str(root)
     canonical_name = ALIASES.get(name, name)
@@ -264,7 +330,7 @@ def handle(surface, message):
             result=dict(
                 protocolVersion="2025-11-25",
                 capabilities={"tools": {}},
-                serverInfo={"name": f"mindie-cc-{surface}", "version": "0.1.0"},
+                serverInfo={"name": f"mindie-kimi-{surface}", "version": "0.1.0"},
             ),
         )
     if method == "ping":
@@ -272,7 +338,7 @@ def handle(surface, message):
     if method == "notifications/initialized":
         return None
     if method == "tools/list":
-        tools = KNOWLEDGE_TOOL_DEFS if surface == "knowledge" else remote_tools()
+        tools = KNOWLEDGE_TOOLS if surface == "knowledge" else remote_tools()
         return dict(jsonrpc="2.0", id=ident, result=dict(tools=tools))
     if method != "tools/call":
         return dict(
@@ -283,33 +349,41 @@ def handle(surface, message):
     params = message.get("params") or {}
     name = params.get("name")
     args = params.get("arguments") or {}
-    call_id = None
+    nonce = None
     succeeded = False
     try:
         if not isinstance(args, dict):
             raise ValueError("invalid tool arguments")
-        if surface == "knowledge" and (
-            "session_id" in args or "sessionId" in args or "thread_id" in args
-        ):
-            raise ValueError("knowledge tool arguments must not include native session identity")
-        call_id = meta_tool_use_id(params)
-        native_name = canonical_native_name(surface, name)
-        bound = claim_bind(call_id, native_name, args)
-        session = bound["session"]
-        local = name.rsplit("__", 1)[-1] if isinstance(name, str) else name
-        if surface == "knowledge" and local == "mindie_status":
-            from entry import status_payload
+        reject_native_identity_args(args, surface)
+        nonce = require_nonce(args.get("request_nonce"))
+        session = claim_nonce(nonce, name, args)
+        _, body = strip_nonce(args, surface)
+        if surface == "knowledge" and name == "mindie_entry":
+            from entry import dispatch
+            from identity import session_cwd
 
-            payload = status_payload(session)
+            cwd = None
+            try:
+                cwd = session_cwd(session)
+            except Exception:
+                cwd = None
+            payload = dispatch(
+                session,
+                cwd,
+                body.get("op"),
+                body.get("arguments") or "",
+                body.get("choice"),
+                repository=body.get("repository"),
+                account=body.get("account"),
+                reporting=body.get("reporting"),
+            )
             result = dict(
                 content=[dict(type="text", text=canonical(payload))],
                 structuredContent=payload,
                 isError=False,
             )
         elif surface == "knowledge":
-            if local not in KNOWLEDGE_TOOLS and not is_knowledge_tool(native_name, surface):
-                raise ValueError("unknown knowledge tool")
-            payload = knowledge_call(local, args, session)
+            payload = knowledge_call(name, body, session)
             result = dict(
                 content=[dict(type="text", text=canonical(payload))],
                 structuredContent=payload,
@@ -317,41 +391,34 @@ def handle(surface, message):
             )
         else:
             try:
-                payload = remote_call(local, args, session)
+                payload = remote_call(name, body, session)
             except (ValueError, OSError, RuntimeError, KeyError, TypeError) as exc:
                 return dict(
                     jsonrpc="2.0",
                     id=ident,
-                    result=remote_stage_failure(args, local, "helper_failed", exc),
+                    result=remote_stage_failure(body, name, "helper_failed", exc),
                 )
             text = payload.get("text") if isinstance(payload, dict) else canonical(payload)
             result = dict(
-                content=[
-                    dict(
-                        type="text",
-                        text=text if isinstance(text, str) else canonical(payload),
-                    )
-                ],
-                structuredContent=(
-                    payload.get("result", payload) if isinstance(payload, dict) else payload
-                ),
+                content=[dict(type="text", text=text if isinstance(text, str) else canonical(payload))],
+                structuredContent=payload.get("result", payload) if isinstance(payload, dict) else payload,
                 isError=isinstance(payload, dict)
-                and payload.get("result", {}).get("outcome")
-                not in {None, "success", "cancelled"},
+                and payload.get("result", {}).get("outcome") not in {None, "success", "cancelled"},
             )
         succeeded = result.get("isError") is not True
         return dict(jsonrpc="2.0", id=ident, result=result)
     except (ValueError, OSError, RuntimeError, KeyError, TypeError) as exc:
         return dict(jsonrpc="2.0", id=ident, result=failure(exc))
     finally:
-        if call_id is not None:
+        if nonce is not None:
             try:
-                finish_bind(call_id, succeeded)
+                finish_nonce(nonce, succeeded)
             except Exception:
                 pass
 
 
 def _read_line(stdin, limit: int):
+    """Return bytes, None to skip an oversize line, or False on EOF."""
     line = stdin.readline(limit + 1)
     if line == b"":
         return False
@@ -388,6 +455,7 @@ def serve(surface):
 
 
 def serve_once(surface):
+    """One request, no initialize requirement, no extra stdout."""
     raw = sys.stdin.buffer.read(MAX_LINE + 1)
     if not raw or len(raw) > MAX_LINE:
         return

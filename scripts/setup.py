@@ -103,6 +103,35 @@ OFFICIAL_REPOSITORIES = {
     "remote-dev": "https://github.com/mindie-agent/remote-dev",
 }
 
+_COMMIT_RE = re.compile(r"[0-9a-f]{40}")
+
+
+def parse_local_candidates(values):
+    """Explicit development/test declarations: ``NAME=COMMIT`` (full SHA).
+
+    A declared dependency may verify against a local git source carrying
+    that exact commit instead of the official repository. This never widens
+    the production contract: the default install path does not accept it, an
+    undeclared dependency still requires the official identity, and a local
+    install without git VCS metadata (a plain directory install records only
+    ``dir_info``) has no commit source and is always rejected.
+    """
+    candidates = {}
+    for value in values or ():
+        name, sep, commit = str(value).partition("=")
+        if not sep or name not in OFFICIAL_REPOSITORIES:
+            raise ValueError(
+                "--allow-local-candidate requires NAME=COMMIT with NAME one of "
+                + ", ".join(sorted(OFFICIAL_REPOSITORIES))
+            )
+        commit = commit.strip().lower()
+        if not _COMMIT_RE.fullmatch(commit):
+            raise ValueError("--allow-local-candidate requires a full 40-hex commit")
+        if name in candidates:
+            raise ValueError("duplicate --allow-local-candidate for " + name)
+        candidates[name] = commit
+    return candidates
+
 
 def runtime_pins(requirements=None):
     """One version source, restricted to the two reviewed official Git repos."""
@@ -129,24 +158,36 @@ _PIN_TEMPLATE = """
 import json
 from importlib.metadata import distribution
 want = {pins!r}
+local = {local!r}
 missing = []
 for name, pin in want.items():
     try:
         dist = distribution(name)
         direct = json.loads(dist.read_text("direct_url.json") or "{{}}")
         vcs = direct.get("vcs_info") or {{}}
-        if (direct.get("url") not in (pin["url"], pin["url"] + ".git")
-                or vcs.get("vcs") != "git" or vcs.get("commit_id") != pin["commit"]):
-            missing.append(f"{{name}} does not match the required official Git commit")
+        url = direct.get("url") or ""
+        official = (url in (pin["url"], pin["url"] + ".git")
+                    and vcs.get("vcs") == "git" and vcs.get("commit_id") == pin["commit"])
+        declared = local.get(name)
+        candidate = (declared is not None and url.startswith("file://")
+                     and vcs.get("vcs") == "git" and vcs.get("commit_id") == declared)
+        if not (official or candidate):
+            if declared is not None:
+                missing.append(
+                    f"{{name}} matches neither the official Git commit nor the "
+                    "declared local candidate commit"
+                )
+            else:
+                missing.append(f"{{name}} does not match the required official Git commit")
     except Exception as exc:
         missing.append(f"{{name}} ({{type(exc).__name__}})")
 print("MISSING: " + "; ".join(missing) if missing else "OK")
 """
 
 
-def probe_runtime(python, pins=None):
+def probe_runtime(python, pins=None, local_candidates=None):
     pins = runtime_pins() if pins is None else pins
-    pin_script = _PIN_TEMPLATE.format(pins=pins)
+    pin_script = _PIN_TEMPLATE.format(pins=pins, local=local_candidates or {})
     try:
         pin_result = run([python, "-c", pin_script], "", timeout=15)
     except Exception as exc:
@@ -226,10 +267,30 @@ def community_settings(args, parser):
 
 
 def write_community(path, community):
-    if community is None:
-        write_private(
-            path,
-            dict(
+    """Bootstrap writer for the community settings file.
+
+    Runs before the selected runtime can be imported, so it uses the
+    byte-identical consent-store lock protocol directly: same canonical
+    ``<file>.lock`` key and the same read-merge-replace transaction inside
+    one acquisition as the core write boundary (a concurrent stamped or
+    managed update is not lost); the managed publication itself goes
+    through the shared store's atomic ``_write_document`` (unique temp,
+    fsync, platform atomic rename — never O_TRUNC on the live authority). The
+    installer default-off file is never a saved user choice and keeps its
+    own O_EXCL no-overwrite semantics. An existing file that is
+    unreadable, unparseable, not one JSON object, or not the
+    ``mindie-community-config/1`` schema is a damaged authority: an
+    explicit failure with the original bytes preserved, never an implicit
+    repair. A parseable current-schema document — even with malformed
+    managed values — may be deliberately rewritten by this managed
+    mutation; a missing file is a valid first setup.
+    """
+    import consent as consent_mod
+
+    authority = str(Path(path).with_name("mindie-consent.json").resolve())
+    with consent_mod.community_write_lock(path):
+        if community is None:
+            data = dict(
                 schema="mindie-community-config/1",
                 enabled=False,
                 generation=secrets.token_hex(16),
@@ -238,11 +299,33 @@ def write_community(path, community):
                 branch="main",
                 project_roots=[],
                 idle_seconds=300,
-            ),
-        )
-        return "off"
-    write_private(path, community, replace=path.exists())
-    return "enabled"
+                consent_config=authority,
+            )
+            write_private(path, data)
+            return "off"
+        try:
+            on_disk = json.loads(Path(path).read_text())
+            if not isinstance(on_disk, dict):
+                raise ValueError("community settings must be one JSON object")
+            if on_disk.get("schema") != "mindie-community-config/1":
+                raise ValueError("community settings schema is not mindie-community-config/1")
+            base = on_disk
+        except FileNotFoundError:
+            base = {}
+        except (OSError, ValueError) as exc:
+            raise SystemExit(
+                f"existing community settings are unreadable or damaged: {path}; "
+                f"nothing was written ({exc})"
+            )
+        data = dict(base)
+        data.update(community)
+        data["consent_config"] = authority
+        # Managed publication goes through the shared store's atomic writer
+        # (unique temp, fsync, platform atomic rename) — never O_TRUNC on the live
+        # authority. Validation above ran BEFORE the write; the default-off
+        # branch keeps its own O_EXCL no-overwrite semantics.
+        consent_mod.consent_store._write_document(path, data)
+        return "enabled"
 
 
 def build_bootstrap_runtime(domain_root: Path) -> str:
@@ -299,11 +382,22 @@ def main():
                         help="do not register the automatic update check")
     parser.add_argument("--no-native-install", action="store_true",
                         help="configure MindIE files only; skip claude plugin install")
+    parser.add_argument(
+        "--allow-local-candidate",
+        action="append",
+        metavar="NAME=COMMIT",
+        help=(
+            "development/test only: accept a local git install of NAME at "
+            "exactly COMMIT (full SHA, git VCS metadata required) instead of "
+            "the official repository commit; production installs do not use this"
+        ),
+    )
     args = parser.parse_args()
     if sys.version_info < (3, 11):
         parser.error("Python 3.11+ is required")
     try:
         pins = runtime_pins()
+        local_candidates = parse_local_candidates(args.allow_local_candidate)
     except (OSError, ValueError) as exc:
         parser.error(str(exc))
     community = community_settings(args, parser)
@@ -313,21 +407,49 @@ def main():
         python = str(Path(args.knowledge_python).expanduser())
         if not os.path.isabs(python):
             python = str(Path(python).absolute())
-        probe_runtime(python, pins)
+        probe_runtime(python, pins, local_candidates)
     else:
+        if local_candidates:
+            parser.error(
+                "--allow-local-candidate requires --knowledge-python; the "
+                "bootstrap venv always installs the official requirements"
+            )
         python = build_bootstrap_runtime(domain_root)
-        probe_runtime(python, pins)
+        probe_runtime(python, pins, local_candidates)
     if not re.fullmatch(r"[a-z][a-z0-9-]{0,63}", args.domain):
         parser.error("invalid domain name")
     engine_config = config.with_name(config.stem + ".engine.json")
-    community_config = config.with_name(config.stem + ".community.json")
+    community_config = config.with_name("mindie-community.json")
     if config.exists() or engine_config.exists():
         if community is None:
             parser.error(
                 "configuration already exists; pass --community-* to configure sharing"
             )
+        # Install boundary: converge the community authority before applying
+        # the explicit new settings. A scope conflict is reported, never
+        # merged or resolved by overwrite order.
+        os.environ["MINDIE_CC_CONFIG"] = str(config)
+        import consent as consent_mod
+
+        migration = consent_mod.migrate_community()
+        if migration.get("conflict"):
+            print(json.dumps(dict(
+                config=str(config), updated=None,
+                community_migration=migration,
+                error="community settings conflict; align or remove one file explicitly",
+            ), indent=2))
+            raise SystemExit(1)
+        legacy = consent_mod.migrate_consent()
         sharing = write_community(community_config, community)
-        print(json.dumps(dict(config=str(config), sharing=sharing, updated="community"), indent=2))
+        report = dict(config=str(config), sharing=sharing, updated="community")
+        if migration.get("migrated") or migration.get("errors"):
+            report["community_migration"] = migration
+        if legacy.get("status") not in {"kept", "absent"}:
+            report["consent_migration"] = {
+                key: legacy[key] for key in ("status", "detail", "error", "sources")
+                if legacy.get(key)
+            }
+        print(json.dumps(report, indent=2))
         return
     admission = domain_root / "admission.sqlite3"
     transcript = (PLUGIN_ROOT / "scripts" / "transcript.py").resolve()
@@ -391,6 +513,12 @@ def main():
         },
         adapter_value,
     )
+    # Install boundary: import any legacy saved choice exactly once through
+    # the shared store (a valid existing authority is kept; conflicts and
+    # damaged state are reported, never guessed).
+    import consent as consent_mod
+
+    legacy = consent_mod.migrate_consent()
     native = "skipped"
     native_error = None
     if not args.no_native_install:
@@ -450,6 +578,15 @@ def main():
             "claude plugin install/update mindie-agent@mindie-agent-cc --json -y."
         ),
     )
+    if local_candidates:
+        # Development/test provenance: this install verified a declared local
+        # candidate commit, not the official repository identity.
+        report["local_candidates"] = dict(local_candidates)
+    if legacy.get("status") not in {"kept", "absent"}:
+        report["consent_migration"] = {
+            key: legacy[key] for key in ("status", "detail", "error", "sources")
+            if legacy.get(key)
+        }
     print(json.dumps(report, indent=2, default=str))
     if native_error:
         raise SystemExit(1)

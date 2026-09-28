@@ -1,4 +1,9 @@
-"""Stdlib first-use and slash prompt_id consumption. No knowledge import."""
+"""Stdlib first-use and slash prompt_id consumption. No knowledge import.
+
+The persistent choice lives in the profile-shared consent document
+(``consent``); the legacy marker below only deduplicates native slash
+prompt ids and is a one-time migration source, never a consent source.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +12,8 @@ import os
 from pathlib import Path
 
 from paths import first_use_path, state_dir
+
+import consent
 
 CHOICES = ("contribute", "read-only", "later")
 
@@ -31,18 +38,16 @@ def _store(path: Path, data: dict) -> None:
 
 
 def first_use():
-    data = _load(first_use_path())
-    choice = data.get("choice")
-    return choice if choice in CHOICES else None
+    saved = consent.load()
+    if saved["state"] == "ok" and saved["choice"] in consent.CHOICES:
+        return saved["choice"]
+    return None
 
 
 def set_first_use(choice: str) -> str:
     if choice not in CHOICES:
         raise ValueError("choice must be contribute, read-only, or later")
-    data = _load(first_use_path())
-    data["choice"] = choice
-    _store(first_use_path(), data)
-    return choice
+    return consent.record_choice(choice)
 
 
 def consume_prompt(prompt_id: str) -> bool:
@@ -73,23 +78,25 @@ def three_choices() -> dict:
                 recommended=True,
                 summary="Contribute public experience for the current project",
                 next=(
-                    "/mindie-agent:sharing-enable --repository owner/repo "
+                    "Invoke the mindie-agent entry with contribute --repository owner/repo "
                     "--account USER --project-root /absolute/path --visibility public"
                 ),
             ),
             dict(
                 id="read-only",
                 summary="Read-only knowledge; no contribution",
-                next="Run /mindie-agent:init read-only",
+                next="Invoke the mindie-agent entry with read-only",
             ),
             dict(
                 id="later",
                 summary="Configure later (sharing stays off)",
-                next="Run /mindie-agent:init later",
+                next="Invoke the mindie-agent entry with later",
             ),
         ],
         setup="python3 scripts/setup.py --config ~/.config/mindie-agent/cc.json",
         note=(
+            "One-time setup: the choice persists for this installation and is "
+            "never asked again, including after restarts, upgrades or failures. "
             "Enabling contribution requires explicit public repository, account, "
             "project root, and visibility. There is no automatic yes."
         ),
