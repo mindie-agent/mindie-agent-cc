@@ -61,9 +61,14 @@ For reproducible component checks, use the installed pinned runtime and the
 committed Kimi peer fixture:
 
 ```sh
-MINDIE_TEST_KIMI_SCRIPTS="$PWD/tests/fixtures/kimi-86de2c3/scripts" python -m unittest discover -s tests -v
+MINDIE_TEST_KIMI_SCRIPTS="$PWD/tests/fixtures/kimi-86de2c3/scripts" \
+MINDIE_TEST_KNOWLEDGE_CHECKOUT=/absolute/path/to/mindie-knowledge-pin \
+python -m unittest discover -s tests -v
 ```
 
+The knowledge path is an absolute checkout of the `mindie-knowledge` commit in
+`runtime-requirements.txt`. The interpreter must already provide those official
+pins and `hatchling`. See [framework stability](docs/framework-stability.md).
 These checks do not establish native host acceptance.
 
 With contribution off there is no Stop transcript collection, capture or

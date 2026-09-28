@@ -74,6 +74,76 @@ def reap_services(root: Path) -> None:
             pass
 
 
+# Explicit local checkout of the mindie-knowledge pin in runtime-requirements.txt.
+# There is no default path and no sibling search.
+KNOWLEDGE_CHECKOUT_ENV = "MINDIE_TEST_KNOWLEDGE_CHECKOUT"
+
+
+class IdentityPrecondition(RuntimeError):
+    """The local-candidate install cannot start; nothing was downloaded."""
+
+
+def _git_env() -> dict:
+    env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    return env
+
+
+def _git(repo: Path, *args: str, timeout: int = 30) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git", "-C", str(repo), *args],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        env=_git_env(),
+    )
+
+
+def knowledge_checkout(commit: str) -> Path:
+    """Absolute checkout whose HEAD is exactly ``commit``. Local git only."""
+    raw = os.environ.get(KNOWLEDGE_CHECKOUT_ENV)
+    if raw is None or not str(raw).strip():
+        raise IdentityPrecondition(
+            f"{KNOWLEDGE_CHECKOUT_ENV} is not set. Pass the absolute path of a "
+            f"local git checkout whose HEAD is mindie-knowledge {commit}. "
+            "This test does not fetch GitHub and does not search sibling checkouts."
+        )
+    text = str(raw).strip()
+    path = Path(text)
+    if not path.is_absolute():
+        raise IdentityPrecondition(
+            f"{KNOWLEDGE_CHECKOUT_ENV} must be an absolute path, not {text!r}."
+        )
+    if not path.is_dir():
+        raise IdentityPrecondition(
+            f"{KNOWLEDGE_CHECKOUT_ENV} is not a directory: {path}"
+        )
+    head = _git(path, "rev-parse", "--verify", "HEAD")
+    if head.returncode != 0:
+        detail = (head.stderr or head.stdout or "git rev-parse failed").strip()
+        raise IdentityPrecondition(
+            f"{path} is not a usable git checkout ({detail[:300]}). "
+            "This test does not clone from the network."
+        )
+    kind = _git(path, "cat-file", "-t", "HEAD")
+    if kind.returncode != 0 or kind.stdout.strip() != "commit":
+        raise IdentityPrecondition(f"{path} HEAD is not a commit object.")
+    current = head.stdout.strip()
+    if current != commit:
+        raise IdentityPrecondition(
+            f"{path} HEAD is {current}, not the declared mindie-knowledge pin {commit}. "
+            "Check out that commit locally. This test does not fetch it."
+        )
+    return path.resolve()
+
+
+def _file_url(path: Path) -> str:
+    text = path.resolve().as_posix()
+    if not text.startswith("/"):
+        text = "/" + text
+    return "file://" + text
+
+
 class LaneCase(unittest.TestCase):
     def setUp(self):
         LANE_STATE.mkdir(parents=True, exist_ok=True)
@@ -215,7 +285,7 @@ class SetupIdentityTests(LaneCase):
         self.assertIn("knowledge runtime probe failed", message)
         self.assertNotIn("exact required commits", message)
 
-    def _direct_url(self, python, dist_name):
+    def _read_direct(self, python, dist_name):
         code = (
             "import json,sys\n"
             "from importlib.metadata import distribution\n"
@@ -232,65 +302,188 @@ class SetupIdentityTests(LaneCase):
             timeout=30,
             env=self._env(self.tmp / "unset-cc.json"),
         )
+        if proc.returncode != 0:
+            return proc, None
+        return proc, json.loads(proc.stdout)
+
+    def _direct_url(self, python, dist_name):
+        proc, info = self._read_direct(python, dist_name)
         self.assertEqual(proc.returncode, 0, proc.stderr[-800:])
-        return json.loads(proc.stdout)
+        return info
 
-    def _genuine_local_git_python(self, commit, remote_commit):
-        """Real git+file install of the pinned knowledge commit.
+    def _require_reused_runtime(self, pins):
+        """The interpreter under test already has the official pins.
 
-        The official CI interpreter is https and must stay that way. This
-        venv is separate; its direct_url is whatever pip records.
+        The local-candidate venv reuses those installed distributions. It
+        does not reinstall them and does not download a build backend.
         """
-        work = self.tmp / "local-git-runtime"
-        repo = work / "knowledge"
-        repo.mkdir(parents=True)
-        git_env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
-        git_env["GIT_TERMINAL_PROMPT"] = "0"
-
-        def git(*args, timeout=180):
-            return subprocess.run(
-                ["git", "-C", str(repo), *args],
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                env=git_env,
+        python = sys.executable
+        for name, pin in pins.items():
+            proc, info = self._read_direct(python, name)
+            if proc.returncode != 0 or info is None:
+                lines = (proc.stderr or proc.stdout or "").strip().splitlines()
+                detail = lines[-1] if lines else "no output"
+                raise IdentityPrecondition(
+                    f"{python} cannot read {name} metadata ({detail[:300]}). "
+                    "Install runtime-requirements.txt in this interpreter. "
+                    "This test does not download runtime dependencies."
+                )
+            url = str(info.get("url") or "").rstrip("/")
+            official = url in {pin["url"], pin["url"] + ".git"}
+            if info.get("vcs") != "git" or info.get("commit") != pin["commit"] or not official:
+                raise IdentityPrecondition(
+                    f"{python} {name} is {info.get('commit')} at {str(info.get('url'))[:160]}, "
+                    f"not {pin['url']}@{pin['commit']}. "
+                    "Install the declared runtime pins in this interpreter. "
+                    "This test does not reinstall them."
+                )
+        hatch = subprocess.run(
+            [python, "-c", "import hatchling"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=self._env(self.tmp / "unset-cc.json"),
+        )
+        if hatch.returncode != 0:
+            raise IdentityPrecondition(
+                f"hatchling is not importable in {python}. The pinned knowledge "
+                "tree builds with hatchling. Install hatchling in this interpreter "
+                "before the local-candidate test. This test does not download a "
+                "build backend."
             )
 
-        self.assertEqual(git("init").returncode, 0)
-        self.assertEqual(
-            git("remote", "add", "origin", "https://github.com/mindie-agent/knowledge.git").returncode,
-            0,
+    def _link_official_runtime(self, venv_python):
+        """Make the isolated venv import the interpreter's already-installed deps.
+
+        A venv created from this interpreter does not see that interpreter's
+        site-packages. A path file points at them without copying metadata.
+        """
+        code = (
+            "import sysconfig\n"
+            "print(sysconfig.get_path('purelib'))\n"
+            "print(sysconfig.get_path('platlib'))\n"
         )
-        fetched = git("fetch", "--depth", "1", "origin", commit)
-        self.assertEqual(fetched.returncode, 0, fetched.stderr[-800:])
-        self.assertEqual(git("checkout", "--detach", "FETCH_HEAD").returncode, 0)
-        head = git("rev-parse", "HEAD")
-        self.assertEqual(head.stdout.strip(), commit, head.stderr[-400:])
+        parent = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=self._env(self.tmp / "unset-cc.json"),
+        )
+        if parent.returncode != 0:
+            raise IdentityPrecondition(
+                "cannot resolve the official interpreter site-packages: "
+                + (parent.stderr or "")[-300:]
+            )
+        child = subprocess.run(
+            [str(venv_python), "-c", code],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=_git_env(),
+        )
+        if child.returncode != 0:
+            raise IdentityPrecondition(
+                "cannot resolve the isolated venv site-packages: "
+                + (child.stderr or "")[-300:]
+            )
+        sources = []
+        for line in parent.stdout.splitlines():
+            candidate = Path(line.strip())
+            if line.strip() and candidate not in sources:
+                if not candidate.is_dir():
+                    raise IdentityPrecondition(
+                        f"official site-packages is not a directory: {candidate}"
+                    )
+                sources.append(candidate)
+        destination = Path(child.stdout.splitlines()[0].strip())
+        destination.mkdir(parents=True, exist_ok=True)
+        payload = "".join(str(path) + "\n" for path in sources)
+        (destination / "official-runtime.pth").write_text(payload, encoding="utf-8")
+
+    def _genuine_local_git_python(self, commit, remote_commit):
+        """Real git+file install of an explicitly supplied local checkout.
+
+        Runtime dependencies stay the official installs of this interpreter.
+        pip writes the candidate's direct_url.json; this test does not.
+        """
+        import setup
+
+        checkout = knowledge_checkout(commit)
+        self._require_reused_runtime(setup.runtime_pins())
+        parent_knowledge = self._direct_url(sys.executable, "mindie-knowledge")["raw"]
+        parent_remote = self._direct_url(sys.executable, "remote-dev")["raw"]
+        work = self.tmp / "local-git-runtime"
+        repo = work / "knowledge"
+        work.mkdir(parents=True)
+        cloned = subprocess.run(
+            ["git", "clone", "--local", "--no-hardlinks", str(checkout), str(repo)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=_git_env(),
+        )
+        if cloned.returncode != 0:
+            raise IdentityPrecondition(
+                "local clone of the supplied knowledge checkout failed: "
+                + (cloned.stderr or cloned.stdout)[-500:]
+            )
+        _git(repo, "remote", "remove", "origin")
+        checked = _git(repo, "checkout", "--detach", commit, timeout=60)
+        if checked.returncode != 0:
+            raise IdentityPrecondition(
+                "the local clone does not contain the declared commit: "
+                + (checked.stderr or checked.stdout)[-400:]
+            )
+        head = _git(repo, "rev-parse", "HEAD")
+        if head.returncode != 0 or head.stdout.strip() != commit:
+            raise IdentityPrecondition(
+                f"local clone HEAD is {head.stdout.strip()!r}, not {commit}."
+            )
         venv = work / "venv"
         created = subprocess.run(
             [sys.executable, "-m", "venv", str(venv)],
             capture_output=True,
             text=True,
             timeout=60,
-            env=git_env,
+            env=_git_env(),
         )
-        self.assertEqual(created.returncode, 0, created.stderr[-800:])
-        pip = venv / ("Scripts/pip.exe" if os.name == "nt" else "bin/pip")
-        python = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-        spec = f"git+file://{repo.resolve()}@{commit}"
-        remote_spec = f"git+https://github.com/mindie-agent/remote-dev@{remote_commit}"
-        installed = subprocess.run(
-            [str(pip), "install", "--disable-pip-version-check", spec, remote_spec],
+        if created.returncode != 0:
+            raise IdentityPrecondition(
+                "could not create the isolated candidate venv: "
+                + (created.stderr or created.stdout)[-400:]
+            )
+        scripts = venv / ("Scripts" if os.name == "nt" else "bin")
+        python = scripts / ("python.exe" if os.name == "nt" else "python")
+        pip = scripts / ("pip.exe" if os.name == "nt" else "pip")
+        self._link_official_runtime(python)
+        visible = subprocess.run(
+            [str(python), "-c", "import hatchling, yaml, remote_dev, mindie_diagnostics"],
             capture_output=True,
             text=True,
-            timeout=420,
-            env=git_env,
+            timeout=30,
+            env=_git_env(),
         )
-        self.assertEqual(
-            installed.returncode,
-            0,
-            (installed.stderr or installed.stdout)[-1500:],
+        if visible.returncode != 0:
+            raise IdentityPrecondition(
+                "the isolated venv cannot see hatchling and the official runtime "
+                f"installed in {sys.executable}: "
+                + (visible.stderr or visible.stdout)[-500:]
+                + " Refusing to download dependencies or a build backend."
+            )
+        spec = f"git+{_file_url(repo)}@{commit}"
+        installed = subprocess.run(
+            [
+                str(pip), "install", "--disable-pip-version-check", "--no-cache-dir",
+                "--no-deps", "--no-build-isolation", "--force-reinstall", spec,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env=_git_env(),
         )
+        if installed.returncode != 0:
+            self.fail((installed.stderr or installed.stdout)[-1500:])
         knowledge = self._direct_url(python, "mindie-knowledge")
         self.assertEqual(knowledge["vcs"], "git", knowledge)
         self.assertTrue(str(knowledge["url"]).startswith("file://"), knowledge["url"][:160])
@@ -302,7 +495,81 @@ class SetupIdentityTests(LaneCase):
             str(remote["url"]).startswith("https://github.com/mindie-agent/remote-dev"),
             remote["url"][:160],
         )
+        self.assertEqual(
+            self._direct_url(sys.executable, "mindie-knowledge")["raw"],
+            parent_knowledge,
+            "candidate install rewrote the official interpreter direct_url.json",
+        )
+        self.assertEqual(
+            self._direct_url(sys.executable, "remote-dev")["raw"],
+            parent_remote,
+        )
         return python, knowledge["raw"]
+
+    def test_knowledge_checkout_preconditions_fail_before_any_install(self):
+        """Missing or inexact checkouts stop before git clone or pip."""
+        import setup
+
+        commit = setup.runtime_pins()["mindie-knowledge"]["commit"]
+        saved = os.environ.pop(KNOWLEDGE_CHECKOUT_ENV, None)
+        try:
+            with self.assertRaises(IdentityPrecondition) as missing:
+                knowledge_checkout(commit)
+            self.assertIn(KNOWLEDGE_CHECKOUT_ENV, str(missing.exception))
+            self.assertIn("does not fetch", str(missing.exception))
+            self.assertIn("does not search sibling", str(missing.exception))
+
+            os.environ[KNOWLEDGE_CHECKOUT_ENV] = "relative/knowledge"
+            with self.assertRaises(IdentityPrecondition) as relative:
+                knowledge_checkout(commit)
+            self.assertIn("absolute", str(relative.exception))
+
+            absent = self.tmp / "no-such-checkout"
+            os.environ[KNOWLEDGE_CHECKOUT_ENV] = str(absent)
+            with self.assertRaises(IdentityPrecondition) as missing_dir:
+                knowledge_checkout(commit)
+            self.assertIn("not a directory", str(missing_dir.exception))
+
+            plain = self.tmp / "not-a-repo"
+            plain.mkdir()
+            os.environ[KNOWLEDGE_CHECKOUT_ENV] = str(plain)
+            with self.assertRaises(IdentityPrecondition) as unusable:
+                knowledge_checkout(commit)
+            self.assertIn("not a usable git checkout", str(unusable.exception))
+            self.assertIn("does not clone from the network", str(unusable.exception))
+
+            other = self.tmp / "other-commit"
+            other.mkdir()
+            author = _git_env()
+            author.update(
+                GIT_AUTHOR_NAME="mindie-test",
+                GIT_AUTHOR_EMAIL="mindie-test@example.com",
+                GIT_COMMITTER_NAME="mindie-test",
+                GIT_COMMITTER_EMAIL="mindie-test@example.com",
+            )
+            for args in (
+                ["init"],
+                ["commit", "--allow-empty", "-m", "not the declared pin"],
+            ):
+                proc = subprocess.run(
+                    ["git", "-C", str(other), *args],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    env=author,
+                )
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+            os.environ[KNOWLEDGE_CHECKOUT_ENV] = str(other)
+            with self.assertRaises(IdentityPrecondition) as wrong:
+                knowledge_checkout(commit)
+            self.assertIn(commit, str(wrong.exception))
+            self.assertIn("does not fetch", str(wrong.exception))
+            self.assertNotIn("github.com", str(wrong.exception))
+        finally:
+            if saved is None:
+                os.environ.pop(KNOWLEDGE_CHECKOUT_ENV, None)
+            else:
+                os.environ[KNOWLEDGE_CHECKOUT_ENV] = saved
 
     def test_explicit_local_candidate_accepts_only_recorded_vcs_commit(self):
         """A separate git+file install may be named explicitly.
@@ -314,9 +581,12 @@ class SetupIdentityTests(LaneCase):
 
         pins = setup.runtime_pins()
         commit = pins["mindie-knowledge"]["commit"]
-        python, before = self._genuine_local_git_python(
-            commit, pins["remote-dev"]["commit"]
-        )
+        try:
+            python, before = self._genuine_local_git_python(
+                commit, pins["remote-dev"]["commit"]
+            )
+        except IdentityPrecondition as exc:
+            raise self.failureException(str(exc)) from None
         bare = self.tmp / "bare"
         proc = self._run_setup(bare / "cc.json", bare / "data", python=python)
         self.assertNotEqual(proc.returncode, 0, proc.stdout[-400:])

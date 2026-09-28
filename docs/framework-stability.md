@@ -29,12 +29,23 @@ SQLite requirement. Install `pip install -e '.[test]'` for core, or
 `pip install -r runtime-requirements.txt` for an adapter, then run:
 
 ```sh
-MINDIE_TEST_KIMI_SCRIPTS="$PWD/tests/fixtures/kimi-86de2c3/scripts" python -m unittest discover -s tests
+MINDIE_TEST_KIMI_SCRIPTS="$PWD/tests/fixtures/kimi-86de2c3/scripts" \
+MINDIE_TEST_KNOWLEDGE_CHECKOUT=/absolute/path/to/mindie-knowledge-pin \
+python -m unittest discover -s tests
 ```
 
-The local-candidate identity test creates a disposable Git checkout and venv
-from the published pins. It requires access to those repositories and package
-dependencies, and leaves the active interpreter and its metadata unchanged.
+`MINDIE_TEST_KNOWLEDGE_CHECKOUT` is required for the local-candidate identity
+test. It must be an absolute git checkout whose HEAD is the `mindie-knowledge`
+commit in `runtime-requirements.txt`. The test checks that commit with local
+git only. It does not fetch GitHub and it does not look for a nearby checkout.
+The same interpreter must already have both official pins from
+`runtime-requirements.txt` and must be able to import `hatchling` (the pinned
+tree's build backend, not a runtime pin: `python -m pip install hatchling==1.32.4`).
+The test then makes a separate venv, reuses those installed distributions, and
+runs one real `pip install --no-deps --no-build-isolation` of
+`git+file://` that checkout. pip's own `direct_url.json` is the provenance.
+A missing checkout, a different HEAD, or a missing official pin fails before
+any install. The active interpreter's metadata is left unchanged.
 
 Tests use committed real parser/peer fixtures or exact Git revisions declared
 in the workflow. They do not discover a user's production installation.
