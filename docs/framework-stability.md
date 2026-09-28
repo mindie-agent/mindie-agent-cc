@@ -21,7 +21,7 @@ corrupt configuration is reported as a fault and never triggers onboarding.
 
 The bootstrap writer preserves damaged, foreign and unreadable existing settings. Normal setup generates the host package with the actual pinned interpreter.
 
-The final integrated suite passed all 152 tests, including bootstrap preservation and shared choice checks. All 24 bundled Kimi fixture files matched their recorded source revision. These are local component results for the reviewed revision. The PR
+The final integrated suite passed all 152 tests, including bootstrap preservation and shared choice checks. All 24 bundled Kimi fixture files matched their recorded source revision. These are local component baseline results before the Windows read follow-up. The PR
 checks are the source of online CI status; local counts are not CI claims.
 
 From the repository root, use a Python interpreter satisfying the README's
@@ -41,6 +41,16 @@ in the workflow. They do not discover a user's production installation.
 Missing dependencies fail explicitly. Keep failure-path, concurrency and
 recovery cases bounded and deterministic; model sessions are reserved for
 checks that actually need a native host.
+
+## Windows configuration reads
+
+The shared consent implementation opens configuration files with delete
+sharing on Windows, so a framework read does not block another process's
+atomic update. The core and all three bootstrap copies use the same code.
+An external program holding a file without delete sharing can still block
+an update; that error preserves the saved document and does not trigger
+onboarding or a retry loop. Windows CI checks this filesystem contract;
+it is separate from acceptance inside a native Windows agent host.
 
 ## Integration and acceptance boundaries
 
