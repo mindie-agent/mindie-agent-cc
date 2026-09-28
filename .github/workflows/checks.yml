@@ -25,4 +25,9 @@ jobs:
           GIT_TERMINAL_PROMPT: '0'
         run: python -m pip install -r runtime-requirements.txt
       - name: Component contracts (not native harness acceptance)
+        env:
+          # Frozen peer scripts vendored at tests/fixtures/kimi-86de2c3.
+          # 86de2c3 is not on origin; a GitHub run of this file is not
+          # evidence that the review branch was published.
+          MINDIE_TEST_KIMI_SCRIPTS: ${{ github.workspace }}/tests/fixtures/kimi-86de2c3/scripts
         run: python -m unittest discover -s tests

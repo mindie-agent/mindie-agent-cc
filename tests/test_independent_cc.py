@@ -1326,6 +1326,117 @@ class CanonicalWriteTests(LaneCase):
         self.assertFalse(canonical.is_file())
 
 
+class BootstrapCommunityWriterTests(LaneCase):
+    """setup.write_community is the pre-runtime bootstrap writer.
+
+    The invalid-file case matches integration-20260928/cc-bootstrap-corrupt-repro.json:
+    explicit settings must not replace an existing damaged authority.
+    """
+
+    def _explicit(self, root: Path):
+        import setup
+
+        root.mkdir(parents=True, exist_ok=True)
+        return setup.community_settings(
+            argparse.Namespace(
+                community_repository="owner/repo",
+                community_project_root=[str(root)],
+                community_account=None,
+                community_fork=None,
+                community_visibility="public",
+                community_branch=None,
+            ),
+            argparse.ArgumentParser(),
+        )
+
+    def test_invalid_existing_file_is_preserved(self):
+        import setup
+
+        payload = self._explicit(self.tmp / "project")
+        samples = {
+            "repro": b"{broken-community",
+            "foreign-schema": b'{"schema": "foreign-format/1", "enabled": true}\n',
+            "non-object": b"[1]\n",
+        }
+        for name, raw in samples.items():
+            with self.subTest(name=name):
+                path = self.tmp / name / "mindie-community.json"
+                path.parent.mkdir()
+                path.write_bytes(raw)
+                with self.assertRaises(SystemExit) as caught:
+                    setup.write_community(path, payload)
+                self.assertIn("nothing was written", str(caught.exception.code))
+                self.assertEqual(path.read_bytes(), raw)
+        path = self.tmp / "unreadable" / "mindie-community.json"
+        path.parent.mkdir()
+        raw = b"{broken-community"
+        path.write_bytes(raw)
+        path.chmod(0)
+        try:
+            with self.assertRaises(SystemExit) as caught:
+                setup.write_community(path, payload)
+            self.assertIn("nothing was written", str(caught.exception.code))
+        finally:
+            path.chmod(0o600)
+        self.assertEqual(path.read_bytes(), raw)
+
+    def test_missing_file_is_a_first_setup(self):
+        import setup
+
+        explicit = self.tmp / "first-explicit.json"
+        self.assertFalse(explicit.exists())
+        self.assertEqual(
+            setup.write_community(explicit, self._explicit(self.tmp / "explicit-root")),
+            "enabled",
+        )
+        written = json.loads(explicit.read_text())
+        self.assertEqual(written.get("schema"), "mindie-community-config/1")
+        self.assertIs(written.get("enabled"), True)
+        self.assertEqual(
+            Path(written["consent_config"]).resolve(),
+            (explicit.parent / "mindie-consent.json").resolve(),
+        )
+        default_off = self.tmp / "first-off.json"
+        self.assertEqual(setup.write_community(default_off, None), "off")
+        off = json.loads(default_off.read_text())
+        self.assertEqual(off.get("schema"), "mindie-community-config/1")
+        self.assertIs(off.get("enabled"), False)
+
+    def test_current_schema_is_repaired_and_extensions_survive(self):
+        import setup
+
+        path = self.tmp / "repair.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "schema": "mindie-community-config/1",
+                    "enabled": "not-a-bool",
+                    "generation": "stale-generation",
+                    "repository": "local/unconfigured",
+                    "branch": "main",
+                    "project_roots": "not-a-list",
+                    "idle_seconds": 300,
+                    "adapter_note": "keep",
+                }
+            )
+            + "\n"
+        )
+        self.assertEqual(
+            setup.write_community(path, self._explicit(self.tmp / "repair-root")),
+            "enabled",
+        )
+        written = json.loads(path.read_text())
+        self.assertEqual(written.get("schema"), "mindie-community-config/1")
+        self.assertIs(written.get("enabled"), True)
+        self.assertNotEqual(written.get("generation"), "stale-generation")
+        self.assertIsInstance(written.get("project_roots"), list)
+        self.assertEqual(written.get("adapter_note"), "keep")
+        self.assertEqual(
+            Path(written["consent_config"]).resolve(),
+            (path.parent / "mindie-consent.json").resolve(),
+        )
+
+
 class HookManifestTests(LaneCase):
     def test_expansion_matchers_cover_every_accepted_command(self):
         import identity
