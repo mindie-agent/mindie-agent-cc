@@ -32,6 +32,10 @@ SQLite requirement. Install `pip install -e '.[test]'` for core, or
 MINDIE_TEST_KIMI_SCRIPTS="$PWD/tests/fixtures/kimi-86de2c3/scripts" python -m unittest discover -s tests
 ```
 
+The local-candidate identity test creates a disposable Git checkout and venv
+from the published pins. It requires access to those repositories and package
+dependencies, and leaves the active interpreter and its metadata unchanged.
+
 Tests use committed real parser/peer fixtures or exact Git revisions declared
 in the workflow. They do not discover a user's production installation.
 Missing dependencies fail explicitly. Keep failure-path, concurrency and

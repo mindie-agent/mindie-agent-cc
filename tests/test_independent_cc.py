@@ -22,7 +22,6 @@ import tempfile
 import textwrap
 import unittest
 import uuid
-from importlib.metadata import distribution
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
@@ -151,17 +150,18 @@ class SetupIdentityTests(LaneCase):
             return str(exc)
         return None
 
-    def _run_setup(self, config: Path, root: Path, extra=()):
+    def _run_setup(self, config: Path, root: Path, extra=(), python=None):
+        python = str(python or sys.executable)
         return subprocess.run(
             [
-                sys.executable,
+                python,
                 str(SCRIPTS / "setup.py"),
                 "--config",
                 str(config),
                 "--root",
                 str(root),
                 "--knowledge-python",
-                sys.executable,
+                python,
                 "--no-schedule",
                 "--no-native-install",
                 "--no-public-feed",
@@ -169,7 +169,7 @@ class SetupIdentityTests(LaneCase):
             ],
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=60,
             env=self._env(config),
         )
 
@@ -215,27 +215,120 @@ class SetupIdentityTests(LaneCase):
         self.assertIn("knowledge runtime probe failed", message)
         self.assertNotIn("exact required commits", message)
 
-    def _knowledge_install(self):
-        before = distribution("mindie-knowledge").read_text("direct_url.json") or ""
-        meta = json.loads(before)
-        vcs = meta.get("vcs_info") or {}
-        return before, meta.get("url") or "", vcs.get("vcs"), vcs.get("commit_id")
+    def _direct_url(self, python, dist_name):
+        code = (
+            "import json,sys\n"
+            "from importlib.metadata import distribution\n"
+            "raw = distribution(sys.argv[1]).read_text('direct_url.json') or ''\n"
+            "data = json.loads(raw) if raw else {}\n"
+            "vcs = data.get('vcs_info') or {}\n"
+            "print(json.dumps({'raw': raw, 'url': data.get('url') or '',"
+            " 'vcs': vcs.get('vcs'), 'commit': vcs.get('commit_id')}))\n"
+        )
+        proc = subprocess.run(
+            [str(python), "-c", code, dist_name],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=self._env(self.tmp / "unset-cc.json"),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr[-800:])
+        return json.loads(proc.stdout)
+
+    def _genuine_local_git_python(self, commit, remote_commit):
+        """Real git+file install of the pinned knowledge commit.
+
+        The official CI interpreter is https and must stay that way. This
+        venv is separate; its direct_url is whatever pip records.
+        """
+        work = self.tmp / "local-git-runtime"
+        repo = work / "knowledge"
+        repo.mkdir(parents=True)
+        git_env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+        git_env["GIT_TERMINAL_PROMPT"] = "0"
+
+        def git(*args, timeout=180):
+            return subprocess.run(
+                ["git", "-C", str(repo), *args],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                env=git_env,
+            )
+
+        self.assertEqual(git("init").returncode, 0)
+        self.assertEqual(
+            git("remote", "add", "origin", "https://github.com/mindie-agent/knowledge.git").returncode,
+            0,
+        )
+        fetched = git("fetch", "--depth", "1", "origin", commit)
+        self.assertEqual(fetched.returncode, 0, fetched.stderr[-800:])
+        self.assertEqual(git("checkout", "--detach", "FETCH_HEAD").returncode, 0)
+        head = git("rev-parse", "HEAD")
+        self.assertEqual(head.stdout.strip(), commit, head.stderr[-400:])
+        venv = work / "venv"
+        created = subprocess.run(
+            [sys.executable, "-m", "venv", str(venv)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=git_env,
+        )
+        self.assertEqual(created.returncode, 0, created.stderr[-800:])
+        pip = venv / ("Scripts/pip.exe" if os.name == "nt" else "bin/pip")
+        python = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+        spec = f"git+file://{repo.resolve()}@{commit}"
+        remote_spec = f"git+https://github.com/mindie-agent/remote-dev@{remote_commit}"
+        installed = subprocess.run(
+            [str(pip), "install", "--disable-pip-version-check", spec, remote_spec],
+            capture_output=True,
+            text=True,
+            timeout=420,
+            env=git_env,
+        )
+        self.assertEqual(
+            installed.returncode,
+            0,
+            (installed.stderr or installed.stdout)[-1500:],
+        )
+        knowledge = self._direct_url(python, "mindie-knowledge")
+        self.assertEqual(knowledge["vcs"], "git", knowledge)
+        self.assertTrue(str(knowledge["url"]).startswith("file://"), knowledge["url"][:160])
+        self.assertEqual(knowledge["commit"], commit)
+        remote = self._direct_url(python, "remote-dev")
+        self.assertEqual(remote["vcs"], "git", remote)
+        self.assertEqual(remote["commit"], remote_commit)
+        self.assertTrue(
+            str(remote["url"]).startswith("https://github.com/mindie-agent/remote-dev"),
+            remote["url"][:160],
+        )
+        return python, knowledge["raw"]
 
     def test_explicit_local_candidate_accepts_only_recorded_vcs_commit(self):
-        """A git+file install may be named explicitly. A directory install with
-        no commit_id, or a declared SHA that is not that commit_id, must not
-        become the production identity. direct_url.json is never rewritten."""
-        before, url, vcs, commit = self._knowledge_install()
-        self.assertEqual(vcs, "git", "phase2 runtime must be a git install, not dir_info")
-        self.assertTrue(url.startswith("file:"), url[:160])
-        self.assertRegex(commit or "", r"^[0-9a-f]{40}$")
+        """A separate git+file install may be named explicitly.
+
+        Wrong SHAs are rejected. The recorded commit is accepted. The
+        official https runtime is not rewritten and is not this fixture.
+        """
         import setup
 
-        pinned = setup.runtime_pins()["mindie-knowledge"]["commit"]
+        pins = setup.runtime_pins()
+        commit = pins["mindie-knowledge"]["commit"]
+        python, before = self._genuine_local_git_python(
+            commit, pins["remote-dev"]["commit"]
+        )
+        bare = self.tmp / "bare"
+        proc = self._run_setup(bare / "cc.json", bare / "data", python=python)
+        self.assertNotEqual(proc.returncode, 0, proc.stdout[-400:])
+        self.assertIn("does not match the required official Git commit", proc.stderr)
+        self.assertNotIn("remote-dev does not match", proc.stderr)
+        self.assertFalse((bare / "cc.json").exists())
+        self.assertFalse((bare / "data").exists())
+        self.assertEqual(self._direct_url(python, "mindie-knowledge")["raw"], before)
         wrong = "0" * 40
-        for label, declared in (("zeros", wrong), ("requirements-pin", pinned)):
-            if declared == commit:
-                continue
+        other = "b34851a5df99f05787fd3c63ed6f68190a050f14"
+        self.assertNotEqual(other, commit)
+        for label, declared in (("zeros", wrong), ("other-commit", other)):
             with self.subTest(declared=label):
                 config = self.tmp / label / "cc.json"
                 data = self.tmp / label / "data"
@@ -243,10 +336,14 @@ class SetupIdentityTests(LaneCase):
                     config,
                     data,
                     extra=("--allow-local-candidate", f"mindie-knowledge={declared}"),
+                    python=python,
                 )
-                after = distribution("mindie-knowledge").read_text("direct_url.json") or ""
-                self.assertEqual(after, before)
+                self.assertEqual(self._direct_url(python, "mindie-knowledge")["raw"], before)
                 self.assertNotEqual(proc.returncode, 0, proc.stdout[-400:])
+                self.assertIn(
+                    "matches neither the official Git commit nor the declared local candidate",
+                    proc.stderr,
+                )
                 self.assertFalse(config.exists())
                 self.assertFalse(data.exists())
         config = self.tmp / "exact" / "cc.json"
@@ -255,9 +352,13 @@ class SetupIdentityTests(LaneCase):
             config,
             data,
             extra=("--allow-local-candidate", f"mindie-knowledge={commit}"),
+            python=python,
         )
-        after = distribution("mindie-knowledge").read_text("direct_url.json") or ""
-        self.assertEqual(after, before, "candidate setup rewrote direct_url.json")
+        self.assertEqual(
+            self._direct_url(python, "mindie-knowledge")["raw"],
+            before,
+            "candidate setup rewrote direct_url.json",
+        )
         self.assertEqual(
             proc.returncode,
             0,
