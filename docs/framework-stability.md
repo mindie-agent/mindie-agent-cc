@@ -21,7 +21,7 @@ corrupt configuration is reported as a fault and never triggers onboarding.
 
 The bootstrap writer preserves damaged, foreign and unreadable existing settings. Normal setup generates the host package with the actual pinned interpreter.
 
-The final integrated suite passed all 152 tests, including bootstrap preservation and shared choice checks. All 24 bundled Kimi fixture files matched their recorded source revision. These are local component baseline results before the Windows read follow-up. The PR
+The baseline integrated suite passed all 152 tests, including bootstrap preservation and shared choice checks. All 24 bundled Kimi fixture files matched their recorded source revision. These are local component baseline results before the Windows read follow-up. The PR
 checks are the source of online CI status; local counts are not CI claims.
 
 From the repository root, use a Python interpreter satisfying the README's
@@ -42,11 +42,15 @@ Missing dependencies fail explicitly. Keep failure-path, concurrency and
 recovery cases bounded and deterministic; model sessions are reserved for
 checks that actually need a native host.
 
-## Windows configuration reads
+## Windows configuration reads and writes
 
-The shared consent implementation opens configuration files with delete
-sharing on Windows, so a framework read does not block another process's
-atomic update. The core and all three bootstrap copies use the same code.
+The shared configuration implementation combines delete-sharing reads with
+a native atomic rename on Windows. Existing readers retain the complete old
+document, and readers opening the published path see the complete new one.
+The core and all three bootstrap copies use the same implementation. This
+requires both sides of the mechanism: Python's Windows `os.replace` alone
+cannot replace an open destination. See the [Windows rename semantics](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_file_rename_information).
+
 An external program holding a file without delete sharing can still block
 an update; that error preserves the saved document and does not trigger
 onboarding or a retry loop. Windows CI checks this filesystem contract;

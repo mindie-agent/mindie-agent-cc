@@ -275,7 +275,7 @@ def write_community(path, community):
     one acquisition as the core write boundary (a concurrent stamped or
     managed update is not lost); the managed publication itself goes
     through the shared store's atomic ``_write_document`` (unique temp,
-    fsync, os.replace — never O_TRUNC on the live authority). The
+    fsync, platform atomic rename — never O_TRUNC on the live authority). The
     installer default-off file is never a saved user choice and keeps its
     own O_EXCL no-overwrite semantics. An existing file that is
     unreadable, unparseable, not one JSON object, or not the
@@ -321,7 +321,7 @@ def write_community(path, community):
         data.update(community)
         data["consent_config"] = authority
         # Managed publication goes through the shared store's atomic writer
-        # (unique temp, fsync, os.replace) — never O_TRUNC on the live
+        # (unique temp, fsync, platform atomic rename) — never O_TRUNC on the live
         # authority. Validation above ran BEFORE the write; the default-off
         # branch keeps its own O_EXCL no-overwrite semantics.
         consent_mod.consent_store._write_document(path, data)

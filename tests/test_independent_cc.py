@@ -1537,6 +1537,54 @@ class BootstrapCommunityWriterTests(LaneCase):
             (path.parent / "mindie-consent.json").resolve(),
         )
 
+    def test_explicit_publication_leaves_held_reader_on_old_bytes(self):
+        """A reader using the product delete-sharing open must keep the previous bytes.
+
+        Reopening the path sees the new enabled document. An in-place
+        truncate fails this; atomic replace does not.
+        """
+        import consent_store
+        import setup
+
+        path = self.tmp / "held" / "mindie-community.json"
+        path.parent.mkdir()
+        old = (
+            json.dumps(
+                {
+                    "schema": "mindie-community-config/1",
+                    "enabled": False,
+                    "generation": "old-generation",
+                    "enabled_at": None,
+                    "repository": "local/unconfigured",
+                    "branch": "main",
+                    "project_roots": [],
+                    "idle_seconds": 300,
+                }
+            )
+            + "\n"
+        ).encode()
+        path.write_bytes(old)
+        held = consent_store._open_for_read(path)
+        try:
+            self.assertEqual(
+                setup.write_community(path, self._explicit(self.tmp / "held-root")),
+                "enabled",
+            )
+            held.seek(0)
+            self.assertEqual(held.read(), old)
+        finally:
+            held.close()
+        published = json.loads(path.read_text())
+        self.assertEqual(published.get("schema"), "mindie-community-config/1")
+        self.assertIs(published.get("enabled"), True)
+        self.assertNotEqual(published.get("generation"), "old-generation")
+        self.assertEqual(published.get("repository"), "owner/repo")
+        self.assertIsInstance(published.get("project_roots"), list)
+        self.assertEqual(
+            Path(published["consent_config"]).resolve(),
+            (path.parent / "mindie-consent.json").resolve(),
+        )
+
 
 class HookManifestTests(LaneCase):
     def test_expansion_matchers_cover_every_accepted_command(self):
