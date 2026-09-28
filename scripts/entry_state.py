@@ -15,7 +15,7 @@ from paths import first_use_path, state_dir
 
 import consent
 
-CHOICES = ("contribute", "read-only", "later")
+CHOICES = ("contribute", "disabled")
 
 
 def _load(path: Path) -> dict:
@@ -46,7 +46,7 @@ def first_use():
 
 def set_first_use(choice: str) -> str:
     if choice not in CHOICES:
-        raise ValueError("choice must be contribute, read-only, or later")
+        raise ValueError("configure contribution or explicitly disable it; read-only/later are legacy data only")
     return consent.record_choice(choice)
 
 
@@ -67,37 +67,18 @@ def consume_prompt(prompt_id: str) -> bool:
     return True
 
 
-def three_choices() -> dict:
+def configuration_required() -> dict:
+    """Incomplete configuration is a state, never a product tier."""
     return dict(
         configured=False,
+        experience="needs-configuration",
         sharing=dict(configured=False, enabled=False),
         first_use=first_use(),
-        choices=[
-            dict(
-                id="contribute",
-                recommended=True,
-                summary="Contribute public experience for the current project",
-                next=(
-                    "Invoke the mindie-agent entry with contribute --repository owner/repo "
-                    "--account USER --project-root /absolute/path --visibility public"
-                ),
-            ),
-            dict(
-                id="read-only",
-                summary="Read-only knowledge; no contribution",
-                next="Invoke the mindie-agent entry with read-only",
-            ),
-            dict(
-                id="later",
-                summary="Configure later (sharing stays off)",
-                next="Invoke the mindie-agent entry with later",
-            ),
-        ],
-        setup="python3 scripts/setup.py --config ~/.config/mindie-agent/cc.json",
-        note=(
-            "One-time setup: the choice persists for this installation and is "
-            "never asked again, including after restarts, upgrades or failures. "
-            "Enabling contribution requires explicit public repository, account, "
-            "project root, and visibility. There is no automatic yes."
-        ),
+        choices=[],
+        required=["runtime", "public_repository", "account", "project_scope"],
+        setup="python3 scripts/setup.py --knowledge-python <venv-python>",
+        note=("Supply only missing destination and scope information. Reuse "
+              "previously approved values. Installation or task binding alone "
+              "does not make the experience loop available. Explicitly disabled "
+              "and legacy declined settings remain disabled until changed."),
     )

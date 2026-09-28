@@ -55,23 +55,24 @@ class EntryTests(unittest.TestCase):
         os.environ["XDG_CONFIG_HOME"] = str(self.tmp / "cfg")
         payload = self.entry.dispatch_event(expansion("mindie-agent:init"))
         self.assertFalse(payload["configured"])
-        self.assertEqual(len(payload["choices"]), 3)
-        self.assertTrue(payload["choices"][0]["recommended"])
+        self.assertEqual(payload["choices"], [])
+        self.assertEqual(payload["experience"], "needs-configuration")
+        self.assertIn("public_repository", payload["required"])
 
     def test_init_read_only_persists(self):
         os.environ["XDG_CONFIG_HOME"] = str(self.tmp / "cfg")
         payload = self.entry.dispatch_event(
-            expansion("mindie-agent:init", "read-only")
+            expansion("mindie-agent:init", "disabled")
         )
-        self.assertEqual(payload["first_use"], "read-only")
+        self.assertEqual(payload["first_use"], "disabled")
         self.assertEqual(payload.get("choices"), [])
 
     def test_entry_skill_names_map_to_init(self):
         """The unified entry — bare or host-namespaced — performs the init op."""
         os.environ["XDG_CONFIG_HOME"] = str(self.tmp / "cfg")
         for name in ("mindie-agent", "mindie-agent:mindie-agent"):
-            payload = self.entry.dispatch_event(expansion(name, "read-only"))
-            self.assertEqual(payload["first_use"], "read-only", name)
+            payload = self.entry.dispatch_event(expansion(name, "disabled"))
+            self.assertEqual(payload["first_use"], "disabled", name)
 
     def test_rejects_non_plugin_source(self):
         with self.assertRaises(ValueError):

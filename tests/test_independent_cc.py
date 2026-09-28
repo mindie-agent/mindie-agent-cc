@@ -856,13 +856,13 @@ class EntryContractTests(LaneCase):
         payload = entry.dispatch_event(
             self._event(
                 "mindie-agent",
-                "later",
+                "disabled",
                 session=first_session,
                 prompt=str(uuid.uuid4()),
                 cwd=project,
             )
         )
-        self.assertEqual(payload.get("first_use"), "later")
+        self.assertEqual(payload.get("first_use"), "disabled")
         self.assertEqual(payload.get("choices"), [])
         second = entry.dispatch_event(
             self._event(
@@ -873,7 +873,7 @@ class EntryContractTests(LaneCase):
                 cwd=project,
             )
         )
-        self.assertEqual(second.get("first_use"), "later")
+        self.assertEqual(second.get("first_use"), "disabled")
         self.assertEqual(second.get("choices"), [])
         self.assertNotIn("sharing-enable", json.dumps(second))
         outside = self.tmp / "entry" / "outside"
@@ -888,7 +888,7 @@ class EntryContractTests(LaneCase):
             )
         )
         self.assertEqual(third.get("choices"), [])
-        self.assertEqual(third.get("first_use"), "later")
+        self.assertEqual(third.get("first_use"), "disabled")
 
     def test_status_does_not_import_marker_and_entry_imports_once(self):
         import consent
@@ -934,7 +934,7 @@ class EntryContractTests(LaneCase):
         entry.dispatch_event(
             self._event(
                 "mindie-agent",
-                "read-only",
+                "disabled",
                 session=parent,
                 prompt=str(uuid.uuid4()),
                 cwd=project,
@@ -999,7 +999,8 @@ class EntryContractTests(LaneCase):
                 cwd=project,
             )
         )
-        self.assertGreaterEqual(len(payload.get("choices") or []), 3)
+        self.assertEqual(payload["choices"], [])
+        self.assertEqual(payload["experience"], "needs-configuration")
         reporting = payload.get("reporting_choice")
         self.assertIsInstance(reporting, dict, json.dumps(payload.get("reporting"), default=str)[:400])
         self.assertTrue(reporting.get("independent_of_knowledge_contribution"))
@@ -1018,7 +1019,8 @@ class EntryContractTests(LaneCase):
                 cwd=project,
             )
         )
-        contribute = next(item for item in cold["choices"] if item["id"] == "contribute")
+        self.assertEqual(cold["experience"], "needs-configuration")
+        contribute = cold
         with self.subTest("user instruction"):
             self.assertNotIn("sharing-enable", contribute.get("next", ""))
         with self.subTest("same command records the choice"):
@@ -1057,7 +1059,7 @@ class EntryContractTests(LaneCase):
         entry.dispatch_event(
             self._event(
                 "mindie-agent",
-                "later",
+                "disabled",
                 session=str(uuid.uuid4()),
                 prompt=str(uuid.uuid4()),
                 cwd=project,

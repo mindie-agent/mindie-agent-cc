@@ -38,8 +38,9 @@ class ConsentTests(unittest.TestCase):
         import entry_state
 
         payload = self._payload()
-        self.assertEqual(len(payload["choices"]), 3)
-        entry_state.set_first_use("later")
+        self.assertEqual(payload["choices"], [])
+        self.assertEqual(payload["experience"], "needs-configuration")
+        __import__("consent").record_choice("later")
         payload = self._payload()
         self.assertEqual(payload["first_use"], "later")
         self.assertEqual(payload["choices"], [])
@@ -135,7 +136,7 @@ class ConsentTests(unittest.TestCase):
     def test_isolated_profile_does_not_inherit(self):
         import entry_state
 
-        entry_state.set_first_use("later")
+        __import__("consent").record_choice("later")
         other = self.tmp / "other-profile"
         other.mkdir()
         (other / "cc.json").write_text(json.dumps({}))
