@@ -57,11 +57,21 @@ The first setup also offers the independent reporting choice once
 (`/mindie-agent reporting-enable`, `reporting-disable` or `reporting-later`);
 any recorded decision persists.
 
-Component checks: `python3 -m unittest discover -s tests -v`. These are not host acceptance.
+For reproducible component checks, use the installed pinned runtime and the
+committed Kimi peer fixture:
+
+```sh
+MINDIE_TEST_KIMI_SCRIPTS="$PWD/tests/fixtures/kimi-86de2c3/scripts" python -m unittest discover -s tests -v
+```
+
+These checks do not establish native host acceptance.
 
 With contribution off there is no Stop transcript collection, capture or
 organizer call. Remote-dev works independently of knowledge activation.
 Knowledge is optional reference material; no task must query, write or vote.
+
+See [framework stability and verification](docs/framework-stability.md) for the
+current behavior, reproducible checks and acceptance boundaries.
 
 ## Updates and maintenance
 

@@ -1,6 +1,6 @@
 # Claude Code native boundary
 
-Status: implementation in progress; host identity capability observed on macOS with Claude Code 2.1.269. Full adapter acceptance remains pending.
+Status: the framework stability implementation passed local review on 2026-09-28. The normal generated package, pinned interpreter and two native read-only entries were verified in an isolated macOS profile. Full contribution and Windows host acceptance remain separate; see [framework stability](framework-stability.md).
 
 This adapter inherits all nine [VAWS design principles](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.md). It translates native events into the shared runtime; it does not add a second knowledge engine or harness.
 
