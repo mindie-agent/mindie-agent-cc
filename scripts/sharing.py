@@ -69,6 +69,12 @@ def write_enabled(
     settings_mod, context = _write_context(config)
     with context as ctx:
         path = resolve_community_path() if config is None else config
+        current = ctx.read(path)
+        if account is None:
+            account = current.raw.get('account')
+        if (fork is None and current.repository == repository
+                and current.branch == branch and current.raw.get('account') == account):
+            fork = current.raw.get('fork')
         settings = ctx.write(
             path,
             enabled=True,

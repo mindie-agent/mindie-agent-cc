@@ -32,6 +32,20 @@ def expansion(command, args="", **extra):
 
 
 class EntryTests(unittest.TestCase):
+    def test_repeated_enable_preserves_omitted_fork_and_account(self):
+        import sharing
+        import consent
+        config = make_config(self.tmp)
+        os.environ['MINDIE_CC_CONFIG'] = str(config)
+        sharing.write_enabled(repository='owner/repo', account='owner',
+                              fork='owner/fork', project_roots=[str(self.tmp)])
+        consent.record_choice('contribute')
+        before = sharing.load().raw
+        sharing.write_enabled(repository='owner/repo', project_roots=[str(self.tmp)])
+        self.assertEqual(sharing.load().raw, before)
+        sharing.write_enabled(repository='owner/other', project_roots=[str(self.tmp)])
+        self.assertIsNone(sharing.load().raw.get('fork'))
+
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
         os.environ.pop("MINDIE_CC_CONFIG", None)
