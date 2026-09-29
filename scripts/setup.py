@@ -137,7 +137,7 @@ def runtime_pins(requirements=None):
     """One version source, restricted to the two reviewed official Git repos."""
     path = Path(requirements) if requirements is not None else PLUGIN_ROOT / "runtime-requirements.txt"
     pins = {}
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
@@ -266,66 +266,16 @@ def community_settings(args, parser):
     return data
 
 
-def write_community(path, community):
-    """Bootstrap writer for the community settings file.
-
-    Runs before the selected runtime can be imported, so it uses the
-    byte-identical consent-store lock protocol directly: same canonical
-    ``<file>.lock`` key and the same read-merge-replace transaction inside
-    one acquisition as the core write boundary (a concurrent stamped or
-    managed update is not lost); the managed publication itself goes
-    through the shared store's atomic ``_write_document`` (unique temp,
-    fsync, platform atomic rename — never O_TRUNC on the live authority). The
-    installer default-off file is never a saved user choice and keeps its
-    own O_EXCL no-overwrite semantics. An existing file that is
-    unreadable, unparseable, not one JSON object, or not the
-    ``mindie-community-config/1`` schema is a damaged authority: an
-    explicit failure with the original bytes preserved, never an implicit
-    repair. A parseable current-schema document — even with malformed
-    managed values — may be deliberately rewritten by this managed
-    mutation; a missing file is a valid first setup.
-    """
-    import consent as consent_mod
-
-    authority = str(Path(path).with_name("mindie-consent.json").resolve())
-    with consent_mod.community_write_lock(path):
-        if community is None:
-            data = dict(
-                schema="mindie-community-config/1",
-                enabled=False,
-                generation=secrets.token_hex(16),
-                enabled_at=None,
-                repository=None,
-                branch="main",
-                project_roots=[],
-                idle_seconds=300,
-                consent_config=authority,
-            )
-            write_private(path, data)
-            return "off"
-        try:
-            on_disk = json.loads(Path(path).read_text())
-            if not isinstance(on_disk, dict):
-                raise ValueError("community settings must be one JSON object")
-            if on_disk.get("schema") != "mindie-community-config/1":
-                raise ValueError("community settings schema is not mindie-community-config/1")
-            base = on_disk
-        except FileNotFoundError:
-            base = {}
-        except (OSError, ValueError) as exc:
-            raise SystemExit(
-                f"existing community settings are unreadable or damaged: {path}; "
-                f"nothing was written ({exc})"
-            )
-        data = dict(base)
-        data.update(community)
-        data["consent_config"] = authority
-        # Managed publication goes through the shared store's atomic writer
-        # (unique temp, fsync, platform atomic rename) — never O_TRUNC on the live
-        # authority. Validation above ran BEFORE the write; the default-off
-        # branch keeps its own O_EXCL no-overwrite semantics.
-        consent_mod.consent_store._write_document(path, data)
-        return "enabled"
+def write_community(path, community, consent_config=None, python=None):
+    from community_config import configure
+    from pathlib import Path
+    request = dict(community) if community is not None else None
+    if request is not None:
+        request['consent_config'] = consent_config or str(Path(path).with_name('mindie-consent.json').resolve())
+    result = configure(path, request, python)
+    if community is None and 'consent_config' not in result:
+        result = configure(path, dict(consent_config=consent_config or str(Path(path).with_name('mindie-consent.json').resolve())), python)
+    return 'enabled' if result['enabled'] else 'off'
 
 
 def build_bootstrap_runtime(domain_root: Path) -> str:
@@ -440,7 +390,7 @@ def main():
             ), indent=2))
             raise SystemExit(1)
         legacy = consent_mod.migrate_consent()
-        sharing = write_community(community_config, community)
+        sharing = write_community(community_config, community, python=python)
         report = dict(config=str(config), sharing=sharing, updated="community")
         if migration.get("migrated") or migration.get("errors"):
             report["community_migration"] = migration
@@ -459,7 +409,7 @@ def main():
         domain=args.domain,
         admission_path=str(admission),
         transcript_adapter=str(transcript),
-        agent_command=[python, str(organizer)],
+        **__import__("capture_config").prepare(python, organizer.parent),
         community_config=str(community_config),
     )
     if args.domain == "vllm-ascend" and not args.no_public_feed:
@@ -484,7 +434,7 @@ def main():
     if args.update_remote:
         adapter_value["update_remote"] = args.update_remote
     write_private(config, adapter_value)
-    sharing = write_community(community_config, community)
+    sharing = write_community(community_config, community, python=python)
     import genstate
     import updater
 
@@ -500,7 +450,7 @@ def main():
             generation, dict(adapter_value, python=python), identity,
             package_dir=generation / "host-package",
         )
-        (generation / updater.COMPLETE).write_text(identity + "\n")
+        (generation / updater.COMPLETE).write_text(identity + "\n", encoding="utf-8")
     else:
         gen_adapter = generation / "config" / "cc.adapter.json"
         host_package = generation / "host-package"
@@ -526,7 +476,7 @@ def main():
             import native_claude
 
             version = json.loads(
-                (host_package / ".claude-plugin" / "plugin.json").read_text()
+                (host_package / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")
             )["version"]
             native = native_claude.install_and_verify(
                 host_package,

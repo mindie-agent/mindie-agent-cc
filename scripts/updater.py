@@ -254,7 +254,7 @@ def build_runtime(generation: Path, deadline: float) -> Path:
     if sys.version_info < MIN_PYTHON:
         raise CheckFailed(f"Python {MIN_PYTHON[0]}.{MIN_PYTHON[1]}+ is required")
     requirements = generation / "runtime-requirements.txt"
-    text = requirements.read_text()
+    text = requirements.read_text(encoding="utf-8")
     if re.search(r"@main\b", text):
         raise CheckFailed("runtime-requirements.txt must pin full commit SHAs, not @main")
     venv = generation / ".venv"
@@ -284,13 +284,14 @@ def probe_runtime(python: Path, deadline: float, generation: Path) -> None:
 
 def write_generation_configs(generation: Path, python: Path, adapter: dict) -> Path:
     engine = load_engine_config(adapter)
+    engine.pop("agent_command", None)
     config_dir = generation / "config"
     gen_engine = config_dir / "cc.engine.json"
     gen_adapter = config_dir / "cc.adapter.json"
     atomic_write(gen_engine, dict(
         engine,
         transcript_adapter=str(generation / "scripts" / "transcript.py"),
-        agent_command=[str(python), str(generation / "scripts" / "organizer.py")],
+        **__import__("capture_config").prepare(python, generation / "scripts"),
     ))
     atomic_write(gen_adapter, dict(
         adapter,
@@ -363,7 +364,7 @@ def stage_generation(sha: str, remote: str, adapter: dict, deadline: float,
         probe_runtime(python, deadline, target)
         gen_adapter = write_generation_configs(target, python, adapter)
         build_host_package(target, dict(adapter, python=str(python)), sha)
-        (target / COMPLETE).write_text(f"{sha}\n")
+        (target / COMPLETE).write_text(f"{sha}\n", encoding="utf-8")
         return target, python, gen_adapter
     except Exception:
         shutil.rmtree(target, ignore_errors=True)
@@ -430,7 +431,7 @@ def native_install(adapter: dict, package: Path, deadline: float,
     from native_claude import install_and_verify
 
     package = Path(package).resolve()
-    manifest = json.loads((package / ".claude-plugin" / "plugin.json").read_text())
+    manifest = json.loads((package / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
     version = manifest.get("version")
     if not isinstance(version, str) or not version:
         raise CheckFailed("host package plugin.json lacks a version")
@@ -634,7 +635,7 @@ def _package_refresh_eligible(current: dict, sha: str) -> bool:
     if generation != HERE.parent.resolve():
         return False
     try:
-        recorded = (generation / COMPLETE).read_text().strip()
+        recorded = (generation / COMPLETE).read_text(encoding="utf-8").strip()
     except OSError:
         return False
     return recorded == sha

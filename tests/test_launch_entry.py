@@ -26,7 +26,7 @@ def _run(tmp, env, payload=b""):
     assert proc.returncode == 0, proc.stderr.decode()
     assert json.loads(proc.stdout.decode() or "{}") == {}
     events = list((tmp / "diag").rglob("*.jsonl"))
-    return "\n".join(path.read_text() for path in events)
+    return "\n".join(path.read_text(encoding="utf-8") for path in events)
 
 
 def test_missing_config_and_explicit_off_stay_quiet(tmp_path):
@@ -43,7 +43,7 @@ def test_missing_config_and_explicit_off_stay_quiet(tmp_path):
 def test_existing_bad_community_and_missing_generation_are_recorded(tmp_path):
     bad = tmp_path / "bad"
     config = make_config(bad, sharing=True)
-    (bad / "cc.community.json").write_text("{")
+    (bad / "cc.community.json").write_text("{", encoding="utf-8")
     text = _run(bad, env_for(config))
     assert "configuration" in text
     assert "forwarded" not in text

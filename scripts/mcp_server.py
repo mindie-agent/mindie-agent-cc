@@ -28,7 +28,6 @@ from identity import (
 )
 from paths import load_engine_config, state_dir
 
-MAX_LINE = 128 * 1024
 MAX_YIELD_TIME_MS = 30000
 REMOTE_ERROR_CATEGORIES = frozenset({
     "internal", "caller", "validation", "permission", "remote_execution",
@@ -351,27 +350,15 @@ def handle(surface, message):
                 pass
 
 
-def _read_line(stdin, limit: int):
-    line = stdin.readline(limit + 1)
-    if line == b"":
-        return False
-    if len(line) > limit and not line.endswith(b"\n"):
-        while True:
-            chunk = stdin.readline(limit + 1)
-            if not chunk or chunk.endswith(b"\n"):
-                break
-        return None
-    if line.endswith(b"\n"):
-        line = line[:-1]
-    if len(line) > limit:
-        return None
-    return line
+def _read_line(stdin):
+    line = stdin.readline()
+    return line.rstrip(b"\r\n") if line else False
 
 
 def serve(surface):
     stdin = sys.stdin.buffer
     while True:
-        line = _read_line(stdin, MAX_LINE)
+        line = _read_line(stdin)
         if line is False:
             return
         if line is None or not line.strip():
@@ -388,8 +375,8 @@ def serve(surface):
 
 
 def serve_once(surface):
-    raw = sys.stdin.buffer.read(MAX_LINE + 1)
-    if not raw or len(raw) > MAX_LINE:
+    raw = sys.stdin.buffer.read()
+    if not raw:
         return
     line, _, _ = raw.partition(b"\n")
     if not line.strip():

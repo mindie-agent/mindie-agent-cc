@@ -24,14 +24,28 @@ def expansion(command, args="", **extra):
         command_args=args,
         session_id=SESSION,
         prompt_id=PROMPT,
-        cwd="/tmp/project",
-        transcript_path=f"/tmp/{SESSION}.jsonl",
+        cwd=str(Path(tempfile.gettempdir()).resolve()),
+        transcript_path=str(Path(tempfile.gettempdir()) / f"{SESSION}.jsonl"),
     )
     event.update(extra)
     return event
 
 
 class EntryTests(unittest.TestCase):
+    def test_repeated_enable_preserves_omitted_fork_and_account(self):
+        import sharing
+        import consent
+        config = make_config(self.tmp)
+        os.environ['MINDIE_CC_CONFIG'] = str(config)
+        sharing.write_enabled(repository='owner/repo', account='owner',
+                              fork='owner/fork', project_roots=[str(self.tmp)])
+        consent.record_choice('contribute')
+        before = sharing.load().raw
+        sharing.write_enabled(repository='owner/repo', project_roots=[str(self.tmp)])
+        self.assertEqual(sharing.load().raw, before)
+        sharing.write_enabled(repository='owner/other', project_roots=[str(self.tmp)])
+        self.assertIsNone(sharing.load().raw.get('fork'))
+
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
         os.environ.pop("MINDIE_CC_CONFIG", None)
@@ -55,23 +69,24 @@ class EntryTests(unittest.TestCase):
         os.environ["XDG_CONFIG_HOME"] = str(self.tmp / "cfg")
         payload = self.entry.dispatch_event(expansion("mindie-agent:init"))
         self.assertFalse(payload["configured"])
-        self.assertEqual(len(payload["choices"]), 3)
-        self.assertTrue(payload["choices"][0]["recommended"])
+        self.assertEqual(payload["choices"], [])
+        self.assertEqual(payload["experience"], "needs-configuration")
+        self.assertIn("public_repository", payload["required"])
 
     def test_init_read_only_persists(self):
         os.environ["XDG_CONFIG_HOME"] = str(self.tmp / "cfg")
         payload = self.entry.dispatch_event(
-            expansion("mindie-agent:init", "read-only")
+            expansion("mindie-agent:init", "disabled")
         )
-        self.assertEqual(payload["first_use"], "read-only")
+        self.assertEqual(payload["first_use"], "disabled")
         self.assertEqual(payload.get("choices"), [])
 
     def test_entry_skill_names_map_to_init(self):
         """The unified entry — bare or host-namespaced — performs the init op."""
         os.environ["XDG_CONFIG_HOME"] = str(self.tmp / "cfg")
         for name in ("mindie-agent", "mindie-agent:mindie-agent"):
-            payload = self.entry.dispatch_event(expansion(name, "read-only"))
-            self.assertEqual(payload["first_use"], "read-only", name)
+            payload = self.entry.dispatch_event(expansion(name, "disabled"))
+            self.assertEqual(payload["first_use"], "disabled", name)
 
     def test_rejects_non_plugin_source(self):
         with self.assertRaises(ValueError):

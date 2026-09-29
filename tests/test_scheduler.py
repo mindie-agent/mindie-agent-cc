@@ -25,7 +25,7 @@ class SchedulerLauncherTests(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.tmp = Path(self._tmp.name)
         self.config_path = make_config(self.tmp)
-        self.adapter = json.loads(self.config_path.read_text())
+        self.adapter = json.loads(self.config_path.read_text(encoding="utf-8"))
         os.environ["MINDIE_CC_CONFIG"] = str(self.config_path)
         self.gen = self.tmp / "generation"
         self.gen.mkdir()
@@ -48,9 +48,9 @@ class SchedulerLauncherTests(unittest.TestCase):
     def write_launch(self, identity, launcher_text, bounded=True):
         directory = genstate.launch_dir(self.adapter) / identity
         directory.mkdir(parents=True, exist_ok=True)
-        (directory / "mindie_launch.py").write_text(launcher_text)
+        (directory / "mindie_launch.py").write_text(launcher_text, encoding="utf-8")
         if bounded:
-            (directory / "bounded.py").write_text("# bounded\n")
+            (directory / "bounded.py").write_text("# bounded\n", encoding="utf-8")
         return directory / "mindie_launch.py"
 
     def install(self):
@@ -64,6 +64,7 @@ class SchedulerLauncherTests(unittest.TestCase):
         home.mkdir(exist_ok=True)
         with mock.patch.object(updater, "bounded_run", side_effect=fake_run), \
              mock.patch.object(updater.sys, "platform", "darwin"), \
+             mock.patch.object(os, "getuid", return_value=1000, create=True), \
              mock.patch("pathlib.Path.home", return_value=home):
             code = updater.install_schedule()
         plist = home / "Library" / "LaunchAgents" / "agent.mindie.cc-update.plist"
@@ -80,7 +81,7 @@ class SchedulerLauncherTests(unittest.TestCase):
         self.assertIn("--config", payload["ProgramArguments"])
         self.assertEqual(payload["ProgramArguments"][0], sys.executable)
         self.assertTrue(any("launchctl" in cmd[0] for cmd in captured))
-        self.assertEqual(bootstrap.read_text(), STALE)
+        self.assertEqual(bootstrap.read_text(encoding="utf-8"), STALE)
 
     def test_missing_current_launcher_does_not_use_bootstrap(self):
         self.write_current(SHA)
@@ -88,7 +89,7 @@ class SchedulerLauncherTests(unittest.TestCase):
         with self.assertRaises(SystemExit) as raised:
             self.install()
         self.assertIn(SHA, str(raised.exception))
-        self.assertEqual(bootstrap.read_text(), STALE)
+        self.assertEqual(bootstrap.read_text(encoding="utf-8"), STALE)
 
     def test_fresh_source_identity_is_selected(self):
         source = "d8545a3c7c9905745b7b9e9cc833407baa568bd6"

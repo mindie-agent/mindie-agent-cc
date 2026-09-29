@@ -12,7 +12,7 @@ import shlex
 import stat
 from pathlib import Path
 
-from entry_state import consume_prompt, first_use, set_first_use, three_choices
+from entry_state import consume_prompt, first_use, set_first_use, configuration_required
 from identity import is_subagent, require_absolute, require_session, slash_command
 from paths import config_path, engine_config_path, load_adapter_config
 
@@ -287,7 +287,7 @@ def _updater_view():
 
 def _knowledge_status_payload(session=None):
     if not _configured():
-        payload = three_choices()
+        payload = configuration_required()
         if payload["first_use"] in {"read-only", "later", "contribute"}:
             payload["repeat"] = True
             payload["choices"] = []
@@ -321,46 +321,40 @@ def _knowledge_status_payload(session=None):
             failures=admission.get("failures"),
             project_root=admission.get("project_root"),
         )
-    if choice:
-        # The one-time setup is done; it is never presented again.
-        payload["repeat"] = True
-        payload["choices"] = []
-    elif saved["state"] in {"corrupt", "unreadable"}:
-        # Damaged saved state is a fault, never a fresh install: read-only
-        # help keeps working, writes stop, no re-onboarding.
-        payload["repeat"] = True
-        payload["choices"] = []
+    payload["choices"] = []
+    payload["repeat"] = bool(choice or saved["state"] in {"corrupt", "unreadable"}
+                             or sharing_view.get("state") in {"corrupt", "unreadable"}
+                             or consent_mod.marker_exists())
+    # Saved preferences and runtime configuration are distinct facts. A prior
+    # marker/choice must not hide an incomplete or failed experience loop.
+    if saved["state"] in {"corrupt", "unreadable"}:
+        payload["experience"] = "unavailable"
         payload["consent_error"] = dict(state=saved["state"], error=saved["error"])
-        payload["hint"] = (
-            "The saved setup state is damaged. This is NOT a fresh install: "
-            "read-only knowledge keeps working and nothing is collected. "
-            "Repair the file or change settings explicitly via the mindie-agent entry."
-        )
-    elif sharing_view.get("state") == "corrupt" or sharing_view.get("error"):
-        # A damaged settings file is a fault, never a fresh install.
-        payload["repeat"] = True
-        payload["choices"] = []
-        payload["hint"] = (
-            "The saved community settings are damaged. Read-only knowledge "
-            "keeps working and nothing is collected; repair the file or "
-            "change settings explicitly via the mindie-agent entry."
-        )
-    elif saved["state"] == "missing" and consent_mod.marker_exists():
-        # A legacy marker (any state) proves a prior setup: status, never a
-        # fresh onboarding — a damaged marker must not re-ask the choice.
-        payload["repeat"] = True
-        payload["choices"] = []
-    elif not payload["sharing"].get("enabled"):
-        # Genuinely unchosen: cold install or installer default-off. The
-        # one-time setup is presented exactly until a choice is recorded.
-        extra = three_choices()
-        payload["choices"] = extra["choices"]
-        payload["note"] = extra["note"]
-        payload["setup"] = extra["setup"]
-        payload["hint"] = (
-            "Sharing is off: no Stop capture or organizer. "
-            "Knowledge retrieval works after invoking the mindie-agent entry once in this task."
-        )
+        payload["hint"] = "Saved setup state is damaged; experience capture is unavailable. Preserve the file for diagnosis."
+    elif sharing_view.get("state") in {"corrupt", "unreadable"}:
+        payload["experience"] = "unavailable"
+        payload["hint"] = "Community configuration is damaged; experience capture is unavailable."
+    elif choice in {"read-only", "later", "disabled"}:
+        payload["experience"] = "disabled"
+        payload["hint"] = "Experience capture is explicitly disabled; the saved setting is preserved."
+    elif not sharing_view.get("enabled") or not choice:
+        payload["experience"] = "needs-configuration"
+        extra = configuration_required()
+        payload.update(required=extra["required"], note=extra["note"])
+        payload["hint"] = "Configure the missing destination and scope through the native mindie-agent entry."
+    else:
+        from sharing import load
+        settings = load()
+        task = payload.get("this_session") or {}
+        if not settings.allows_capture():
+            payload["experience"] = "unavailable"
+        elif not task.get("bound"):
+            payload["experience"] = "task-unbound"
+        elif not settings.in_scope(task.get("project_root")):
+            payload["experience"] = "out-of-scope"
+        else:
+            payload["experience"] = "configured"
+        payload["hint"] = "Configuration and task binding are prerequisites; inspect captures and contributions for actual processing receipts."
     update = _updater_view()
     if update:
         payload["update"] = update
@@ -400,7 +394,9 @@ def _init_choice_from_native(arguments):
     if not text:
         return None
     token = text.split()[0]
-    if token in {"contribute", "read-only", "later"}:
+    if token in {"read-only", "later"}:
+        raise ValueError("read-only/later product modes were removed; configure the destination and scope, or use disabled")
+    if token in {"contribute", "disabled"}:
         return token
     return None
 
@@ -418,6 +414,9 @@ def _apply_native_choice(payload, native_choice, session=None):
     import consent as consent_mod
 
     try:
+        if native_choice == "disabled" and _configured():
+            from sharing import write_disabled
+            write_disabled()
         stored = set_first_use(native_choice)
     except consent_mod.ConsentError as exc:
         # A damaged saved authority is never silently cleared: the fault
@@ -428,6 +427,7 @@ def _apply_native_choice(payload, native_choice, session=None):
     payload["first_use"] = stored
     payload["choices"] = []
     payload["repeat"] = True
+    payload["experience"] = "disabled"
     return payload
 
 
@@ -493,6 +493,11 @@ def _apply_contribute(payload, session, event, configured):
     except ValueError as exc:
         payload["contribute"] = dict(recorded=False, error=str(exc))
         return payload
+    import consent as consent_mod
+    if consent_mod.load()["state"] in {"corrupt", "unreadable"}:
+        payload["contribute"] = dict(recorded=False, error="saved setup state is damaged")
+        payload["experience"] = "unavailable"
+        return payload
     try:
         result = sharing_mod.write_enabled(**parsed)
     except (ValueError, OSError) as exc:
@@ -500,7 +505,11 @@ def _apply_contribute(payload, session, event, configured):
         return payload
     payload.update(first_use="contribute", choices=[], repeat=True)
     payload["sharing"] = result
-    return _finish_contribution(payload)
+    payload = _finish_contribution(payload)
+    payload.update(status_payload(session))
+    if str(payload.get("service", "")).startswith("prepare-failed:") or payload.get("consent_error"):
+        payload["experience"] = "unavailable"
+    return payload
 
 
 def _record_reporting_decision(enable: bool) -> dict:

@@ -102,7 +102,7 @@ class HookTests(unittest.TestCase):
         )
         result = self._run(BRIDGE, ["expansion"], payload, env)
         self.assertIn("additionalContext", result)
-        self.assertIn("contribute", result["additionalContext"])
+        self.assertIn("needs-configuration", result["additionalContext"])
 
 
 if __name__ == "__main__":

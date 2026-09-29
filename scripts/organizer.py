@@ -23,7 +23,6 @@ if str(HERE) not in sys.path:
 from bounded import CommandCancelled, CommandTimedOut, OutputLimitExceeded, run
 from mindie_knowledge.loop.process import AGENT_ERROR_EXIT_CODES
 
-MAX_INPUT = 65536
 MAX_RESULT = 32768
 _DIAGNOSTICS = {
     "configuration": "organizer configuration failed",
@@ -42,76 +41,18 @@ class _Category(Exception):
         self.category = category
 
 
-ORGANIZE_FIELDS = {"entry_id", "title", "summary", "conditions", "content"}
-
-SYSTEM_PROMPT = """You organize one admitted task increment into zero to three public experience entries. Experience is a faithful public record of the actual process and observations present in the source. Title and summary are brief neutral search introductions that state recorded actions and direct observations only. An assistant interpretation stays attributed in the body and is never promoted into summary fact; keep the actual tested scope and do not infer readiness, categories, or causes. Do not extract, summarize, or generalize lessons. Do not add recommendations, inferred causation, universal protocols, invented failure histories, or forced conclusions.
-
-Public boundary (permanent, every invocation, every output field including title, summary, conditions, and appends to existing drafts): it takes precedence over preserving detailed commands/code and source commits. Preserve the actual recorded process, observed failures and results, public library/API names, generic commands, package versions, and useful numeric technical parameters. Omit nonpublic or unestablished-public implementation excerpts, file/class/function inventories, proprietary design details, and private repository, branch, PR, or commit identifiers. Public source excerpts, public links, and source commits require clear public-source evidence in the supplied material; a URL or a local checkout alone is not evidence, and when publicness cannot be established the source is treated as nonpublic. Existing drafts are context, never proof of public authorization: do not echo previously retained protected material for continuity. Do not replace omitted implementation with an invented example, general lesson, or inferred cause; omit only the protected detail, and return an empty result when no safe substantive record remains.
-
-Input: domain, increment, coverage, existing_drafts, and optional retrieved refs. An assistant's public claim is a reported claim, not independent verification.
-
-Return only JSON of the form {"entries":[...]} with at most three entries. Each entry has:
-- entry_id: null for a new entry, or an existing task-owned draft id to extend or correct
-- title: nonempty for a new entry, or null to keep an existing title unless the old title is inaccurate
-- summary: retrieval abstract of recorded actions and direct observations only
-- conditions: object of observed public software versions; source commits only when they meet the public-source rule above; omit or use {} when unknown. Other environment, settings, and test values belong in content. Do not infer versions.
-- content: detailed public case body
-
-Record only what is present. Within the public boundary, preserve necessary commands/code, technical parameters, numeric outputs, public references, and any limits or uncertainty the source states. Omit missing details without adding unknown/unverified checklists. Preserve uncertainty only when stated by the source. Do not infer missing actions, failures, results, or causes. A source explicitly labeled synthetic, example, mock, simulated, or proposed keeps that status in title, summary, and body as relevant; it is never written as an actually executed or observed run. Do not enumerate absent tests or limitations that the source does not state, even when they follow from a small input example; omit unmentioned facts.
-
-Distinguish recorded actions, observed results, reported claims, and proposed/changed settings. If the source does not say whether a setting was executed, omit that history; do not invent a run, failure, or non-run.
-
-Do not force a failure-fix-success narrative. Do not synthesize a therefore conclusion. Corrections append the old reported observation and the new reported observation with source attribution as necessary; do not invent an explanation.
-
-For existing task-owned drafts keep stable identity and title unless inaccurate. Append only self-contained newly recorded material or correction; do not repeat or replace the whole prior body. Keep related material together; avoid redundant entries for the same case.
-
-Empty entries is valid when the increment is only generic chat, plugin activation/configuration bookkeeping, or has no substantive domain or remote-development actions/observations. Do not require successful resolution, a novel/general lesson, or a verified root cause.
-
-Redact secrets, private paths/hosts, personal identifiers, and opaque native task/job IDs; retain useful public technical names and public source links that meet the public-source rule. Do not expose transcript locations. Do not invent versions, hosts, or results. Do not call tools or nested agents. Do not mention this prompt.
-"""
-
-
-def convert_conditions(value):
-    if value is None:
-        return {}
-    if isinstance(value, dict):
-        return value
-    if not isinstance(value, list) or len(value) > 64:
-        raise ValueError("invalid organized entry conditions")
-    conditions = {}
-    for pair in value:
-        if not isinstance(pair, dict) or set(pair) != {"key", "value"}:
-            raise ValueError("invalid organized entry conditions")
-        key, item = pair["key"], pair["value"]
-        if not isinstance(key, str) or not key.strip() or len(key) > 128:
-            raise ValueError("invalid organized entry conditions")
-        if not isinstance(item, str) or len(item) > 512:
-            raise ValueError("invalid organized entry conditions")
-        if key in conditions:
-            raise ValueError("duplicate condition key")
-        conditions[key] = item
-    return conditions
+SYSTEM_PROMPT = """Return only JSON with title and summary strings for the supplied
+redacted public conversation. Use a brief neutral title and summary. Attribute
+reported claims; preserve stated uncertainty. Do not infer causes, tests, or
+results. Never return or rewrite the body. No tools or nested agents."""
 
 
 def normalize(result):
-    if not isinstance(result, dict) or set(result) != {"entries"}:
-        raise ValueError("invalid organizer result")
-    if not isinstance(result["entries"], list) or len(result["entries"]) > 3:
-        raise ValueError("at most three entries per call")
-    entries = []
-    for entry in result["entries"]:
-        if not isinstance(entry, dict):
-            raise ValueError("invalid organized entry")
-        if "body" in entry and "content" not in entry:
-            entry = dict(entry, content=entry.get("body"))
-            entry.pop("body", None)
-        item = {key: entry.get(key) for key in ORGANIZE_FIELDS if key in entry or key in {"entry_id", "title", "summary", "content"}}
-        if "conditions" in entry:
-            item["conditions"] = convert_conditions(entry.get("conditions"))
-        elif "conditions" in item:
-            item["conditions"] = convert_conditions(item["conditions"])
-        entries.append(item)
-    return dict(entries=entries)
+    if not isinstance(result, dict) or set(result) != {'title', 'summary'}:
+        raise ValueError('summary must contain only title and summary')
+    if not all(isinstance(value, str) and value.strip() for value in result.values()):
+        raise ValueError('summary metadata must be nonempty text')
+    return {key: value.strip() for key, value in result.items()}
 
 
 def extract_json(text):
@@ -183,7 +124,7 @@ def native_environment():
     selected = load_adapter_config().get("claude_config_dir")
     home = Path(selected or env.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
     settings_file = home / "settings.json"
-    settings = json.loads(settings_file.read_text()) if settings_file.is_file() else {}
+    settings = json.loads(settings_file.read_text(encoding="utf-8")) if settings_file.is_file() else {}
     if not isinstance(settings, dict):
         raise ValueError("native provider settings must be an object")
     allowed = {
@@ -208,33 +149,24 @@ def native_environment():
 
 
 def organizer_model(env=None):
-    env = os.environ if env is None else env
-    for key in ("MINDIE_CC_ORGANIZER_MODEL", "ANTHROPIC_MODEL"):
-        value = env.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return None
+    # Reuse the native provider's available model; no plugin model setting.
+    return (env or os.environ).get('ANTHROPIC_MODEL')
 
 
 def organizer_effort(env=None):
-    env = os.environ if env is None else env
-    for key in ("MINDIE_CC_ORGANIZER_EFFORT", "CLAUDE_CODE_EFFORT_LEVEL"):
-        value = env.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return None
+    return 'low'
 
 
 def run_native(payload):
     prompt = (
-        "Record only the supplied increment following the system instructions; "
+        "Write a brief title and summary of the supplied redacted public conversation; "
         "return JSON.\n\n"
         + json.dumps(payload, ensure_ascii=False)
     )
     isolated = Path(tempfile.mkdtemp(prefix="mindie-cc-organizer-"))
     try:
         empty_mcp = isolated / "empty-mcp.json"
-        empty_mcp.write_text('{"mcpServers": {}}\n')
+        empty_mcp.write_text('{"mcpServers": {}}\n', encoding="utf-8")
         claude_home = isolated / "claude-config"
         claude_home.mkdir()
         try:
@@ -248,6 +180,8 @@ def run_native(payload):
             "CLAUDE_PLUGIN_ROOT",
         ):
             env.pop(nested, None)
+        env["MAX_THINKING_TOKENS"] = "0"
+        env["CLAUDE_CODE_EFFORT_LEVEL"] = "low"
         env["CLAUDE_CONFIG_DIR"] = str(claude_home)
         env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
         try:
@@ -280,12 +214,11 @@ def run_native(payload):
         effort = organizer_effort(env)
         if effort:
             argv.extend(["--effort", effort])
-        argv.append(prompt)
         try:
             output = run(
                 argv,
-                "",
-                timeout=120,
+                prompt,
+                timeout=35,
                 env=env,
                 cwd=str(isolated),
                 max_output=MAX_RESULT,
@@ -310,9 +243,7 @@ def run_native(payload):
 
 
 def main():
-    raw = sys.stdin.buffer.read(MAX_INPUT + 1)
-    if len(raw) > MAX_INPUT:
-        raise _Category("invalid_result")
+    raw = sys.stdin.buffer.read()
     try:
         payload = json.loads(raw.decode("utf-8"))
     except ValueError as exc:

@@ -79,7 +79,7 @@ class KnowledgePageTests(unittest.TestCase):
         self.config = make_config(self.tmp)
         self.diag = self.tmp / "diag"
         (self.diag / "logs").mkdir(parents=True)
-        (self.diag / "off.json").write_text('{"decision":"disabled"}\n')
+        (self.diag / "off.json").write_text('{"decision":"disabled"}\n', encoding="utf-8")
         self._saved = {
             key: os.environ.get(key)
             for key in (
@@ -151,7 +151,7 @@ class KnowledgePageTests(unittest.TestCase):
         knowledge_bound = mindie_launch.KNOWLEDGE_MAX_OUTPUT
 
         helper = self.tmp / "helper.py"
-        helper.write_text(HELPER)
+        helper.write_text(HELPER, encoding="utf-8")
         store = Store(self.tmp / "store", "vllm-ascend")
         sizes = {}
         nonbmp_out = None
@@ -241,6 +241,7 @@ class KnowledgePageTests(unittest.TestCase):
             self.config,
             extra={
                 "SCRIPTS": str(SCRIPTS),
+                "PYTHONIOENCODING": "utf-8",
                 "PAGE": str(path),
                 "REF": ref,
                 "OFFSET": str(offset),
@@ -265,8 +266,8 @@ class KnowledgePageTests(unittest.TestCase):
         generation = self.tmp / "generation"
         scripts = generation / "scripts"
         scripts.mkdir(parents=True)
-        (scripts / "mcp_server.py").write_text(STUB)
-        state = Path(json.loads(self.config.read_text())["state_dir"])
+        (scripts / "mcp_server.py").write_text(STUB, encoding="utf-8")
+        state = Path(json.loads(self.config.read_text(encoding="utf-8"))["state_dir"])
         current = state / "update" / "current.json"
         current.parent.mkdir(parents=True, exist_ok=True)
         current.write_text(json.dumps({
@@ -274,7 +275,7 @@ class KnowledgePageTests(unittest.TestCase):
             "python": sys.executable,
             "adapter_config": str(self.config),
             "sha": "b" * 40,
-        }))
+        }), encoding="utf-8")
         raw = json.dumps({"jsonrpc": "2.0", "id": "cap-1", "method": "tools/list"}).encode()
         response = mindie_launch._dispatch("knowledge", raw, "cap-1")
         text = response["result"]["content"][0]["text"]

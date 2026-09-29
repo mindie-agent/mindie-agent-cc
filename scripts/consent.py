@@ -56,7 +56,7 @@ def shared_community_path() -> Path:
 def _store(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2) + "\n")
+    tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     os.replace(tmp, path)
     try:
         path.chmod(0o600)
@@ -76,8 +76,6 @@ def _read_json(path: Path):
         return "missing", None
     except OSError:
         return "unreadable", None
-    if len(raw) > 64 * 1024:
-        return "corrupt", None
     try:
         data = json.loads(raw)
     except ValueError:
@@ -250,7 +248,7 @@ def _repoint_community_keys(effective: Path, result: dict) -> None:
     base = base_config_path()
     targets.append(base)
     try:
-        base_adapter = json.loads(base.read_text())
+        base_adapter = json.loads(base.read_text(encoding="utf-8"))
         if isinstance(base_adapter, dict):
             targets.append(engine_config_path(base_adapter))
     except (OSError, ValueError) as exc:
@@ -263,7 +261,7 @@ def _repoint_community_keys(effective: Path, result: dict) -> None:
         if generation_adapter != base and generation_adapter.is_file():
             targets.append(generation_adapter)
             try:
-                gen_adapter = json.loads(generation_adapter.read_text())
+                gen_adapter = json.loads(generation_adapter.read_text(encoding="utf-8"))
                 if isinstance(gen_adapter, dict):
                     gen_engine = engine_config_path(gen_adapter)
                     if gen_engine.is_file():
@@ -281,7 +279,7 @@ def _repoint_community_keys(effective: Path, result: dict) -> None:
             continue
         seen.add(target)
         try:
-            data = json.loads(target.read_text())
+            data = json.loads(target.read_text(encoding="utf-8"))
             if not isinstance(data, dict):
                 raise ValueError("not a JSON object")
             if data.get("community_config") == str(effective):

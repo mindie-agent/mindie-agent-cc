@@ -10,7 +10,12 @@ A user invokes the mindie-agent entry skill (Claude Code may show it bare or nam
 
 Before a tool call, Claude's `PreToolUse` event supplies the native `tool_use_id`, task, tool name and input. The ensuing MCP request carries the same ID in `_meta["claudecode/toolUseId"]`. The adapter can therefore bind a call to its native task without asking the model to create identity parameters. The binding is consumed once and covers the exact tool and argument digest. Missing or mismatched bindings fail closed. New tasks and forks bind independently through their own entry invocation and never inherit a parent task's capability, job ownership or collectable history.
 
-The first explicit entry offers contribution, read-only use, or later configuration — once, at first setup. Contribution requires a user choice and an explicit public repository, account and project scope. The choice persists for the installation and is never re-asked: restarts, upgrades, forks and failure counts never revoke it, and an explicitly disabled value stays disabled. Task binding and sharing permission are different: read-only use does not enable collection.
+The explicit entry reuses approved configuration and reports only missing
+public destination, account and project scope. It does not offer read-only or
+later product modes. Task binding alone does not establish capture readiness;
+actual processing is evidenced by capture and contribution receipts. Explicit
+disable and saved legacy declines remain disabled until changed. Failures never
+revoke binding.
 
 ## Stop and records
 

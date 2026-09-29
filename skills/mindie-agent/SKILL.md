@@ -9,16 +9,16 @@ namespaced — both are the same entry. Present the MindIE status from the
 UserPromptExpansion hook context. Do not invent a session id, repository,
 account, or project scope. Do not call tools to bind or to enable sharing.
 
-Invoking the entry binds the current task internally and automatically,
-reusing the saved install-level choice. First use offers the one-time
-choices only if no choice was ever saved, and every choice completes
-through this same entry:
-1. Recommended: contribute public experience for the current project — the
-   user names the public destination in ordinary conversation and invokes
-   the entry with `contribute --repository owner/repo --account USER
-   --project-root /absolute/path --visibility public`.
-2. Read-only knowledge; no contribution (`/mindie-agent read-only`).
-3. Configure later; sharing stays off (`/mindie-agent later`).
+Invoking the entry binds this native task. If configuration is incomplete,
+reuse approved values and obtain only the missing destination and scope:
+`/mindie-agent contribute --repository owner/repo --account USER
+--project-root /absolute/path --visibility public`.
+The configured loop captures and processes eligible Stop events automatically.
+Binding, configuration and actual processing receipts are distinct facts.
+Explicit disable and legacy declined settings stay disabled until changed;
+they are not alternative product modes or successful acceptance.
+Report missing configuration, an out-of-scope task or a component failure
+directly. Do not require a deactivate/reactivate recovery cycle.
 
 The first setup also offers the independent reporting choice once
 (`/mindie-agent reporting-enable`, `reporting-disable`, or

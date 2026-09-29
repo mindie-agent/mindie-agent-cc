@@ -47,7 +47,7 @@ def env_for(config=None, extra=None):
 
 def write_json(path: Path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2) + "\n")
+    path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
     return path
 
 

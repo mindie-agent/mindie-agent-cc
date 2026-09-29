@@ -10,13 +10,13 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 class ManifestTests(unittest.TestCase):
     def test_plugin_and_marketplace(self):
-        plugin = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())
-        market = json.loads((ROOT / ".claude-plugin" / "marketplace.json").read_text())
+        plugin = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
+        market = json.loads((ROOT / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
         self.assertEqual(plugin["name"], "mindie-agent")
         self.assertEqual(market["name"], "mindie-agent-cc")
         self.assertEqual(market["plugins"][0]["source"], "./")
         self.assertEqual(market["plugins"][0]["name"], "mindie-agent")
-        hooks = json.loads((ROOT / "hooks" / "hooks.json").read_text())
+        hooks = json.loads((ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
         expansion = hooks["hooks"]["UserPromptExpansion"]
         matchers = {item["matcher"] for item in expansion}
         self.assertIn("mindie-agent:init", matchers)
@@ -27,9 +27,9 @@ class ManifestTests(unittest.TestCase):
         import mindie_launch
 
         self.assertEqual(mindie_launch.HOOK_TOTAL, 1.5)
-        skill = (ROOT / "skills" / "init" / "SKILL.md").read_text()
+        skill = (ROOT / "skills" / "init" / "SKILL.md").read_text(encoding="utf-8")
         self.assertIn("disable-model-invocation: true", skill)
-        mcp = json.loads((ROOT / ".mcp.json").read_text())
+        mcp = json.loads((ROOT / ".mcp.json").read_text(encoding="utf-8"))
         self.assertIn("knowledge", mcp["mcpServers"])
         self.assertIn("remote", mcp["mcpServers"])
         self.assertNotIn("hooks", plugin)
@@ -60,7 +60,7 @@ class ManifestTests(unittest.TestCase):
             path = Path(directory) / "runtime-requirements.txt"
             for text in invalid:
                 with self.subTest(text=text):
-                    path.write_text(text)
+                    path.write_text(text, encoding="utf-8")
                     with self.assertRaises(ValueError):
                         runtime_pins(path)
 

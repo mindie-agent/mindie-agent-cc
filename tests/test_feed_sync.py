@@ -80,7 +80,7 @@ class FeedSyncTests(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp())
         self.config = make_config(self.tmp)
         os.environ["MINDIE_CC_CONFIG"] = str(self.config)
-        self.adapter = json.loads(self.config.read_text())
+        self.adapter = json.loads(self.config.read_text(encoding="utf-8"))
         genstate.write_current(
             {
                 "generation": str(Path(__file__).resolve().parents[1]),

@@ -53,12 +53,12 @@ def _bootstrap_diagnostics():
         marker = generation / ".mindie-generation-complete"
         if marker.is_symlink():
             return
-        flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+        flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
         descriptor = os.open(marker, flags)
         info = os.fstat(descriptor)
-        if not stat.S_ISREG(info.st_mode) or info.st_size > 41:
+        if not stat.S_ISREG(info.st_mode) or info.st_size > 42:
             return
-        if os.read(descriptor, 42).decode().strip() != here.name:
+        if os.read(descriptor, 43).decode().strip() != here.name:
             return
         scripts = generation / "scripts"
         if scripts.resolve() != scripts or not (scripts / "diagnostic_support.py").is_file():
@@ -86,8 +86,6 @@ if getattr(diagnostic_support, "__file__", None) != str(_diagnostic_path):
     _diagnostic_spec.loader.exec_module(diagnostic_support)
     sys.modules["diagnostic_support"] = diagnostic_support
 
-MAX_LINE = 128 * 1024
-MAX_HOOK_BYTES = 128 * 1024
 HOOK_TOTAL = 1.5
 HOOK_LOCK_BUDGET = 0.3
 CALL_LOCK_BUDGET = 5.0
@@ -115,7 +113,7 @@ def _config_path() -> Path:
 
 def _load_config():
     try:
-        data = json.loads(_config_path().read_text())
+        data = json.loads(_config_path().read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     return data if isinstance(data, dict) else None
@@ -131,7 +129,7 @@ def _state_dir(config=None) -> Path:
         engine = config.get("engine_config")
         if isinstance(engine, str):
             try:
-                root = json.loads(Path(engine).read_text()).get("root")
+                root = json.loads(Path(engine).read_text(encoding="utf-8")).get("root")
                 if isinstance(root, str):
                     return Path(root) / "cc-adapter"
             except (OSError, ValueError):
@@ -162,7 +160,7 @@ def _sharing_enabled() -> bool:
     if not path.is_file():
         return False
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         _record_hook("sharing-probe", "configuration")
         return False
@@ -176,7 +174,7 @@ def _sharing_enabled() -> bool:
     if not community_path.is_file():
         return False
     try:
-        raw = json.loads(community_path.read_text())
+        raw = json.loads(community_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         _record_hook("sharing-probe", "configuration")
         return False
@@ -268,7 +266,7 @@ def _release(descriptor) -> None:
 
 def _current(state: Path) -> dict:
     try:
-        data = json.loads((state / "update" / "current.json").read_text())
+        data = json.loads((state / "update" / "current.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         data = None
     if isinstance(data, dict):
@@ -295,6 +293,7 @@ def _current(state: Path) -> dict:
 
 def _child_env(current: dict) -> dict:
     env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
+    env["PYTHONIOENCODING"] = "utf-8"
     env[CONFIG_ENV] = current["adapter_config"]
     return env
 
@@ -316,7 +315,14 @@ def _expansion_error(text: str) -> int:
     return 0
 
 
-def _read_hook_stdin(deadline: float) -> bytes:
+def _read_hook_stdin(deadline):
+    """Deadline-bounded raw fd read; never buffered I/O (shutdown can hang).
+
+    Stops at EOF, the deadline, or the first complete JSON
+    value so a held-open pipe cannot consume the helper's remaining time.
+    Windows native select is sockets-only; a daemon os.read thread is the
+    portable bound (code-only on Windows; not natively verified).
+    """
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         return b""
@@ -328,33 +334,33 @@ def _read_hook_stdin(deadline: float) -> bytes:
         try:
             fd = sys.stdin.fileno()
             while True:
-                with lock:
-                    if len(buf) > MAX_HOOK_BYTES:
-                        return
-                    room = MAX_HOOK_BYTES + 1 - len(buf)
                 try:
-                    chunk = os.read(fd, min(8192, room))
+                    chunk = os.read(fd, 65536)
                 except (OSError, ValueError):
                     return
                 if not chunk:
                     return
                 with lock:
                     buf.extend(chunk)
-                    if len(buf) > MAX_HOOK_BYTES:
-                        return
+                    # Native Stop is one object. Avoid reparsing a growing
+                    # final answer after every chunk (quadratic work).
+                    if not chunk.rstrip().endswith((b'}', b']')):
+                        continue
+                    try:
+                        json.loads(bytes(buf))
+                    except ValueError:
+                        continue
+                    return
         finally:
             finished.set()
 
     thread = threading.Thread(target=reader, daemon=True)
     thread.start()
-    finished.wait(timeout=max(0.0, deadline - time.monotonic()))
+    finished.wait(timeout=max(0.0, remaining))
     if not finished.is_set():
         return b""
     with lock:
-        raw = bytes(buf)
-    if len(raw) > MAX_HOOK_BYTES:
-        return b""
-    return raw
+        return bytes(buf)
 
 
 def _hook(op: str) -> int:
@@ -636,21 +642,9 @@ def _dispatch(surface: str, raw: bytes, ident, cancel=None):
         _release(descriptor)
 
 
-def _read_mcp_line(stdin, limit: int):
-    line = stdin.readline(limit + 1)
-    if line == b"":
-        return False
-    if len(line) > limit and not line.endswith(b"\n"):
-        while True:
-            chunk = stdin.readline(limit + 1)
-            if not chunk or chunk.endswith(b"\n"):
-                break
-        return None
-    if line.endswith(b"\n"):
-        line = line[:-1]
-    if len(line) > limit:
-        return None
-    return line
+def _read_mcp_line(stdin):
+    line = stdin.readline()
+    return line.rstrip(b"\r\n") if line else False
 
 
 def _mcp(surface: str) -> int:
@@ -738,7 +732,7 @@ def _mcp(surface: str) -> int:
 
     try:
         while not transport_closed.is_set():
-            raw = _read_mcp_line(stdin, MAX_LINE)
+            raw = _read_mcp_line(stdin)
             if raw is False:
                 break
             if raw is None or not raw.strip():

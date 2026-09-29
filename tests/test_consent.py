@@ -38,8 +38,9 @@ class ConsentTests(unittest.TestCase):
         import entry_state
 
         payload = self._payload()
-        self.assertEqual(len(payload["choices"]), 3)
-        entry_state.set_first_use("later")
+        self.assertEqual(payload["choices"], [])
+        self.assertEqual(payload["experience"], "needs-configuration")
+        __import__("consent").record_choice("later")
         payload = self._payload()
         self.assertEqual(payload["first_use"], "later")
         self.assertEqual(payload["choices"], [])
@@ -53,7 +54,7 @@ class ConsentTests(unittest.TestCase):
 
         marker = first_use_path()
         marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.write_text(json.dumps({"choice": "read-only"}))
+        marker.write_text(json.dumps({"choice": "read-only"}), encoding="utf-8")
         payload = self._payload()
         self.assertIsNone(payload.get("first_use"))
         self.assertEqual(payload["choices"], [])
@@ -83,7 +84,7 @@ class ConsentTests(unittest.TestCase):
         from paths import first_use_path
 
         first_use_path().parent.mkdir(parents=True, exist_ok=True)
-        first_use_path().write_text("{broken-json")
+        first_use_path().write_text("{broken-json", encoding="utf-8")
         payload = self._payload()
         self.assertEqual(payload["choices"], [])
         self.assertTrue(payload["repeat"])
@@ -93,7 +94,7 @@ class ConsentTests(unittest.TestCase):
 
         path = consent.consent_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("{broken-json")
+        path.write_text("{broken-json", encoding="utf-8")
         payload = self._payload()
         self.assertEqual(payload["choices"], [])
         self.assertEqual(payload["consent_state"], "corrupt")
@@ -102,7 +103,7 @@ class ConsentTests(unittest.TestCase):
     def test_corrupt_settings_is_a_fault_not_onboarding(self):
         import consent
 
-        consent.resolve_community_path().write_text("{broken-json")
+        consent.resolve_community_path().write_text("{broken-json", encoding="utf-8")
         payload = self._payload()
         self.assertEqual(payload["choices"], [])
         self.assertEqual(payload["sharing"]["state"], "corrupt")
@@ -115,7 +116,7 @@ class ConsentTests(unittest.TestCase):
         )
         kimi_scripts = Path(raw)
         self.assertTrue((kimi_scripts / "consent.py").is_file(), kimi_scripts)
-        (self.tmp / "kimi.json").write_text(json.dumps({}))
+        (self.tmp / "kimi.json").write_text(json.dumps({}), encoding="utf-8")
         env = dict(os.environ)
         env.pop("MINDIE_CC_CONFIG", None)
         env["MINDIE_KIMI_CONFIG"] = str(self.tmp / "kimi.json")
@@ -135,10 +136,10 @@ class ConsentTests(unittest.TestCase):
     def test_isolated_profile_does_not_inherit(self):
         import entry_state
 
-        entry_state.set_first_use("later")
+        __import__("consent").record_choice("later")
         other = self.tmp / "other-profile"
         other.mkdir()
-        (other / "cc.json").write_text(json.dumps({}))
+        (other / "cc.json").write_text(json.dumps({}), encoding="utf-8")
         env = dict(os.environ, MINDIE_CC_CONFIG=str(other / "cc.json"))
         code = (
             "import sys,json;sys.path.insert(0,sys.argv[1]);"
