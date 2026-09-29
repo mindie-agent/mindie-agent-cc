@@ -33,7 +33,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: mindie-agent/knowledge
-          ref: e099a80fd99a6d895579b5d016aecf2a96851559
+          ref: c97f08ea08606704c878a7f24373127166a2e7fe
           path: .ci/knowledge
           persist-credentials: false
       - name: Component contracts (not native harness acceptance)
