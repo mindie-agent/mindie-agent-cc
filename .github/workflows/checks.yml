@@ -1,7 +1,11 @@
 name: Adapter checks
 on:
   push:
+    branches: [main]
   pull_request:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:
@@ -33,7 +37,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: mindie-agent/knowledge
-          ref: c97f08ea08606704c878a7f24373127166a2e7fe
+          ref: 6044b140b554825254db73436fb55ae411813808
           path: .ci/knowledge
           persist-credentials: false
       - name: Component contracts (not native harness acceptance)
