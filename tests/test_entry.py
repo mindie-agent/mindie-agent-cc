@@ -24,8 +24,8 @@ def expansion(command, args="", **extra):
         command_args=args,
         session_id=SESSION,
         prompt_id=PROMPT,
-        cwd="/tmp/project",
-        transcript_path=f"/tmp/{SESSION}.jsonl",
+        cwd=str(Path(tempfile.gettempdir()).resolve()),
+        transcript_path=str(Path(tempfile.gettempdir()) / f"{SESSION}.jsonl"),
     )
     event.update(extra)
     return event

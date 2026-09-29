@@ -25,13 +25,13 @@ class UpgradeBootstrapTests(unittest.TestCase):
             shutil.copy2(SCRIPTS / name, self.launch / name)
         for name in ('diagnostic_support.py', 'diagnostic_fallback.py'):
             shutil.copy2(SCRIPTS / name, self.scripts / name)
-        (self.generation / '.mindie-generation-complete').write_text(SHA + '\n')
+        (self.generation / '.mindie-generation-complete').write_text(SHA + '\n', encoding="utf-8")
         manifest = self.generation / 'host-package/.claude-plugin/plugin.json'
         manifest.parent.mkdir(parents=True)
-        manifest.write_text(json.dumps({'name': 'mindie-agent', 'version': '0.1.0+mindie.aaaaaaaaaaaa'}))
+        manifest.write_text(json.dumps({'name': 'mindie-agent', 'version': '0.1.0+mindie.aaaaaaaaaaaa'}), encoding="utf-8")
         self.trap = self.root / 'ambient'
         self.trap.mkdir()
-        (self.trap / 'diagnostic_support.py').write_text("raise AssertionError('ambient module loaded')\n")
+        (self.trap / 'diagnostic_support.py').write_text("raise AssertionError('ambient module loaded')\n", encoding="utf-8")
         self.env = dict(os.environ, PYTHONPATH=str(self.trap))
 
     def tearDown(self):
@@ -43,7 +43,7 @@ class UpgradeBootstrapTests(unittest.TestCase):
                               capture_output=True, text=True, timeout=3, env=self.env)
 
     def test_old_package_uses_own_complete_generation_not_current_or_environment(self):
-        (self.root / 'current.json').write_text(json.dumps({'sha': 'b' * 40}))
+        (self.root / 'current.json').write_text(json.dumps({'sha': 'b' * 40}), encoding="utf-8")
         result = self.metadata()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout), {'revision': SHA, 'version': '0.1.0+mindie.aaaaaaaaaaaa'})
@@ -56,7 +56,7 @@ class UpgradeBootstrapTests(unittest.TestCase):
             if value is None:
                 marker.unlink()
             else:
-                marker.write_text(value)
+                marker.write_text(value, encoding="utf-8")
             result = self.metadata()
             self.assertNotEqual(result.returncode, 0)
             self.assertNotIn('ambient module loaded', result.stderr)
@@ -69,7 +69,7 @@ class UpgradeBootstrapTests(unittest.TestCase):
 
     def test_metadata_rejects_symlink(self):
         other = self.root / 'unrelated-build.json'
-        other.write_text(json.dumps({'revision': 'b' * 40, 'version': 'unrelated'}))
+        other.write_text(json.dumps({'revision': 'b' * 40, 'version': 'unrelated'}), encoding="utf-8")
         try:
             (self.scripts / 'diagnostic-build.json').symlink_to(other)
         except OSError:
@@ -80,7 +80,7 @@ class UpgradeBootstrapTests(unittest.TestCase):
 
     def test_sharing_off_stop_needs_no_input_or_current_generation(self):
         config = self.root / 'cc.json'
-        config.write_text('{}')
+        config.write_text('{}', encoding="utf-8")
         process = subprocess.Popen([sys.executable, str(self.launch / 'mindie_launch.py'),
                                     '--config', str(config), 'hook', 'stop'],
                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE,

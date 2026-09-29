@@ -250,7 +250,7 @@ class SetupIdentityTests(LaneCase):
         proc = self._run_setup(config, data)
         if reason is None:
             self.assertEqual(proc.returncode, 0, proc.stderr[-1500:])
-            community = json.loads(config.with_name("mindie-community.json").read_text())
+            community = json.loads(config.with_name("mindie-community.json").read_text(encoding="utf-8"))
             self.assertEqual(
                 community.get("consent_config"),
                 str((config.parent / "mindie-consent.json").resolve()),
@@ -636,7 +636,7 @@ class SetupIdentityTests(LaneCase):
         )
         report = json.loads(proc.stdout)
         self.assertEqual(report.get("local_candidates", {}).get("mindie-knowledge"), commit)
-        community = json.loads(config.with_name("mindie-community.json").read_text())
+        community = json.loads(config.with_name("mindie-community.json").read_text(encoding="utf-8"))
         self.assertEqual(
             Path(community["consent_config"]).resolve(),
             (config.parent / "mindie-consent.json").resolve(),
@@ -659,7 +659,7 @@ class ConsentFileTests(LaneCase):
 
         community = self.tmp / "mindie-community.json"
         setup.write_community(community, None)
-        written = json.loads(community.read_text())
+        written = json.loads(community.read_text(encoding="utf-8"))
         expected = str((community.parent / "mindie-consent.json").resolve())
         self.assertEqual(written.get("consent_config"), expected)
         self.assertIs(written.get("enabled"), False)
@@ -680,7 +680,7 @@ class ConsentFileTests(LaneCase):
         )
         enabled = self.tmp / "enabled-community.json"
         setup.write_community(enabled, payload)
-        enabled_data = json.loads(enabled.read_text())
+        enabled_data = json.loads(enabled.read_text(encoding="utf-8"))
         self.assertEqual(
             Path(enabled_data.get("consent_config", "")).resolve(),
             (enabled.parent / "mindie-consent.json").resolve(),
@@ -691,11 +691,11 @@ class ConsentFileTests(LaneCase):
 
         case = self.tmp / "status"
         config = self._config(case)
-        engine = Path(json.loads(config.read_text())["engine_config"])
-        community = Path(json.loads(config.read_text())["community_config"])
+        engine = Path(json.loads(config.read_text(encoding="utf-8"))["engine_config"])
+        community = Path(json.loads(config.read_text(encoding="utf-8"))["community_config"])
         marker = case / "state" / "cc.first-use.json"
         marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.write_text(json.dumps({"choice": "read-only"}) + "\n")
+        marker.write_text(json.dumps({"choice": "read-only"}) + "\n", encoding="utf-8")
         before = {
             "adapter": config.read_bytes(),
             "engine": engine.read_bytes(),
@@ -799,7 +799,7 @@ class ConsentFileTests(LaneCase):
                 }
             )
             + "\n"
-        )
+        , encoding="utf-8")
         ctx = multiprocessing.get_context("spawn")
         barrier = ctx.Barrier(2)
         rounds = 20
@@ -827,7 +827,7 @@ class ConsentFileTests(LaneCase):
             [],
             "cross-process consent update failed: " + "; ".join(details),
         )
-        saved = json.loads(path.read_text())
+        saved = json.loads(path.read_text(encoding="utf-8"))
         self.assertEqual(saved.get("choice"), "disabled")
         self.assertEqual(saved.get("reporting"), "enabled")
 
@@ -877,15 +877,15 @@ class StopGateTests(LaneCase):
                     }
                 )
                 + "\n"
-            )
+            , encoding="utf-8")
         if authority is not None:
             target = case / "authority" / "mindie-consent.json"
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(json.dumps(authority) + "\n")
-            community = Path(json.loads(config.read_text())["community_config"])
-            data = json.loads(community.read_text())
+            target.write_text(json.dumps(authority) + "\n", encoding="utf-8")
+            community = Path(json.loads(config.read_text(encoding="utf-8"))["community_config"])
+            data = json.loads(community.read_text(encoding="utf-8"))
             data["consent_config"] = str(target.resolve())
-            community.write_text(json.dumps(data, indent=2) + "\n")
+            community.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
         prepare_schema(str(engine_config_path()))
         current_dir = case / "state" / "update"
         current_dir.mkdir(parents=True, exist_ok=True)
@@ -899,7 +899,7 @@ class StopGateTests(LaneCase):
                 }
             )
             + "\n"
-        )
+        , encoding="utf-8")
         return config, project, outside
 
     def _stop(self, case: Path, project: Path, *, session=None, prompt=None, sentinel="SENTINEL"):
@@ -910,7 +910,7 @@ class StopGateTests(LaneCase):
         admission.activate(session, project_root=str(project), root_session=session)
         transcript = project / "turn.jsonl"
         transcript.parent.mkdir(parents=True, exist_ok=True)
-        transcript.write_text(sentinel + "\n")
+        transcript.write_text(sentinel + "\n", encoding="utf-8")
         payload = {
             "hook_event_name": "Stop",
             "session_id": session,
@@ -946,7 +946,7 @@ class StopGateTests(LaneCase):
             )
             self.assertEqual(first.returncode, 0, first.stderr.decode()[:500])
             self.assertEqual(json.loads(first.stdout.decode() or "{}"), {})
-            self.assertEqual([row[0] for row in rows], [sentinel])
+            self.assertEqual([row[0] for row in rows], [""])  # notification carries no duplicate body
             second, rows, _wake = self._stop(
                 case, project, session=session, prompt=prompt, sentinel=sentinel
             )
@@ -1015,7 +1015,7 @@ class StopGateTests(LaneCase):
         try:
             proc, rows, _wake = self._stop(case, project, sentinel="SENTINEL-legacy-field")
             self.assertEqual(proc.returncode, 0, proc.stderr.decode()[:400])
-            self.assertEqual([row[0] for row in rows], ["SENTINEL-legacy-field"])
+            self.assertEqual([row[0] for row in rows], [""])
         finally:
             reap_services(case)
 
@@ -1024,7 +1024,7 @@ class StopGateTests(LaneCase):
         config, project, _outside = self._arm(case, sharing=True, choice="contribute")
         migration = self._migrate()
         self.assertFalse(migration.get("errors"), migration)
-        community = Path(json.loads(config.read_text())["community_config"])
+        community = Path(json.loads(config.read_text(encoding="utf-8"))["community_config"])
         authority = case / "disabled-authority.json"
         authority.write_text(
             json.dumps(
@@ -1035,11 +1035,11 @@ class StopGateTests(LaneCase):
                 }
             )
             + "\n"
-        )
-        data = json.loads(community.read_text())
+        , encoding="utf-8")
+        data = json.loads(community.read_text(encoding="utf-8"))
         data["consent_config"] = str(authority.resolve())
-        community.write_text(json.dumps(data, indent=2) + "\n")
-        pointer = json.loads(config.read_text())["community_config"]
+        community.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        pointer = json.loads(config.read_text(encoding="utf-8"))["community_config"]
         try:
             proc, rows, wake = self._stop(case, project, sentinel="SENTINEL-field-target")
             self.assertEqual(proc.returncode, 0, proc.stderr.decode()[:400])
@@ -1047,20 +1047,20 @@ class StopGateTests(LaneCase):
             self.assertFalse(wake)
         finally:
             reap_services(case)
-        self.assertEqual(json.loads(config.read_text())["community_config"], pointer)
+        self.assertEqual(json.loads(config.read_text(encoding="utf-8"))["community_config"], pointer)
 
     def test_corrupt_shared_authority_does_not_fall_back(self):
         case = self.tmp / "corrupt-shared"
         config, project, _outside = self._arm(case, sharing=True, choice="contribute")
-        legacy = Path(json.loads(config.read_text())["community_config"])
+        legacy = Path(json.loads(config.read_text(encoding="utf-8"))["community_config"])
         legacy_bytes = legacy.read_bytes()
         shared = config.parent / "mindie-community.json"
         shared.write_bytes(b"{not-a-community-document\n")
-        engine = Path(json.loads(config.read_text())["engine_config"])
+        engine = Path(json.loads(config.read_text(encoding="utf-8"))["engine_config"])
         for path in (config, engine):
-            document = json.loads(path.read_text())
+            document = json.loads(path.read_text(encoding="utf-8"))
             document["community_config"] = str(shared.resolve())
-            path.write_text(json.dumps(document, indent=2) + "\n")
+            path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
         try:
             proc, rows, wake = self._stop(case, project, sentinel="SENTINEL-corrupt-shared")
             self.assertEqual(proc.returncode, 0, proc.stderr.decode()[:400])
@@ -1068,15 +1068,15 @@ class StopGateTests(LaneCase):
             self.assertFalse(wake)
         finally:
             reap_services(case)
-        self.assertEqual(json.loads(config.read_text())["community_config"], str(shared.resolve()))
+        self.assertEqual(json.loads(config.read_text(encoding="utf-8"))["community_config"], str(shared.resolve()))
         self.assertEqual(legacy.read_bytes(), legacy_bytes)
         self.assertEqual(shared.read_bytes(), b"{not-a-community-document\n")
 
     def test_stop_does_not_rewrite_install_files(self):
         case = self.tmp / "rewrite"
         config, project, _outside = self._arm(case, sharing=True, choice="contribute")
-        engine = Path(json.loads(config.read_text())["engine_config"])
-        community = Path(json.loads(config.read_text())["community_config"])
+        engine = Path(json.loads(config.read_text(encoding="utf-8"))["engine_config"])
+        community = Path(json.loads(config.read_text(encoding="utf-8"))["community_config"])
         before = (config.read_bytes(), engine.read_bytes(), community.read_bytes())
         try:
             proc, _rows, _wake = self._stop(case, project, sentinel="SENTINEL-rewrite")
@@ -1167,7 +1167,7 @@ class EntryContractTests(LaneCase):
         config, project = self._config(False)
         marker = self.tmp / "entry" / "state" / "cc.first-use.json"
         marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.write_text(json.dumps({"choice": "read-only"}) + "\n")
+        marker.write_text(json.dumps({"choice": "read-only"}) + "\n", encoding="utf-8")
         status = entry.status_payload()
         self.assertEqual(status.get("choices"), [])
         self.assertFalse((config.parent / "mindie-consent.json").exists())
@@ -1228,7 +1228,7 @@ class EntryContractTests(LaneCase):
     def test_ordinary_mention_does_not_choose_or_bind(self):
         config, project = self._config(False)
         transcript = project / "transcript.jsonl"
-        transcript.write_text("{}\n")
+        transcript.write_text("{}\n", encoding="utf-8")
         base = {
             "hook_event_name": "UserPromptExpansion",
             "command_name": "mindie-agent",
@@ -1252,8 +1252,8 @@ class EntryContractTests(LaneCase):
                 )
                 self.assertEqual(proc.returncode, 0, proc.stderr.decode()[:400])
                 self.assertFalse((config.parent / "mindie-consent.json").exists())
-                adapter = json.loads(config.read_text())
-                engine = json.loads(Path(adapter["engine_config"]).read_text())
+                adapter = json.loads(config.read_text(encoding="utf-8"))
+                engine = json.loads(Path(adapter["engine_config"]).read_text(encoding="utf-8"))
                 self.assertFalse(Path(engine["admission_path"]).exists())
 
     def test_first_entry_offers_reporting_with_the_knowledge_choice(self):
@@ -1338,7 +1338,7 @@ class EntryContractTests(LaneCase):
         self.assertEqual(path.read_bytes(), original)
 
     def test_skill_text_does_not_require_sharing_enable(self):
-        text = (ROOT / "skills" / "mindie-agent" / "SKILL.md").read_text()
+        text = (ROOT / "skills" / "mindie-agent" / "SKILL.md").read_text(encoding="utf-8")
         self.assertNotIn("sharing-enable", text)
 
 
@@ -1354,12 +1354,12 @@ class AuthorityMigrationTests(LaneCase):
         outside.mkdir()
         config = support.make_config(case, sharing=True, roots=[str(project)])
         self._use(config)
-        declared = Path(json.loads(config.read_text())["community_config"])
+        declared = Path(json.loads(config.read_text(encoding="utf-8"))["community_config"])
         shared = config.parent / "mindie-community.json"
-        other = json.loads(declared.read_text())
+        other = json.loads(declared.read_text(encoding="utf-8"))
         other["project_roots"] = [str(project.resolve()), str(outside.resolve())]
         other["enabled"] = True
-        shared.write_text(json.dumps(other, indent=2) + "\n")
+        shared.write_text(json.dumps(other, indent=2) + "\n", encoding="utf-8")
         declared_bytes = declared.read_bytes()
         shared_bytes = shared.read_bytes()
         result = consent.migrate_community()
@@ -1367,7 +1367,7 @@ class AuthorityMigrationTests(LaneCase):
         self.assertFalse(result.get("migrated"))
         self.assertEqual(declared.read_bytes(), declared_bytes)
         self.assertEqual(shared.read_bytes(), shared_bytes)
-        self.assertEqual(json.loads(config.read_text())["community_config"], str(declared))
+        self.assertEqual(json.loads(config.read_text(encoding="utf-8"))["community_config"], str(declared))
 
     def test_corrupt_declared_migration_is_not_success(self):
         import consent
@@ -1377,7 +1377,7 @@ class AuthorityMigrationTests(LaneCase):
         case.mkdir()
         config = support.make_config(case, sharing=True)
         self._use(config)
-        declared = Path(json.loads(config.read_text())["community_config"])
+        declared = Path(json.loads(config.read_text(encoding="utf-8"))["community_config"])
         declared.write_bytes(b"{broken-community\n")
         result = consent.migrate_community()
         self.assertTrue(result.get("errors"), result)
@@ -1395,17 +1395,17 @@ class AuthorityMigrationTests(LaneCase):
         project.mkdir(parents=True)
         config = support.make_config(case, sharing=True, roots=[str(project)])
         self._use(config)
-        declared = Path(json.loads(config.read_text())["community_config"])
-        generation = json.loads(declared.read_text())["generation"]
+        declared = Path(json.loads(config.read_text(encoding="utf-8"))["community_config"])
+        generation = json.loads(declared.read_text(encoding="utf-8"))["generation"]
         first = consent.migrate_community()
         self.assertFalse(first.get("errors"), first)
         effective = Path(first["effective"])
-        stamped = json.loads(effective.read_text())
+        stamped = json.loads(effective.read_text(encoding="utf-8"))
         self.assertEqual(stamped.get("generation"), generation)
         self.assertTrue(stamped.get("consent_config"))
         second = consent.migrate_community()
         self.assertFalse(second.get("conflict"), second)
-        self.assertEqual(json.loads(effective.read_text()).get("generation"), generation)
+        self.assertEqual(json.loads(effective.read_text(encoding="utf-8")).get("generation"), generation)
 
     def test_kimi_choice_is_the_same_profile_authority(self):
         """Uses the committed kimi adapter scripts, not a second CC config."""
@@ -1421,7 +1421,7 @@ class AuthorityMigrationTests(LaneCase):
         (case / "project").mkdir()
         config = support.make_config(case, sharing=False)
         kimi_config = case / "kimi.json"
-        kimi_config.write_text("{}\n")
+        kimi_config.write_text("{}\n", encoding="utf-8")
         env = self._env(config)
         env.pop("MINDIE_CC_CONFIG", None)
         env["MINDIE_KIMI_CONFIG"] = str(kimi_config)
@@ -1449,7 +1449,7 @@ class AuthorityMigrationTests(LaneCase):
         other = self.tmp / "isolated"
         other.mkdir()
         other_config = other / "cc.json"
-        other_config.write_text("{}\n")
+        other_config.write_text("{}\n", encoding="utf-8")
         probe = subprocess.run(
             [
                 sys.executable,
@@ -1503,7 +1503,7 @@ def _profile_mutation(config, home, scripts, kind, entered):
     except Exception:
         import traceback
 
-        Path(config).with_suffix(".worker-error").write_text(traceback.format_exc())
+        Path(config).with_suffix(".worker-error").write_text(traceback.format_exc(), encoding="utf-8")
         raise
 
 
@@ -1551,7 +1551,7 @@ class StampRaceTests(LaneCase):
                     {"schema": "mindie-consent/1", "choice": "later", "reporting": "disabled"}
                 )
                 + "\n"
-            )
+            , encoding="utf-8")
             barrier = ctx.Barrier(2)
             stamp = ctx.Process(
                 target=_community_mutation_worker,
@@ -1574,9 +1574,9 @@ class StampRaceTests(LaneCase):
             if stamp.exitcode != 0 or disable.exitcode != 0:
                 losses.append(f"{index}: exit {stamp.exitcode}/{disable.exitcode}")
                 continue
-            pointer = json.loads(config.read_text()).get("community_config")
+            pointer = json.loads(config.read_text(encoding="utf-8")).get("community_config")
             try:
-                data = json.loads(Path(pointer).read_text())
+                data = json.loads(Path(pointer).read_text(encoding="utf-8"))
             except (OSError, ValueError, TypeError) as exc:
                 losses.append(f"{index}: unreadable authority {exc}")
                 continue
@@ -1613,7 +1613,7 @@ class CanonicalWriteTests(LaneCase):
             sharing.write_disabled()
         self.assertEqual(legacy.read_bytes(), raw)
         self.assertFalse(canonical.exists())
-        self.assertEqual(json.loads(config.read_text())["community_config"], str(legacy))
+        self.assertEqual(json.loads(config.read_text(encoding="utf-8"))["community_config"], str(legacy))
 
     def test_disable_after_migration_does_not_replay_onto_legacy(self):
         import consent
@@ -1625,16 +1625,16 @@ class CanonicalWriteTests(LaneCase):
         self.assertFalse(result.get("errors"), result)
         self.assertEqual(Path(result["effective"]).resolve(), canonical.resolve())
         self.assertEqual(legacy.read_bytes(), before)
-        stamped = json.loads(canonical.read_text())
+        stamped = json.loads(canonical.read_text(encoding="utf-8"))
         self.assertEqual(stamped.get("generation"), "gen-test")
         self.assertTrue(stamped.get("consent_config"))
         sharing.write_disabled()
         self.assertEqual(legacy.read_bytes(), before)
-        current = json.loads(canonical.read_text())
+        current = json.loads(canonical.read_text(encoding="utf-8"))
         self.assertIs(current.get("enabled"), False)
         self.assertEqual(current.get("consent_config"), stamped["consent_config"])
         self.assertNotEqual(current.get("generation"), "gen-test")
-        pointer = json.loads(config.read_text())["community_config"]
+        pointer = json.loads(config.read_text(encoding="utf-8"))["community_config"]
         self.assertEqual(Path(pointer).resolve(), canonical.resolve())
         self.assertFalse((legacy.parent / (legacy.name + ".lock")).exists())
         self.assertTrue((canonical.parent / (canonical.name + ".lock")).exists())
@@ -1672,7 +1672,7 @@ class CanonicalWriteTests(LaneCase):
             detail = ""
             error_path = config.with_suffix(".worker-error")
             if error_path.is_file():
-                detail = error_path.read_text()[-800:]
+                detail = error_path.read_text(encoding="utf-8")[-800:]
             self.assertFalse(worker.is_alive(), detail)
             self.assertEqual(worker.exitcode, 0, detail)
         finally:
@@ -1687,15 +1687,15 @@ class CanonicalWriteTests(LaneCase):
 
     def test_migration_waits_on_the_canonical_lock(self):
         config, _legacy, canonical = self._assert_blocks_on_canonical_lock("stamp")
-        pointer = json.loads(config.read_text())["community_config"]
+        pointer = json.loads(config.read_text(encoding="utf-8"))["community_config"]
         self.assertEqual(Path(pointer).resolve(), canonical.resolve())
-        stamped = json.loads(canonical.read_text())
+        stamped = json.loads(canonical.read_text(encoding="utf-8"))
         self.assertEqual(stamped.get("generation"), "gen-test")
         self.assertTrue(stamped.get("consent_config"))
 
     def test_disable_waits_on_the_canonical_lock(self):
         _config, legacy, canonical = self._assert_blocks_on_canonical_lock("disable")
-        self.assertIs(json.loads(legacy.read_text()).get("enabled"), False)
+        self.assertIs(json.loads(legacy.read_text(encoding="utf-8")).get("enabled"), False)
         self.assertFalse(canonical.is_file())
 
 
@@ -1762,7 +1762,7 @@ class BootstrapCommunityWriterTests(LaneCase):
             setup.write_community(explicit, self._explicit(self.tmp / "explicit-root")),
             "enabled",
         )
-        written = json.loads(explicit.read_text())
+        written = json.loads(explicit.read_text(encoding="utf-8"))
         self.assertEqual(written.get("schema"), "mindie-community-config/1")
         self.assertIs(written.get("enabled"), True)
         self.assertEqual(
@@ -1771,7 +1771,7 @@ class BootstrapCommunityWriterTests(LaneCase):
         )
         default_off = self.tmp / "first-off.json"
         self.assertEqual(setup.write_community(default_off, None), "off")
-        off = json.loads(default_off.read_text())
+        off = json.loads(default_off.read_text(encoding="utf-8"))
         self.assertEqual(off.get("schema"), "mindie-community-config/1")
         self.assertIs(off.get("enabled"), False)
 
@@ -1793,12 +1793,12 @@ class BootstrapCommunityWriterTests(LaneCase):
                 }
             )
             + "\n"
-        )
+        , encoding="utf-8")
         self.assertEqual(
             setup.write_community(path, self._explicit(self.tmp / "repair-root")),
             "enabled",
         )
-        written = json.loads(path.read_text())
+        written = json.loads(path.read_text(encoding="utf-8"))
         self.assertEqual(written.get("schema"), "mindie-community-config/1")
         self.assertIs(written.get("enabled"), True)
         self.assertNotEqual(written.get("generation"), "stale-generation")
@@ -1846,7 +1846,7 @@ class BootstrapCommunityWriterTests(LaneCase):
             self.assertEqual(held.read(), old)
         finally:
             held.close()
-        published = json.loads(path.read_text())
+        published = json.loads(path.read_text(encoding="utf-8"))
         self.assertEqual(published.get("schema"), "mindie-community-config/1")
         self.assertIs(published.get("enabled"), True)
         self.assertNotEqual(published.get("generation"), "old-generation")
@@ -1864,7 +1864,7 @@ class HookManifestTests(LaneCase):
         from native_claude import render_hooks
 
         accepted = set(identity.COMMANDS)
-        committed = json.loads((ROOT / "hooks" / "hooks.json").read_text())
+        committed = json.loads((ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
         committed_matchers = {
             item.get("matcher")
             for item in committed["hooks"]["UserPromptExpansion"]

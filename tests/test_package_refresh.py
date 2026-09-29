@@ -23,7 +23,7 @@ SHA = "a" * 40
 
 def _touch(path: Path, text="{}\n"):
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text)
+    path.write_text(text, encoding="utf-8")
 
 
 class PackageRefreshTests(unittest.TestCase):
@@ -46,10 +46,10 @@ class PackageRefreshTests(unittest.TestCase):
         })
         diagnostics_env.start()
         self.addCleanup(diagnostics_env.stop)
-        self.adapter = json.loads(self.config.read_text())
+        self.adapter = json.loads(self.config.read_text(encoding="utf-8"))
         self.adapter["base_config"] = str(self.config)
-        self.config.write_text(json.dumps(self.adapter))
-        self.adapter = json.loads(self.config.read_text())
+        self.config.write_text(json.dumps(self.adapter), encoding="utf-8")
+        self.adapter = json.loads(self.config.read_text(encoding="utf-8"))
 
     def tearDown(self):
         os.environ.pop("MINDIE_CC_CONFIG", None)
@@ -164,7 +164,7 @@ class PackageRefreshTests(unittest.TestCase):
     def _eligible_generation(self):
         generation = self.genstate.generations_dir(self.adapter) / SHA
         shutil.copytree(ROOT / ".claude-plugin", generation / ".claude-plugin")
-        (generation / self.updater.COMPLETE).write_text(SHA + "\n")
+        (generation / self.updater.COMPLETE).write_text(SHA + "\n", encoding="utf-8")
         _touch(generation / "skills/reporting-status/SKILL.md", "read-only status")
         launcher = self.genstate.launch_dir(self.adapter) / SHA / "mindie_launch.py"
         _touch(launcher, "# launcher\n")
@@ -311,7 +311,7 @@ class PackageRefreshTests(unittest.TestCase):
         package = Path(current["native_package"])
         manifest = package / ".claude-plugin/plugin.json"
         original = manifest.read_bytes()
-        manifest.write_text(json.dumps({"name": "mindie-agent", "version": "wrong"}))
+        manifest.write_text(json.dumps({"name": "mindie-agent", "version": "wrong"}), encoding="utf-8")
         with self.assertRaisesRegex(self.updater.CheckFailed, "committed native package"):
             self.updater._plan_package_refresh(self.adapter, current, SHA)
         manifest.write_bytes(original)

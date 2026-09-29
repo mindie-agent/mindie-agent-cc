@@ -22,7 +22,6 @@ SESSION_RE = re.compile(
     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\Z"
 )
 CALL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}\Z")
-MAX_HOOK_BYTES = 128 * 1024
 
 COMMANDS = {
     # The single user entry is the mindie-agent skill itself; Claude Code may
@@ -67,8 +66,6 @@ def require_call_id(value) -> str:
 
 
 def parse_hook(raw: bytes) -> dict:
-    if len(raw) > MAX_HOOK_BYTES:
-        raise ValueError("hook input exceeds limit")
     event = json.loads(raw)
     if not isinstance(event, dict):
         raise ValueError("hook payload must be one JSON object")

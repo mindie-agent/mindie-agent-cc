@@ -197,7 +197,7 @@ def verify_readback(config, package: Path, version: str, *, listing=None, market
         if not manifest.is_file():
             problems.append("installed plugin.json missing")
         else:
-            installed = json.loads(manifest.read_text())
+            installed = json.loads(manifest.read_text(encoding="utf-8"))
             if installed.get("version") != version or installed.get("name") != PLUGIN_ID:
                 problems.append(
                     f"installed manifest name={installed.get('name')!r} "
@@ -206,10 +206,10 @@ def verify_readback(config, package: Path, version: str, *, listing=None, market
         hooks_path = Path(install_path) / "hooks" / "hooks.json"
         mcp_path = Path(install_path) / ".mcp.json"
         try:
-            installed_hooks = json.loads(hooks_path.read_text())
-            installed_mcp = json.loads(mcp_path.read_text())
-            target_hooks = json.loads((package / "hooks" / "hooks.json").read_text())
-            target_mcp = json.loads((package / ".mcp.json").read_text())
+            installed_hooks = json.loads(hooks_path.read_text(encoding="utf-8"))
+            installed_mcp = json.loads(mcp_path.read_text(encoding="utf-8"))
+            target_hooks = json.loads((package / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+            target_mcp = json.loads((package / ".mcp.json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
             problems.append("installed hooks or .mcp.json missing")
         else:
@@ -347,8 +347,8 @@ def write_host_package(source: Path, package: Path, *, python: str, launcher: Pa
     if package.exists():
         shutil.rmtree(package)
     package.mkdir(parents=True)
-    manifest = json.loads((source / ".claude-plugin" / "plugin.json").read_text())
-    market = json.loads((source / ".claude-plugin" / "marketplace.json").read_text())
+    manifest = json.loads((source / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
+    market = json.loads((source / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
     manifest["version"] = version
     manifest.pop("hooks", None)
     manifest.pop("mcpServers", None)
@@ -356,18 +356,18 @@ def write_host_package(source: Path, package: Path, *, python: str, launcher: Pa
     (package / ".claude-plugin").mkdir()
     (package / ".claude-plugin" / "plugin.json").write_text(
         json.dumps(manifest, indent=2) + "\n"
-    )
+    , encoding="utf-8")
     (package / ".claude-plugin" / "marketplace.json").write_text(
         json.dumps(market, indent=2) + "\n"
-    )
+    , encoding="utf-8")
     hooks_dir = package / "hooks"
     hooks_dir.mkdir()
     (hooks_dir / "hooks.json").write_text(
         json.dumps(render_hooks(python, str(launcher), config_file), indent=2) + "\n"
-    )
+    , encoding="utf-8")
     (package / ".mcp.json").write_text(
         json.dumps(render_mcp(python, str(launcher), config_file), indent=2) + "\n"
-    )
+    , encoding="utf-8")
     skills = source / "skills"
     if skills.is_dir():
         shutil.copytree(skills, package / "skills")

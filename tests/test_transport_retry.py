@@ -158,7 +158,7 @@ class RetryTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         root = Path(self.tmp.name)
         self.config_path = make_config(root / "cfg")
-        self.adapter = json.loads(self.config_path.read_text())
+        self.adapter = json.loads(self.config_path.read_text(encoding="utf-8"))
         os.environ["MINDIE_CC_CONFIG"] = str(self.config_path)
         generation = root / "generation"
         generation.mkdir()
@@ -170,7 +170,7 @@ class RetryTests(unittest.TestCase):
         }, self.adapter)
         launcher = genstate.launch_dir(self.adapter) / CURRENT / "mindie_launch.py"
         launcher.parent.mkdir(parents=True)
-        launcher.write_text("# retained launcher\n")
+        launcher.write_text("# retained launcher\n", encoding="utf-8")
         self.calls = {"stage": 0, "switch": 0, "resolve": 0}
         self.clock = Clock()
         self._time = patch("updater.time.time", self.clock)
@@ -313,6 +313,7 @@ class RetryTests(unittest.TestCase):
         self.assertEqual(view["recovery"], "recovered")
         self.assertNotIn("failed_sha", view)
 
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "POSIX FIFO contract")
     def test_fifo_metadata_is_unavailable_immediately(self):
         path = genstate.failed_path(self.adapter)
         path.parent.mkdir(parents=True, exist_ok=True)

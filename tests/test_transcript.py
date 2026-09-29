@@ -28,8 +28,8 @@ class TranscriptTests(unittest.TestCase):
         self.assertEqual(result["status"], "ok")
         self.assertGreater(result["records"], 0)
         self.assertIn("No matching notes yet", result["text"])
-        self.assertIn("knowledge_query", result["text"])
-        self.assertIn("call_00_abc", result["text"])
+        self.assertNotIn("knowledge_query", result["text"])
+        self.assertNotIn("call_00_abc", result["text"])
         self.assertNotIn("omitted-placeholder", result["text"])
         self.assertNotIn("subagent hidden", result["text"])
         self.assertNotIn("Base directory for this skill", result["text"])
@@ -65,7 +65,7 @@ class TranscriptTests(unittest.TestCase):
 
     def test_established_session_file_keeps_an_unrecognized_page(self):
         path = self.tmp / f"{SESSION}.jsonl"
-        path.write_text("\n".join('{"type":"noise","n":%d}' % i for i in range(20)) + "\n")
+        path.write_text("\n".join('{"type":"noise","n":%d}' % i for i in range(20)) + "\n", encoding="utf-8")
         with path.open("a", encoding="utf-8") as stream:
             stream.write('{"type":"user","sessionId":"%s","message":{"role":"user","content":"later public"}}\n' % SESSION)
         identity = transcript.identify(str(path))

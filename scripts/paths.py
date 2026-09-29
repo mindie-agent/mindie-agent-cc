@@ -31,7 +31,7 @@ def load_adapter_config() -> dict:
             "MindIE Claude Code adapter configuration is missing. "
             "Run: python3 scripts/setup.py --config PATH"
         )
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise ValueError("adapter configuration must be one JSON object")
     return data
@@ -50,7 +50,7 @@ def base_config_path() -> Path:
     """
     path = config_path()
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return path
     base = data.get("base_config") if isinstance(data, dict) else None
@@ -69,7 +69,7 @@ def engine_config_path(config=None) -> Path:
 
 def load_engine_config(config=None) -> dict:
     path = engine_config_path(config)
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict) or not {"root", "domain"} <= set(data):
         raise ValueError("engine configuration requires root and domain")
     if "session_activation" in data:

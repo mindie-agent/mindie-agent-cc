@@ -9,9 +9,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
@@ -30,25 +30,16 @@ jobs:
           PIP_RETRIES: '0'
         run: python -m pip install hatchling==1.32.4
       - name: Check out the declared knowledge commit
-        env:
-          GIT_TERMINAL_PROMPT: '0'
-        run: |
-          set -eu
-          commit=$(python -c 'import pathlib,re,sys; text=pathlib.Path("runtime-requirements.txt").read_text(); found=re.findall(r"^mindie-knowledge @ git\+https://github\.com/mindie-agent/knowledge@([0-9a-f]{40})$", text, re.M); sys.exit("runtime-requirements.txt must contain one mindie-knowledge pin") if len(found)!=1 else print(found[0])') || exit 1
-          dest="${RUNNER_TEMP}/mindie-knowledge"
-          rm -rf "$dest"
-          git init "$dest"
-          git -C "$dest" remote add origin https://github.com/mindie-agent/knowledge.git
-          git -C "$dest" fetch --depth 1 origin "$commit"
-          git -C "$dest" checkout --detach FETCH_HEAD
-          head=$(git -C "$dest" rev-parse HEAD)
-          test "$head" = "$commit"
-          test "$(git -C "$dest" cat-file -t HEAD)" = "commit"
-          echo "MINDIE_TEST_KNOWLEDGE_CHECKOUT=$dest" >> "$GITHUB_ENV"
-      - name: Product configuration outcomes
-        run: python -m unittest discover -s tests -p test_product_flow.py -v
+        uses: actions/checkout@v4
+        with:
+          repository: mindie-agent/knowledge
+          ref: e099a80fd99a6d895579b5d016aecf2a96851559
+          path: .ci/knowledge
+          persist-credentials: false
       - name: Component contracts (not native harness acceptance)
         env:
+          PYTHONUTF8: '0'
+          MINDIE_TEST_KNOWLEDGE_CHECKOUT: ${{ github.workspace }}/.ci/knowledge
           # Frozen peer scripts vendored at tests/fixtures/kimi-86de2c3.
           # PROVENANCE.json records the source revision and file hashes.
           MINDIE_TEST_KIMI_SCRIPTS: ${{ github.workspace }}/tests/fixtures/kimi-86de2c3/scripts

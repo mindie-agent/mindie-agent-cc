@@ -31,15 +31,15 @@ class FrontControlTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
         generation = self.root / "generation"
         (generation / "scripts").mkdir(parents=True)
-        (generation / "scripts/mcp_server.py").write_text(CHILD)
+        (generation / "scripts/mcp_server.py").write_text(CHILD, encoding="utf-8")
         config = self.root / "adapter.json"
-        config.write_text(json.dumps({"state_dir": str(self.root / "state")}))
+        config.write_text(json.dumps({"state_dir": str(self.root / "state")}), encoding="utf-8")
         update = self.root / "state/update"
         update.mkdir(parents=True)
         (update / "current.json").write_text(json.dumps({
             "generation": str(generation), "python": sys.executable,
             "adapter_config": str(config), "sha": "controlled-front-probe",
-        }))
+        }), encoding="utf-8")
         env = {key: value for key, value in os.environ.items()
                if not key.startswith(("MINDIE_", "PYTHONPATH", "REMOTE_DEV_"))}
         self.proc = subprocess.Popen(
@@ -69,7 +69,7 @@ class FrontControlTests(unittest.TestCase):
             stream.close()
         pidfile = self.root / "pids.json"
         if pidfile.exists():
-            for pid in json.loads(pidfile.read_text()):
+            for pid in json.loads(pidfile.read_text(encoding="utf-8")):
                 if pid is None:
                     continue
                 result = subprocess.run(["ps", "-p", str(pid), "-o", "stat="],

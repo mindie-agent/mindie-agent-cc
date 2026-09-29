@@ -67,14 +67,14 @@ run([sys.executable,'-c',sys.argv[2],sys.argv[3]],timeout=10)
                                  native, str(pidfile)], "",
                                 timeout=6, max_output=8192, cancel=cancel)
                 self.assertTrue(pidfile.is_file(), "native child was never started")
-                pids = json.loads(pidfile.read_text())
+                pids = json.loads(pidfile.read_text(encoding="utf-8"))
                 self.assertFalse(_alive(pids["native"]))
                 self.assertFalse(_alive(pids["child"]))
             finally:
                 done.set()
                 observer.join(timeout=1)
                 if pidfile.is_file():
-                    for pid in json.loads(pidfile.read_text()).values():
+                    for pid in json.loads(pidfile.read_text(encoding="utf-8")).values():
                         try:
                             os.kill(pid, signal.SIGKILL)
                         except ProcessLookupError:

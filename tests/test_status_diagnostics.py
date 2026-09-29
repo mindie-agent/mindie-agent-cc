@@ -24,7 +24,7 @@ class StatusDiagnosticTests(unittest.TestCase):
     def test_corrupt_configuration_is_not_first_use(self):
         with tempfile.TemporaryDirectory() as raw:
             config = Path(raw) / "adapter.json"
-            config.write_text("{")
+            config.write_text("{", encoding="utf-8")
             result = self._status(config)
             self.assertIsNone(result["configured"])
             self.assertEqual(result["error"], dict(stage="local_settings", type="JSONDecodeError"))
@@ -48,9 +48,9 @@ class StatusDiagnosticTests(unittest.TestCase):
                 store.mark_capture(own["id"], "failed", "RuntimeError: maintenance agent exited 124; category=deadline; elapsed=120.000s")
             finally:
                 store.close()
-            engine.write_text(json.dumps(dict(root=str(root / "state"), domain="test", admission_path=str(admission.path))))
+            engine.write_text(json.dumps(dict(root=str(root / "state"), domain="test", admission_path=str(admission.path))), encoding="utf-8")
             adapter = root / "adapter.json"
-            adapter.write_text(json.dumps(dict(engine_config=str(engine), community_config=str(root / "community.json"), state_dir=str(root / "adapter-state"))))
+            adapter.write_text(json.dumps(dict(engine_config=str(engine), community_config=str(root / "community.json"), state_dir=str(root / "adapter-state"))), encoding="utf-8")
             result = self._status(adapter, "task-A")
             self.assertTrue(result["this_session"]["bound"])
             self.assertNotIn("paused", result["this_session"])

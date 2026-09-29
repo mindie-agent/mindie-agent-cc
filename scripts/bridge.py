@@ -25,7 +25,6 @@ from identity import (
 )
 from paths import config_path
 
-MAX_HOOK_BYTES = 128 * 1024
 
 
 def _print(value):
@@ -33,7 +32,7 @@ def _print(value):
 
 
 def _read_event():
-    raw = sys.stdin.buffer.read(MAX_HOOK_BYTES + 1)
+    raw = sys.stdin.buffer.read()
     return parse_hook(raw)
 
 
@@ -182,7 +181,6 @@ def handle_stop():
             _print({})
             return 0
         transcript = event.get("transcript_path")
-        summary = event.get("last_assistant_message")
         forwarded = dict(
             hook_event_name="Stop",
             identity_kind="turn",
@@ -192,17 +190,9 @@ def handle_stop():
             harness="claude",
             budget_seconds=0.8,
         )
-        if isinstance(transcript, str) and os.path.isabs(transcript) and len(transcript) <= 4096:
+        if isinstance(transcript, str) and os.path.isabs(transcript):
             forwarded["transcript_path"] = transcript
-        if isinstance(summary, str) and summary.strip():
-            if len(summary) > 32768:
-                if "transcript_path" not in forwarded:
-                    _record_stop("material", "summary_rejected")
-                    _print({})
-                    return 0
-            else:
-                forwarded["last_assistant_message"] = summary
-        if "transcript_path" not in forwarded and "last_assistant_message" not in forwarded:
+        if "transcript_path" not in forwarded:
             _record_stop("material", "no_capturable_material")
             _print({})
             return 0

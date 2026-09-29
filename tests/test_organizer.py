@@ -19,48 +19,32 @@ class OrganizerTests(unittest.TestCase):
                         "CLAUDE_CODE_EFFORT_LEVEL": "high",
                         "UNRELATED_SETTING": "must-not-import"},
                 "hooks": {"Stop": "must-not-run"},
-            }))
+            }), encoding="utf-8")
             with patch.dict(organizer.os.environ, {}, clear=True), patch(
                 "paths.load_adapter_config", return_value={"claude_config_dir": tmp}
             ):
                 env = organizer.native_environment()
             self.assertEqual(env["ANTHROPIC_AUTH_TOKEN"], "fixture-secret")
             self.assertEqual(organizer.organizer_model(env), "selected-model")
-            self.assertEqual(organizer.organizer_effort(env), "high")
+            self.assertEqual(organizer.organizer_effort(env), "low")
             self.assertNotIn("UNRELATED_SETTING", env)
             self.assertNotIn("hooks", env)
 
-    def test_normalize_core_schema(self):
-        result = organizer.normalize(
-            {
-                "entries": [
-                    {
-                        "entry_id": None,
-                        "title": "Case",
-                        "summary": "Abstract",
-                        "content": "Detailed body",
-                        "conditions": {"commit": "abc"},
-                    }
-                ]
-            }
-        )
-        self.assertEqual(result["entries"][0]["content"], "Detailed body")
-        self.assertEqual(result["entries"][0]["conditions"]["commit"], "abc")
+    def test_summary_cannot_return_a_body_or_entries(self):
+        expected = dict(title='Public case', summary='Public observations')
+        self.assertEqual(organizer.normalize(expected), expected)
+        for result in (dict(expected, content='replacement'), {'entries': []}, dict(title='x', summary='')):
+            with self.assertRaises(ValueError):
+                organizer.normalize(result)
 
-    def test_body_alias_and_public_json_result(self):
-        converted = organizer.normalize(
-            {"entries": [{"title": "T", "summary": "S", "body": "B"}]}
-        )
-        self.assertEqual(converted["entries"][0]["content"], "B")
-        text = json.dumps(
-            {"type": "result", "result": '{"entries":[]}', "session_id": "x"}
-        )
-        public = organizer.public_result_text(text)
-        self.assertEqual(organizer.extract_json(public), {"entries": []})
+    def test_public_json_result(self):
+        expected = dict(title='Public case', summary='Public observations')
+        native = json.dumps(dict(type='result', result=json.dumps(expected), session_id='private'))
+        self.assertEqual(organizer.normalize(organizer.extract_json(organizer.public_result_text(native))), expected)
 
     def test_no_shipped_host_model_default(self):
         self.assertFalse(hasattr(organizer, "DEFAULT_MODEL"))
-        source = Path(organizer.__file__).read_text()
+        source = Path(organizer.__file__).read_text(encoding="utf-8")
         self.assertNotIn("deepseek-flash", source)
         self.assertNotIn("DEFAULT_MODEL", source)
 

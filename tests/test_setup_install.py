@@ -38,10 +38,10 @@ class SetupTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stderr.decode()[:1000] + proc.stdout.decode()[:1000])
             report = json.loads(proc.stdout.decode())
             self.assertTrue(Path(report["config"]).is_file())
-            engine = json.loads(Path(report["engine_config"]).read_text())
+            engine = json.loads(Path(report["engine_config"]).read_text(encoding="utf-8"))
             self.assertIn("admission_path", engine)
             self.assertNotIn("session_activation", engine)
-            community = json.loads(Path(report["community_config"]).read_text())
+            community = json.loads(Path(report["community_config"]).read_text(encoding="utf-8"))
             self.assertFalse(community["enabled"])
             self.assertFalse(Path(report["admission_path"]).exists())
         finally:
@@ -56,9 +56,9 @@ class SetupTests(unittest.TestCase):
                 shutil.copy2(ROOT / "scripts" / name, source / "scripts" / name)
             # Valid official requirement shape, deliberately wrong exact commit.
             import re
-            requirements = (ROOT / "runtime-requirements.txt").read_text()
+            requirements = (ROOT / "runtime-requirements.txt").read_text(encoding="utf-8")
             requirements = re.sub(r"@[0-9a-f]{40}", "@" + "0" * 40, requirements, count=1)
-            (source / "runtime-requirements.txt").write_text(requirements)
+            (source / "runtime-requirements.txt").write_text(requirements, encoding="utf-8")
             config = root / "installation" / "cc.json"
             data = root / "data"
             proc = subprocess.run(

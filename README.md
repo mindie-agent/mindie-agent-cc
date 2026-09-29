@@ -1,5 +1,15 @@
 # MindIE Agent for Claude Code
 
+Current capture uses the harness's public transcript projection followed by
+local deterministic redaction. Complete user and visible assistant messages
+are saved without tool payloads or a body-writing model. Setup and updates
+automatically install the scanner and metadata worker. The optional metadata
+worker can return only title and summary; failure leaves a source excerpt.
+Its model policy belongs to the adapter, with minimal/disabled thinking, and
+does not add user configuration. Native model acceptance is separate from
+the component tests of this path.
+
+
 Claude Code adapter for MindIE Agent. This repository owns the native plugin entry, task identity, hooks, transcript parsing, installation and runtime switching. Shared knowledge and remote development stay in their own repositories.
 
 Development is in progress. This is not a released or fully accepted implementation.
