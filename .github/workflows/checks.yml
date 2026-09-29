@@ -37,7 +37,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: mindie-agent/knowledge
-          ref: 465cac9342ed4a78284e99e89e5c6df80f7bedd4
+          ref: ec05a65c6841ca77ec55c7ea32232efa6699f342
           path: .ci/knowledge
           fetch-depth: 0
           persist-credentials: false
