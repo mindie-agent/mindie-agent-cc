@@ -134,6 +134,13 @@ def knowledge_checkout(commit: str) -> Path:
             f"{path} HEAD is {current}, not the declared mindie-knowledge pin {commit}. "
             "Check out that commit locally. This test does not fetch it."
         )
+    shallow = _git(path, "rev-parse", "--is-shallow-repository")
+    if shallow.returncode != 0 or shallow.stdout.strip() != "false":
+        raise IdentityPrecondition(
+            "The local git+file install requires a complete checkout; use "
+            "fetch-depth: 0 in CI. A filtered pip clone of a shallow source can "
+            "recursively fetch missing objects. This test does not fetch history."
+        )
     return path.resolve()
 
 
@@ -472,18 +479,17 @@ class SetupIdentityTests(LaneCase):
                 + " Refusing to download dependencies or a build backend."
             )
         spec = f"git+{_file_url(repo)}@{commit}"
-        installed = subprocess.run(
+        from bounded import run
+
+        # Own the complete pip/Git tree, including descendants that outlive pip.
+        run(
             [
                 str(pip), "install", "--disable-pip-version-check", "--no-cache-dir",
-                "--no-deps", "--no-build-isolation", "--force-reinstall", spec,
+                "--no-index", "--no-deps", "--no-build-isolation", "--force-reinstall", spec,
             ],
-            capture_output=True,
-            text=True,
             timeout=120,
             env=_git_env(),
         )
-        if installed.returncode != 0:
-            self.fail((installed.stderr or installed.stdout)[-1500:])
         knowledge = self._direct_url(python, "mindie-knowledge")
         self.assertEqual(knowledge["vcs"], "git", knowledge)
         self.assertTrue(str(knowledge["url"]).startswith("file://"), knowledge["url"][:160])
@@ -565,6 +571,15 @@ class SetupIdentityTests(LaneCase):
             self.assertIn(commit, str(wrong.exception))
             self.assertIn("does not fetch", str(wrong.exception))
             self.assertNotIn("github.com", str(wrong.exception))
+            shallow = self.tmp / "shallow"
+            cloned = subprocess.run(
+                ["git", "clone", "--depth=1", _file_url(other), str(shallow)],
+                capture_output=True, text=True, timeout=30, env=_git_env(),
+            )
+            self.assertEqual(cloned.returncode, 0, cloned.stderr)
+            os.environ[KNOWLEDGE_CHECKOUT_ENV] = str(shallow)
+            with self.assertRaisesRegex(IdentityPrecondition, "complete checkout"):
+                knowledge_checkout(_git(other, "rev-parse", "HEAD").stdout.strip())
         finally:
             if saved is None:
                 os.environ.pop(KNOWLEDGE_CHECKOUT_ENV, None)

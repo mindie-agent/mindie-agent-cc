@@ -39,6 +39,7 @@ jobs:
           repository: mindie-agent/knowledge
           ref: 6044b140b554825254db73436fb55ae411813808
           path: .ci/knowledge
+          fetch-depth: 0
           persist-credentials: false
       - name: Component contracts (not native harness acceptance)
         env:
