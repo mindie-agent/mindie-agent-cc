@@ -28,6 +28,13 @@ Claude Code adapter for MindIE Agent. This repository owns the native plugin ent
 
 Development is in progress. This is not a released or fully accepted implementation.
 
+The first internal product Release is being prepared as `0.0.1`, with tag
+`v0.0.1` and no beta suffix. Its candidate manifest and native packages use
+that product version. The current runtime pins and updater still need to adopt
+the current shared contracts and a normal Release source before publication.
+Version preparation and component tests do not establish native macOS/Windows
+acceptance. Benchmark work is separate from this release.
+
 MindIE Agent inherits all nine [VAWS design principles](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.md). See the [Harness boundary and lifecycle contract](https://github.com/mindie-agent/mindie-agent/blob/main/docs/harness-boundary-and-lifecycle.md).
 
 Acceptance requires actual local Claude Code runs and observed external outcomes. Passing unit tests or fabricated hook input does not establish native acceptance. macOS is the first real host; Windows desktop acceptance remains pending.

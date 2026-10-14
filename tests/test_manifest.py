@@ -16,6 +16,7 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual(market["name"], "mindie-agent-cc")
         self.assertEqual(market["plugins"][0]["source"], "./")
         self.assertEqual(market["plugins"][0]["name"], "mindie-agent")
+        self.assertEqual(plugin["version"], market["plugins"][0]["version"])
         hooks = json.loads((ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
         expansion = hooks["hooks"]["UserPromptExpansion"]
         matchers = {item["matcher"] for item in expansion}

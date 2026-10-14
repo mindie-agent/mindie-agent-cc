@@ -73,7 +73,7 @@ class UpdaterTests(unittest.TestCase):
             package_dir=self.tmp / "pkg",
         )
         manifest = json.loads((package / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
-        self.assertEqual(manifest["version"], "0.1.0+mindie." + ("c" * 12))
+        self.assertEqual(manifest["version"], "0.0.1+mindie." + ("c" * 12))
         self.assertTrue((package / "hooks" / "hooks.json").is_file())
         metadata = json.loads((root / "scripts" / "diagnostic-build.json").read_text(encoding="utf-8"))
         self.assertEqual(metadata["revision"], "c" * 40)
@@ -90,6 +90,24 @@ class UpdaterTests(unittest.TestCase):
         args = mcp["mcpServers"]["knowledge"]["args"]
         self.assertIn("--config", args)
         self.assertIn(str(self.config), args)
+
+    def test_package_version_comes_from_candidate_not_running_updater(self):
+        source = self.tmp / "candidate"
+        manifest = source / ".claude-plugin/plugin.json"
+        manifest.parent.mkdir(parents=True)
+        for version in ("0.0.2", "0.0.2+mindie.old", "0.0.2+mindie.old.pkg.123"):
+            manifest.write_text(json.dumps({"version": version}), encoding="utf-8")
+            with self.subTest(version=version):
+                self.assertEqual(
+                    self.updater.stamp_version("d" * 40, source),
+                    "0.0.2+mindie." + "d" * 12,
+                )
+        for version in (None, "main", "0.0.2+", "0.0.2+mindie..old", "0.0.2-beta.1"):
+            manifest.write_text(json.dumps({"version": version}), encoding="utf-8")
+            with self.subTest(version=version), self.assertRaisesRegex(
+                self.updater.CheckFailed, "candidate plugin"
+            ):
+                self.updater.stamp_version("d" * 40, source)
 
 
 if __name__ == "__main__":

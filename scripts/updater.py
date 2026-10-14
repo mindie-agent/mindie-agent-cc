@@ -198,10 +198,17 @@ def _venv_python(venv: Path) -> Path:
     return venv / "bin" / "python"
 
 
-def stamp_version(sha: str) -> str:
+def stamp_version(sha: str, source: Path) -> str:
+    manifest = read_json(source / ".claude-plugin" / "plugin.json")
+    version = manifest.get("version") if isinstance(manifest, dict) else None
+    match = re.fullmatch(
+        r"(\d+\.\d+\.\d+)(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?", version
+    ) if isinstance(version, str) else None
+    if match is None:
+        raise CheckFailed("candidate plugin must declare a normal product version")
     ident = sha if sha != "bootstrap" else "bootstrap"
     short = ident[:12] if ident != "bootstrap" else "bootstrap"
-    return f"0.1.0+mindie.{short}"
+    return f"{match[1]}+mindie.{short}"
 
 
 COPY_SKIP = {".git", ".venv", "tests", "__pycache__", ".pytest_cache", ".DS_Store"}
@@ -321,10 +328,10 @@ def build_host_package(generation: Path, adapter: dict, sha: str,
         package,
         python=python,
         launcher=launcher,
-        version=stamp_version(sha),
+        version=stamp_version(sha, generation),
         config_file=config_file,
     )
-    metadata = {"version": stamp_version(sha)}
+    metadata = {"version": stamp_version(sha, generation)}
     if re.fullmatch(SHA, sha):
         metadata["revision"] = sha
     for folder in (generation / "scripts", launcher_dir, package / "scripts"):
@@ -680,15 +687,15 @@ def _plan_package_refresh(adapter: dict, current: dict, sha: str):
         ensure_ascii=False,
     )
     digest = hashlib.sha256(raw.encode()).hexdigest()[:12]
-    version = stamp_version(sha) + ".pkg." + digest
-    target = update_dir(adapter) / "native-packages" / f"{sha}-{digest}"
     source = Path(current["generation"])
+    version = stamp_version(sha, source) + ".pkg." + digest
+    target = update_dir(adapter) / "native-packages" / f"{sha}-{digest}"
     existing = Path(current.get("native_package") or source / "host-package")
     if existing.is_dir():
         have_hooks = read_json(existing / "hooks" / "hooks.json")
         have_mcp = read_json(existing / ".mcp.json")
         if have_hooks == hooks and have_mcp == mcp:
-            expected_version = version if current.get("native_package") else stamp_version(sha)
+            expected_version = version if current.get("native_package") else stamp_version(sha, source)
             if not _package_identity(existing, expected_version, hooks, mcp, source):
                 raise CheckFailed(f"committed native package is incomplete or corrupt: {existing}")
             return None
