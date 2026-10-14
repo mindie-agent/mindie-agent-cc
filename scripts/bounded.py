@@ -418,7 +418,7 @@ def _run_posix(process, timeout, max_output, pgid, check, cancel, transport=Fals
     selector = selectors.DefaultSelector()
     selector.register(process.stdout, selectors.EVENT_READ, "out")
     selector.register(process.stderr, selectors.EVENT_READ, "err")
-    deadline = time.monotonic() + timeout
+    deadline = None if timeout is None else time.monotonic() + timeout
     output = bytearray()
     errors = bytearray() if transport else None
     cap = _Cap(max_output)
@@ -439,14 +439,14 @@ def _run_posix(process, timeout, max_output, pgid, check, cancel, transport=Fals
         while True:
             if _cancelled(cancel):
                 raise CommandCancelled("command cancelled")
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
+            remaining = None if deadline is None else deadline - time.monotonic()
+            if remaining is not None and remaining <= 0:
                 raise timeout_error()
             alive = process.poll() is None
             if not alive and not selector.get_map():
                 break
             if selector.get_map():
-                for key, _ in selector.select(min(0.05, remaining)):
+                for key, _ in selector.select(0.05 if remaining is None else min(0.05, remaining)):
                     chunk = os.read(key.fileobj.fileno(), _CHUNK)
                     if not chunk:
                         selector.unregister(key.fileobj)
@@ -459,7 +459,7 @@ def _run_posix(process, timeout, max_output, pgid, check, cancel, transport=Fals
                 continue
             # Pipes closed while the child is still running.
             try:
-                process.wait(timeout=min(0.05, remaining))
+                process.wait(timeout=0.05 if remaining is None else min(0.05, remaining))
             except subprocess.TimeoutExpired:
                 continue
             break
@@ -467,7 +467,10 @@ def _run_posix(process, timeout, max_output, pgid, check, cancel, transport=Fals
             raise CommandCancelled("command cancelled")
         if process.poll() is None:
             try:
-                process.wait(timeout=max(0.01, deadline - time.monotonic()))
+                if deadline is None:
+                    process.wait()
+                else:
+                    process.wait(timeout=max(0.01, deadline - time.monotonic()))
             except subprocess.TimeoutExpired:
                 err = timeout_error()
                 if transport:
@@ -476,7 +479,10 @@ def _run_posix(process, timeout, max_output, pgid, check, cancel, transport=Fals
         if _cancelled(cancel):
             raise CommandCancelled("command cancelled")
         if check and process.returncode:
-            raise failed_error()
+            err = failed_error()
+            err.mindie_output = output.decode("utf-8", "replace")
+            err.returncode = process.returncode
+            raise err
         return output.decode("utf-8", "replace")
     finally:
         _kill_tree(process, pgid)
@@ -495,7 +501,7 @@ def _run_posix(process, timeout, max_output, pgid, check, cancel, transport=Fals
 
 def _run_windows(process, timeout, max_output, pgid, check, cancel, transport=False):
     # Windows reader threads drain the pipes; the Job owns all pipe holders.
-    deadline = time.monotonic() + timeout
+    deadline = None if timeout is None else time.monotonic() + timeout
     output = bytearray()
     errors = bytearray() if transport else None
     cap = _Cap(max_output)
@@ -525,7 +531,7 @@ def _run_windows(process, timeout, max_output, pgid, check, cancel, transport=Fa
         while any(thread.is_alive() for thread in threads) or process.poll() is None:
             if _cancelled(cancel):
                 raise CommandCancelled("command cancelled")
-            if time.monotonic() >= deadline:
+            if deadline is not None and time.monotonic() >= deadline:
                 err = TimeoutError("deadline exceeded")
                 if transport:
                     _attach_transport(err, output, errors, timed_out=True)
@@ -540,13 +546,18 @@ def _run_windows(process, timeout, max_output, pgid, check, cancel, transport=Fa
         if failure:
             raise failure[0]
         if process.poll() is None:
-            process.wait(timeout=max(0.01, deadline - time.monotonic()))
+            if deadline is None:
+                process.wait()
+            else:
+                process.wait(timeout=max(0.01, deadline - time.monotonic()))
         if _cancelled(cancel):
             raise CommandCancelled("command cancelled")
         if check and process.returncode:
             err = RuntimeError(f"command failed ({process.returncode})")
             if transport:
                 _attach_transport(err, output, errors, timed_out=False)
+            err.mindie_output = bytes(output).decode("utf-8", "replace")
+            err.returncode = process.returncode
             raise err
         return bytes(output).decode("utf-8", "replace")
     finally:
@@ -577,7 +588,9 @@ def run(
             or not isinstance(argv[0], str) or not argv[0]
             or not all(isinstance(item, str) for item in argv)):
         raise ValueError("command must be a nonempty argv list")
-    if timeout is None or timeout <= 0:
+    # None is an explicit absence of a lifecycle deadline. Cancellation and
+    # process ownership still apply. A non-positive number is not that choice.
+    if timeout is not None and timeout <= 0:
         raise ValueError("timeout must be positive")
     if _cancelled(cancel):
         raise CommandCancelled("command cancelled")
