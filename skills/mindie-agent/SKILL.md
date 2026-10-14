@@ -20,6 +20,14 @@ they are not alternative product modes or successful acceptance.
 Report missing configuration, an out-of-scope task or a component failure
 directly. Do not require a deactivate/reactivate recovery cycle.
 
+[用户须知](references/user-notice.md) explains visible-message sharing,
+redaction limits, model-provider processing and public Git history.
+
+During installation or first-use setup, present the user notice, then follow
+[optional workspace setup](references/workspace-setup.md): recommend the workspace,
+ask whether and where to create it, and after creation ask whether to initialize it.
+Reuse prior answers; offer this during setup rather than ordinary task execution.
+
 The first setup also offers the independent reporting choice once
 (`/mindie-agent reporting-enable`, `reporting-disable`, or
 `reporting-later`); it is separate from knowledge contribution, an
