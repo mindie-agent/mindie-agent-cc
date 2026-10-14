@@ -100,7 +100,7 @@ class KnowledgePageTests(unittest.TestCase):
 
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def test_explain_block_schema_and_query_unchanged(self):
+    def test_explain_block_schema_and_related_query_continuation(self):
         import mcp_server
 
         explain = next(item for item in mcp_server.KNOWLEDGE_TOOL_DEFS if item["name"] == "knowledge_explain")
@@ -112,7 +112,14 @@ class KnowledgePageTests(unittest.TestCase):
         self.assertIn("slice", explain["description"])
         self.assertNotIn("offset", query["inputSchema"]["properties"])
         self.assertEqual(query["inputSchema"]["properties"]["limit"]["maximum"], 20)
-        self.assertEqual(set(query["inputSchema"]["properties"]), {"query", "limit", "conditions"})
+        self.assertEqual(set(query["inputSchema"]["properties"]),
+                         {"query", "limit", "conditions", "continuation"})
+        from jsonschema import validate, ValidationError
+        validate({"query": "synthetic material"}, query["inputSchema"])
+        validate({"continuation": "opaque-next-page", "limit": 3}, query["inputSchema"])
+        for invalid in ({}, {"query": "x", "continuation": "opaque-next-page"}):
+            with self.subTest(invalid=invalid), self.assertRaises(ValidationError):
+                validate(invalid, query["inputSchema"])
 
     def test_explain_without_host_bind_fails_closed(self):
         message = {

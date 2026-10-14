@@ -33,11 +33,22 @@ jobs:
         env:
           PIP_RETRIES: '0'
         run: python -m pip install hatchling==1.32.4
+      - name: Read the declared knowledge commit
+        id: pins
+        shell: python
+        run: |
+          import os
+          from pathlib import Path
+          import re
+          text = Path("runtime-requirements.txt").read_text()
+          pin = re.search(r"mindie-knowledge @ git\+https://github.com/mindie-agent/knowledge@([0-9a-f]{40})", text).group(1)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write("knowledge=" + pin + "\n")
       - name: Check out the declared knowledge commit
         uses: actions/checkout@v4
         with:
           repository: mindie-agent/knowledge
-          ref: add5c56313b5257410d52dc736544a0b8e30d55f
+          ref: ${{ steps.pins.outputs.knowledge }}
           path: .ci/knowledge
           fetch-depth: 0
           persist-credentials: false
