@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Claude plugin hooks. Activation is UserPromptExpansion, not MCP.
 
-Stop never exits 2 and never continues the model. It calls the shared
-capture handoff. Default-off sharing returns {} before any capture state.
+Stop never exits 2 and never continues the model. With contribution enabled
+and the task's own transcript inside the configured scope, Stop automatically
+associates the task (an internal binding, never a consent prompt) and calls
+the shared capture handoff; an explicit deactivate is never undone here.
+Default-off sharing returns {} before any capture state.
 """
 
 from __future__ import annotations
@@ -21,6 +24,7 @@ from identity import (
     is_subagent,
     parse_hook,
     publish_bind,
+    require_session,
     session_from_hook,
 )
 from paths import config_path
@@ -126,10 +130,17 @@ def _observe_stop(result):
         _record_stop("handoff", "internal")
         return
     stage = result.get("stage")
-    if stage not in {"unavailable", "rejected"}:
+    if stage in {"inert", "organized", "no-new-material", "no-shareable-material",
+                 "cancelled", "discarded", "processing", "accepted-runtime",
+                 "apply-pending", "accepted-local"}:
+        return
+    if stage not in {"unavailable", "rejected", "failed"}:
+        _record_stop("handoff", "internal")
         return
     reason = result.get("reason")
-    if not isinstance(reason, str) or not reason[:1].isalpha():
+    if not isinstance(reason, str) or not reason.replace("-", "").replace("_", "").isalnum():
+        reason = "handoff"
+    if not reason[:1].isalpha():
         reason = "handoff"
     _record_stop(stage, reason)
 
@@ -151,28 +162,18 @@ def handle_stop():
             _print({})
             return 0
         import sharing as sharing_mod
-        from admission import gate
-        from identity import require_session
         from paths import engine_config_path as engine_path
 
         session = require_session(event.get("session_id"))
-        admission = gate()
-        inspected = admission.inspect(session)
-        if inspected.get("status") == "unavailable":
-            _record_stop("admission", "unavailable")
-            _print({})
-            return 0
-        if inspected.get("status") != "active":
-            _print({})
-            return 0
         try:
-            lease = admission.check(session)
-        except ValueError:
-            _record_stop("admission", "unavailable")
+            settings = sharing_mod.load()
+        except Exception as exc:
+            _record_stop("configuration", "unavailable", exc)
             _print({})
             return 0
-        attempted = True
-        if not sharing_mod.capture_allowed(lease, None):
+        if not settings.allows_capture():
+            if settings.capture_block_kind() == "fault":
+                _record_stop("authorization", "authority_unavailable")
             _print({})
             return 0
         turn = event.get("prompt_id")
@@ -181,6 +182,43 @@ def handle_stop():
             _print({})
             return 0
         transcript = event.get("transcript_path")
+        if not isinstance(transcript, str) or not os.path.isabs(transcript):
+            _record_stop("material", "no_capturable_material")
+            _print({})
+            return 0
+        # Scope and the capture boundary come from the task's own transcript
+        # artifact, never from the hook arguments.
+        from transcript import capture_source
+
+        try:
+            source = capture_source(transcript, session)
+        except (OSError, ValueError) as exc:
+            _record_stop("material", "source_unavailable", exc)
+            _print({})
+            return 0
+        if not settings.in_scope(source["project_root"]):
+            _print({})
+            return 0
+        from admission import associate, gate
+
+        admission = gate()
+        inspected = admission.inspect(session)
+        if inspected.get("status") == "unavailable":
+            _record_stop("admission", "unavailable")
+            _print({})
+            return 0
+        if inspected.get("status") == "inactive":
+            # An explicit deactivation is a revocation; an ordinary Stop never
+            # reactivates the task.
+            _print({})
+            return 0
+        attempted = True
+        boundary = max(settings.enabled_at or 0, source["created_at"])
+        lease = associate(
+            session,
+            project_root=source["project_root"],
+            not_before=boundary,
+        )
         forwarded = dict(
             hook_event_name="Stop",
             identity_kind="turn",
@@ -188,14 +226,8 @@ def handle_stop():
             turn_id=turn,
             mindie_activation=lease.get("token"),
             harness="claude",
-            budget_seconds=0.8,
+            transcript_path=source["transcript_path"],
         )
-        if isinstance(transcript, str) and os.path.isabs(transcript):
-            forwarded["transcript_path"] = transcript
-        if "transcript_path" not in forwarded:
-            _record_stop("material", "no_capturable_material")
-            _print({})
-            return 0
         from mindie_knowledge.loop.cli import capture_hook
 
         _observe_stop(capture_hook(str(engine_path()), forwarded))

@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import transcript  # noqa: E402
@@ -46,6 +47,14 @@ class TranscriptTests(unittest.TestCase):
         shutil.copy(self.path, other)
         result = transcript.read_material(str(other), 0, session_id=SESSION)
         self.assertEqual(result["status"], "wrong-task")
+
+    def test_profile_configuration_error_never_selects_another_profile(self):
+        with patch("paths.load_adapter_config", side_effect=ValueError("fixture damaged config")):
+            with self.assertRaisesRegex(ValueError, "damaged config"):
+                transcript.native_config_dir()
+        with patch("paths.load_adapter_config", return_value={"claude_config_dir": "relative-profile"}):
+            with self.assertRaisesRegex(ValueError, "absolute"):
+                transcript.native_config_dir()
 
     def test_public_blocks_exclude_native_tool_payloads(self):
         public = "The echo request completed; its reported result still needs review."

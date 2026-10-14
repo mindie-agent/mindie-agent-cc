@@ -26,7 +26,7 @@ from identity import (
     is_knowledge_tool,
     meta_tool_use_id,
 )
-from paths import load_engine_config, state_dir
+from paths import state_dir
 
 MAX_YIELD_TIME_MS = 30000
 REMOTE_ERROR_CATEGORIES = frozenset({
@@ -65,26 +65,15 @@ KNOWLEDGE_TOOL_DEFS = [
     dict(
         name="knowledge_explain",
         description=(
-            "Read one page of a domain reference. The page is a slice, not the full case. "
-            "offset and limit are Unicode characters, not lines or bytes. "
-            "When next_offset is an integer, pass it as offset to read another page only if that page is still relevant; "
-            "do not count characters. next_offset is null at the end."
+            "Read one domain reference: a task ref returns the current navigation and "
+            "first_block_ref; a block ref returns that immutable block with "
+            "previous_block_ref/next_block_ref for walking the task. "
+            "The content is a reference slice, not the full case or a verified report."
         ),
         inputSchema=dict(
             type="object",
             properties=dict(
                 ref={"type": "string"},
-                offset={
-                    "type": "integer",
-                    "minimum": 0,
-                    "description": "Unicode character offset. Use the previous next_offset; omit for the first page.",
-                },
-                limit={
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 32768,
-                    "description": "Maximum Unicode characters in this page.",
-                },
             ),
             required=["ref"],
             additionalProperties=False,
@@ -193,16 +182,11 @@ def clamp_remote_args(args):
 
 def knowledge_call(name, args, session):
     from knowledge_service import ensure_service, existing_service
-    from mindie_knowledge.loop.activation import Admission
     from mindie_knowledge.loop.cli import rpc
-    from paths import admission_path, engine_config_path
+    from paths import engine_config_path
 
-    engine = load_engine_config()
-    if Admission(admission_path(engine)).active_lease(session) is None:
-        raise ValueError(
-            "this task is not bound yet; invoke the mindie-agent entry once in "
-            "this task — the saved install-level choice is reused, nothing is re-asked"
-        )
+    # Identity comes from the consumed native toolUseId bind. Public reads
+    # use the native tool binding and do not require a capture lease.
     method = name.removeprefix("knowledge_")
     try:
         connection = existing_service(engine_config_path())

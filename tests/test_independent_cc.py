@@ -199,7 +199,8 @@ class LaneCase(unittest.TestCase):
 
 
 def _store_path(case: Path) -> Path:
-    return case / "domain" / "vllm-ascend" / "store-v3.sqlite3"
+    from support import store_file
+    return store_file(case)
 
 
 def _capture_rows(case: Path):
@@ -917,20 +918,27 @@ class StopGateTests(LaneCase):
         , encoding="utf-8")
         return config, project, outside
 
-    def _stop(self, case: Path, project: Path, *, session=None, prompt=None, sentinel="SENTINEL"):
-        import admission
+    def _stop(self, case: Path, project: Path, *, session=None, prompt=None,
+              sentinel="SENTINEL", hook_cwd=None):
+        from datetime import datetime, timezone
 
         session = session or str(uuid.uuid4())
         prompt = prompt or str(uuid.uuid4())
-        admission.activate(session, project_root=str(project), root_session=session)
-        transcript = project / "turn.jsonl"
+        # Ordinary Stop must associate an authorized native task without an
+        # entry invocation. Only the named profile artifact supplies scope.
+        transcript = Path(os.environ["CLAUDE_CONFIG_DIR"]) / "projects" / "fixture" / f"{session}.jsonl"
         transcript.parent.mkdir(parents=True, exist_ok=True)
-        transcript.write_text(sentinel + "\n", encoding="utf-8")
+        if not transcript.exists():
+            transcript.write_text(json.dumps(dict(
+                type="assistant", sessionId=session, cwd=str(project),
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                message=dict(role="assistant", content=sentinel),
+            )) + "\n", encoding="utf-8")
         payload = {
             "hook_event_name": "Stop",
             "session_id": session,
             "prompt_id": prompt,
-            "cwd": str(project),
+            "cwd": str(hook_cwd or project),
             "transcript_path": str(transcript),
             "last_assistant_message": sentinel,
             "stop_hook_active": False,
@@ -943,7 +951,7 @@ class StopGateTests(LaneCase):
             env=self._env(config),
             timeout=8,
         )
-        return proc, _capture_rows(case), (case / "domain" / "vllm-ascend" / "wake.json").exists()
+        return proc, _capture_rows(case), _store_path(case).with_name("wake.json").exists()
 
     def _migrate(self):
         import consent
@@ -993,6 +1001,28 @@ class StopGateTests(LaneCase):
             self.assertFalse(wake)
         finally:
             reap_services(case)
+
+    def test_hook_cwd_cannot_override_native_artifact_scope(self):
+        case = self.tmp / "artifact-scope"
+        _config, project, outside = self._arm(case, sharing=True, choice="contribute")
+        proc, rows, wake = self._stop(case, outside, hook_cwd=project)
+        self.assertEqual(proc.returncode, 0, proc.stderr.decode()[:500])
+        self.assertEqual(rows, [])
+        self.assertFalse(wake)
+
+    def test_ordinary_stop_preserves_explicit_deactivation(self):
+        import admission
+
+        case = self.tmp / "revoked-task"
+        _config, project, _outside = self._arm(case, sharing=True, choice="contribute")
+        session = str(uuid.uuid4())
+        admission.activate(session, project_root=str(project))
+        admission.deactivate(session)
+        proc, rows, wake = self._stop(case, project, session=session)
+        self.assertEqual(proc.returncode, 0, proc.stderr.decode()[:500])
+        self.assertEqual(rows, [])
+        self.assertFalse(wake)
+        self.assertEqual(admission.gate().inspect(session)["status"], "inactive")
 
     def test_disallowed_or_damaged_consent_does_not_persist_stop(self):
         """After the explicit community migration stamps consent_config, the

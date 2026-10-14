@@ -1,3 +1,3 @@
 # Reviewed core and remote-dev revisions; publish these commits before adapter CI.
-mindie-knowledge @ git+https://github.com/mindie-agent/knowledge@82f7d7dd4c52637e1448e3747262a20453f4bcb4
-remote-dev @ git+https://github.com/mindie-agent/remote-dev@4d35c026084d780e1af99073e4d89e4c63bcb5be
+mindie-knowledge @ git+https://github.com/mindie-agent/knowledge@add5c56313b5257410d52dc736544a0b8e30d55f
+remote-dev @ git+https://github.com/mindie-agent/remote-dev@9c8ae5ef70687ce55d77e85b2dbdd79a0844f013

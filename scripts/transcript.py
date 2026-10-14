@@ -4,6 +4,11 @@ Public records are top-level type user/assistant with camel-case sessionId
 and ISO timestamps. Thinking, redacted_thinking, isMeta, sidechains,
 attachments, system, queue-operation, atis-latch and last-prompt are
 excluded. The caller names exactly one file supplied by a trusted hook.
+
+``capture_source`` is the Stop path's attribution read: it verifies the named
+file is this native profile's artifact for this task and returns the task's
+scope (record ``cwd``) and creation boundary (its first dated record). Scope
+never comes from a hook argument or a guessed latest session.
 """
 
 from __future__ import annotations
@@ -12,6 +17,7 @@ import hashlib
 import json
 import os
 import re
+import stat as statmod
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -38,6 +44,80 @@ COMMAND_BLOCK = re.compile(
 SESSION_FILE = re.compile(
     r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\.jsonl\Z"
 )
+
+# Attribution reads only the head of the named file; a task's first public
+# records carry cwd and ISO timestamps within this bound.
+SOURCE_HEAD_BYTES = 1024 * 1024
+SOURCE_HEAD_LINES = 64
+
+
+def native_config_dir():
+    """The selected native profile directory (adapter config, env, or default)."""
+    from paths import load_adapter_config
+
+    selected = load_adapter_config().get("claude_config_dir")
+    if selected is not None and (not isinstance(selected, str) or not os.path.isabs(selected)):
+        raise ValueError("selected native profile must be an absolute directory")
+    env = os.environ.get("CLAUDE_CONFIG_DIR")
+    return Path(selected or env or Path.home() / ".claude")
+
+
+def capture_source(path, session_id):
+    """Verify the event's native transcript artifact and read its attribution.
+
+    The file must live under the selected profile's ``projects`` directory and
+    name this task. The first record carrying this task's session id supplies
+    the authorized project root (``cwd``) and the task creation boundary
+    (``timestamp``). Anything else fails closed: capture never guesses scope
+    from the hook event, a newest file or a foreign task.
+    """
+    if not isinstance(session_id, str) or not session_id:
+        raise ValueError("native session identity is missing")
+    try:
+        selected = Path(path).resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise ValueError("capture transcript is unavailable") from exc
+    projects = (native_config_dir() / "projects").resolve()
+    if not selected.is_relative_to(projects):
+        raise ValueError("capture transcript is outside the active native profile")
+    if selected.name != session_id + ".jsonl":
+        raise ValueError("capture transcript does not name this task")
+    descriptor = os.open(selected, os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NONBLOCK", 0))
+    try:
+        info = os.fstat(descriptor)
+        if not statmod.S_ISREG(info.st_mode):
+            raise ValueError("capture source must be a regular transcript file")
+        with os.fdopen(descriptor, "rb") as stream:
+            descriptor = None
+            head = stream.read(SOURCE_HEAD_BYTES)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    lines = head.split(b"\n")[:SOURCE_HEAD_LINES]
+    for raw in lines:
+        if not raw.strip():
+            continue
+        try:
+            record = json.loads(raw)
+        except (ValueError, UnicodeDecodeError):
+            continue
+        if not isinstance(record, dict):
+            continue
+        record_session = record.get("sessionId") or record.get("session_id")
+        if record_session is None:
+            continue
+        if record_session != session_id:
+            raise ValueError("capture transcript belongs to another task")
+        cwd = record.get("cwd")
+        created = to_seconds(record.get("timestamp"))
+        if isinstance(cwd, str) and os.path.isabs(cwd) and created is not None:
+            return dict(
+                session_id=session_id,
+                project_root=str(Path(cwd).resolve()),
+                created_at=created,
+                transcript_path=str(selected),
+            )
+    raise ValueError("native task scope or creation boundary is unavailable")
 
 
 @dataclass(frozen=True)

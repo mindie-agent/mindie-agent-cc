@@ -51,7 +51,30 @@ def write_json(path: Path, value):
     return path
 
 
-def make_config(tmp: Path, *, sharing=False, roots=None):
+_REDACTOR = None
+
+
+def redactor_path():
+    """The real verified redactor binary, installed once per test process.
+
+    The pinned scanner archive is hash-verified; the lane cache avoids a
+    download per case. Capture tests exercise actual redaction, never a stub.
+    """
+    global _REDACTOR
+    if _REDACTOR is None:
+        from mindie_knowledge.loop.transcript_redaction import install_scanner
+
+        cache = ROOT.parent / "state" / "component-tests" / "redactor-cache"
+        _REDACTOR = install_scanner(cache=cache)
+    return _REDACTOR
+
+
+def store_file(tmp: Path) -> Path:
+    """The current shared-core store location for a make_config domain root."""
+    return tmp / "domain" / "vllm-ascend" / "state-v1" / "state-v4.sqlite3"
+
+
+def make_config(tmp: Path, *, sharing=False, roots=None, summary_command=None):
     config = tmp / "cc.json"
     engine = tmp / "cc.engine.json"
     community = tmp / "cc.community.json"
@@ -63,6 +86,9 @@ def make_config(tmp: Path, *, sharing=False, roots=None):
             root=str(root),
             domain="vllm-ascend",
             admission_path=str(admission),
+            capture_mode="public-transcript",
+            redactor_executable=redactor_path(),
+            summary_command=summary_command or [sys.executable, str(SCRIPTS / "organizer.py")],
             transcript_adapter=str(SCRIPTS / "transcript.py"),
             community_config=str(community),
         ),
