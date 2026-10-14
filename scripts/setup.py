@@ -52,7 +52,8 @@ def parse_local_candidates(values):
     the production contract: the default install path does not accept it, an
     undeclared dependency still requires the official identity, and a local
     install without git VCS metadata (a plain directory install records only
-    ``dir_info``) has no commit source and is always rejected.
+    ``dir_info``) has no commit source and is always rejected. Product
+    validation still requires the runtime revisions declared by the candidate.
     """
     candidates = {}
     for value in values or ():
@@ -348,6 +349,17 @@ def main():
             }
         print(json.dumps(report, indent=2))
         return
+    import updater
+
+    # The installation is a product candidate, even when native install or
+    # feed sync is disabled. Existing-config sharing edits do not install a
+    # candidate and return above.
+    try:
+        product_validation = updater.probe_runtime(
+            Path(python), time.monotonic() + updater.CHECK_BUDGET, PLUGIN_ROOT,
+        )
+    except Exception as exc:
+        raise SystemExit(str(exc)) from None
     admission = domain_root / "admission.sqlite3"
     transcript = (PLUGIN_ROOT / "scripts" / "transcript.py").resolve()
     organizer = (PLUGIN_ROOT / "scripts" / "organizer.py").resolve()
@@ -358,16 +370,12 @@ def main():
         transcript_adapter=str(transcript),
         **__import__("capture_config").prepare(python, organizer.parent),
         community_config=str(community_config),
+        product_validation=product_validation,
     )
-    if args.domain == "vllm-ascend" and not args.no_public_feed:
-        value["feeds"] = [
-            dict(
-                repository="mindie-agent/knowledge-vllm-ascend",
-                ref="main",
-                domain="vllm-ascend",
-                interval_seconds=300,
-            )
-        ]
+    if args.domain == product_validation["publication"]["domain"] and not args.no_public_feed:
+        from product_contract import publication_feed
+        value["feeds"] = [publication_feed(product_validation)]
+    __import__("capture_config").prepare_store(python, organizer.parent, value)
     write_private(engine_config, value)
     adapter_value = dict(
         python=python,
@@ -375,6 +383,7 @@ def main():
         community_config=str(community_config),
         state_dir=str(domain_root / "adapter-state"),
         base_config=str(config),
+        product_validation=product_validation,
     )
     if args.claude_config_dir:
         adapter_value["claude_config_dir"] = str(args.claude_config_dir.expanduser().absolute())
@@ -384,8 +393,6 @@ def main():
     write_private(config, adapter_value)
     sharing = write_community(community_config, community, python=python)
     import genstate
-    import updater
-
     os.environ["MINDIE_CC_CONFIG"] = str(config)
     identity = updater.source_identity(PLUGIN_ROOT)
     generation = genstate.generations_dir(adapter_value) / identity
@@ -468,6 +475,7 @@ def main():
         native_package=str(host_package),
         domain=args.domain,
         sharing=sharing,
+        product_validation=product_validation,
         feed_sync=feed,
         update_schedule=scheduled,
         native_install=native,

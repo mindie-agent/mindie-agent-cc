@@ -448,7 +448,10 @@ def probe_runtime(python: Path, deadline: float, generation: Path, *, revision=N
             code = getattr(exc, "returncode", 1)
             if type(code) is not int:
                 code = 1
-            raise on_failure("", code) from exc
+            captured = getattr(exc, "mindie_output", "")
+            if not isinstance(captured, str):
+                captured = ""
+            raise on_failure(captured, code) from exc
 
     try:
         return product_contract.probe(
@@ -725,6 +728,15 @@ def switch(adapter: dict, current: dict, generation: Path, python: Path,
         try:
             idle_result = idle(adapter, current, deadline)
             stopped = idle_result.get("service") == "stopped"
+            candidate_adapter = read_json(gen_adapter)
+            if not isinstance(candidate_adapter, dict):
+                raise CheckFailed("candidate adapter configuration is unreadable")
+            # Preparing the shared store can mutate its schema. Do it only
+            # while the operation lock excludes new work and the old service
+            # is idle, before any native package or pointer mutation.
+            __import__("capture_config").prepare_store(
+                python, generation / "scripts", load_engine_config(candidate_adapter),
+            )
             native_attempted = True
             target = Path(package) if package is not None else generation / "host-package"
             install(dict(adapter, sha=sha), target, deadline)

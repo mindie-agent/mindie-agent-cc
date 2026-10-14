@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from support import make_config
 
@@ -63,6 +64,27 @@ class UpdaterTests(unittest.TestCase):
         self.assertEqual(code, 0)
         status = self.genstate.read_status(adapter)
         self.assertEqual(status["result"], "suppressed-known-failed")
+
+    def test_candidate_callback_keeps_captured_failure_receipt(self):
+        import product_contract
+        import time
+
+        failure = RuntimeError("command failed (1)")
+        failure.returncode = 1
+        failure.mindie_output = '{"status":"failed","stage":"fixture"}\n'
+        seen = {}
+
+        def probe(python, scripts, command, **_):
+            def on_failure(output, code):
+                seen.update(output=output, code=code)
+                return ValueError("candidate receipt retained")
+            command(["synthetic-validator"], on_failure=on_failure)
+
+        with patch.object(product_contract, "probe", side_effect=probe), \
+                patch.object(self.updater, "bounded_run", side_effect=failure):
+            with self.assertRaisesRegex(self.updater.CheckFailed, "candidate receipt retained"):
+                self.updater.probe_runtime(Path(sys.executable), time.monotonic() + 180, SCRIPTS.parent)
+        self.assertEqual(seen, dict(output=failure.mindie_output, code=1))
 
     def test_host_package_stamps_unique_version(self):
         adapter = json.loads(self.config.read_text(encoding="utf-8"))

@@ -164,7 +164,7 @@ class PackageRefreshTests(unittest.TestCase):
     def _eligible_generation(self):
         generation = self.genstate.generations_dir(self.adapter) / SHA
         shutil.copytree(ROOT / ".claude-plugin", generation / ".claude-plugin")
-        for name in ("state_compatibility.py", "receipt_layout.py"):
+        for name in ("state_compatibility.py", "receipt_layout.py", "capture_config.py"):
             _touch(generation / "scripts" / name, (SCRIPTS / name).read_text(encoding="utf-8"))
         (generation / self.updater.COMPLETE).write_text(SHA + "\n", encoding="utf-8")
         _touch(generation / "skills/reporting-status/SKILL.md", "read-only status")

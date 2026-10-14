@@ -229,25 +229,19 @@ class SetupIdentityTests(LaneCase):
         return None
 
     def _run_setup(self, config: Path, root: Path, extra=(), python=None):
+        from test_setup_install import run_setup
+
         python = str(python or sys.executable)
-        return subprocess.run(
-            [
-                python,
-                str(SCRIPTS / "setup.py"),
-                "--config",
-                str(config),
-                "--root",
-                str(root),
-                "--knowledge-python",
-                python,
-                "--no-schedule",
-                "--no-native-install",
-                "--no-public-feed",
-                *extra,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=60,
+        return run_setup(
+            python,
+            "--config",
+            str(config),
+            "--root",
+            str(root),
+            "--no-schedule",
+            "--no-native-install",
+            "--no-public-feed",
+            *extra,
             env=self._env(config),
         )
 
