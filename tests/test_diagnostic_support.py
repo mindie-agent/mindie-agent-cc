@@ -73,3 +73,21 @@ class DiagnosticSupportTests(unittest.TestCase):
         hint = support.reporting_hint()
         for action in ("enable", "disable", "status"):
             self.assertEqual(hint[action], "/mindie-agent:reporting-" + action)
+
+    def test_windows_ensure_command_is_powershell_executable(self):
+        command = [r"C:\Users\Owner's Name\python.exe", "-m", "mindie_diagnostics.cli",
+                   "--config", r"C:\Users\Owner's Name\reporting.json"]
+        with patch.object(support, "os", types.SimpleNamespace(name="nt")):
+            line = support.ensure_command_line(command)
+        self.assertEqual(line, "& 'C:\\Users\\Owner''s Name\\python.exe' '-m' "
+                         "'mindie_diagnostics.cli' '--config' "
+                         "'C:\\Users\\Owner''s Name\\reporting.json'")
+
+    def test_stale_policy_is_explicit_and_not_an_effective_saved_choice(self):
+        policy = dict(status="configured", enabled=True, worker={"status": "idle"})
+        for saved in (None, "later", "disabled"):
+            result = support.effective_reporting(policy, saved)
+            self.assertFalse(result["enabled"])
+            self.assertTrue(result["policy_enabled"])
+            self.assertEqual(result["status"], "consent_mismatch")
+        self.assertIs(support.effective_reporting(policy, "enabled"), policy)

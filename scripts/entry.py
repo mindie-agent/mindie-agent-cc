@@ -367,17 +367,15 @@ def status_payload(session=None):
     import diagnostic_support
 
     payload = dict(_knowledge_status_payload(session))
-    payload["reporting"] = diagnostic_support.reporting_status()
     saved = consent_mod.load()
-    # Reporting is offered once inside the first setup and stays offered
-    # while genuinely undecided; an installer default-off is NOT a saved
-    # choice and must not mask it. Any recorded decision (enabled, disabled
-    # or later) persists and is never re-asked; a damaged authority shows
-    # the fault above instead of a fresh offer.
+    payload["reporting"] = diagnostic_support.effective_reporting(
+        diagnostic_support.reporting_status(), saved.get("reporting"))
+    # A later task does not reopen an independent choice left unset at setup.
     if (
         payload["reporting"].get("status") == "not_configured"
-        and saved["state"] in {"ok", "missing"}
+        and saved["state"] == "missing"
         and saved["reporting"] is None
+        and not consent_mod.marker_exists()
     ):
         payload["reporting_choice"] = diagnostic_support.reporting_hint()
     return payload
@@ -513,27 +511,25 @@ def _apply_contribute(payload, session, event, configured):
 
 
 def _record_reporting_decision(enable: bool) -> dict:
-    """Configure the real reporter and persist the decision only when the
-    service reached the intended state. Shared by the reporting-* commands
-    and the unified entry's reporting tokens."""
+    """Save explicit intent before changing the independent reporter policy."""
     import consent as consent_mod
     import diagnostic_support
 
     python = load_adapter_config()["python"]
+    try:
+        consent_mod.record_reporting("enabled" if enable else "disabled")
+    except consent_mod.ConsentError as exc:
+        return dict(status="unavailable", enabled=None,
+                    consent_error=dict(state=exc.state, error=str(exc)))
     result = diagnostic_support.configure_reporting(enable, python)
-    if result.get("enabled") is enable:
-        try:
-            consent_mod.record_reporting("enabled" if enable else "disabled")
-        except consent_mod.ConsentError as exc:
-            result = dict(result)
-            result["consent_error"] = dict(state=exc.state, error=str(exc))
+    if result.get("enabled") is not enable:
+        result = dict(result, saved_reporting="enabled" if enable else "disabled",
+                      policy_change_confirmed=False)
     return result
 
 
 def _apply_reporting_token(payload, token, configured):
-    """The independent reporting choice, decided inside the same entry. A
-    real service change is recorded only when the service reached the
-    intended state; later/disable persist without touching the service."""
+    """Persist the independent choice without starting a service in a Hook."""
     import consent as consent_mod
     import diagnostic_support
 
@@ -553,7 +549,8 @@ def _apply_reporting_token(payload, token, configured):
             consent_mod.record_reporting(value)
         except consent_mod.ConsentError as exc:
             payload["consent_error"] = dict(state=exc.state, error=str(exc))
-        payload["reporting"] = diagnostic_support.reporting_status()
+        payload["reporting"] = diagnostic_support.effective_reporting(
+            diagnostic_support.reporting_status(), consent_mod.load().get("reporting"))
         return payload
     payload["reporting"] = _record_reporting_decision(token == "reporting-enable")
     return payload
@@ -753,9 +750,13 @@ def op_reporting(session, event, command):
     import diagnostic_support
 
     if command == "reporting-status":
-        return diagnostic_support.reporting_status()
+        import consent as consent_mod
+        return diagnostic_support.effective_reporting(
+            diagnostic_support.reporting_status(), consent_mod.load().get("reporting"))
     if not first:
-        return dict(diagnostic_support.reporting_status(), already=True)
+        import consent as consent_mod
+        return dict(diagnostic_support.effective_reporting(
+            diagnostic_support.reporting_status(), consent_mod.load().get("reporting")), already=True)
     if not _configured():
         raise ValueError("MindIE is not configured; run scripts/setup.py first")
     return _record_reporting_decision(command == "reporting-enable")

@@ -29,3 +29,29 @@ that a remote job stopped, or that a full contribution loop completed.
 Windows remains unverified on hardware. Its blocking pipe-write and process-tree
 cleanup behavior requires separate acceptance. No new retry or background service
 is introduced by these changes.
+
+## Automatic product-fault reports
+
+The adapter inherits the existing shared diagnostics reporter. Confirmed product
+faults produce bounded local diagnostic records; after the independent saved
+reporting choice and one-time reporter setup, the worker automatically prepares
+redacted GitHub Issues without a model call or a per-task prompt. Ordinary
+business-command failures are not automatically asserted to be product defects.
+
+The public payload contains only allowed product code metadata. It excludes
+task text, raw exceptions, credentials, commands, paths and local incident IDs.
+Duplicate faults share a fingerprint; an unknown Issue creation result is
+reconciled before any further action and never blindly posted again.
+Logging/reporting failure cannot replace the original business result.
+
+Reporting enable saves the explicit preference before changing its policy.
+Unreadable or damaged consent leaves the real policy unchanged. A policy and
+saved choice that disagree are exposed as `consent_mismatch`, including the
+actual `policy_enabled` fact. Existing choices are not asked again in later
+tasks. The returned setup `command` is an argv array; `command_line` declares
+`command_shell` and uses PowerShell quoting on Windows.
+
+The synthetic adapter/log/outbox/mock-Issue checks and actual Windows process
+identity checks are recorded in diagnostics'
+`docs/production-reporting-acceptance-2026-10-15.md`. They do not demonstrate
+native Claude event delivery, scheduled-task setup or a public Issue write.
