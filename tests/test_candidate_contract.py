@@ -132,6 +132,19 @@ def manifest_base(source):
 
 
 class DigestStabilityTests(unittest.TestCase):
+    def test_installed_runtime_and_git_state_do_not_change_package_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = _source(Path(tmp))
+            before = product_contract.source_identity(source)
+            for directory in (".venv", ".git", "config", "tests"):
+                path = source / directory / "unrelated"
+                path.parent.mkdir()
+                with path.open("wb") as stream:
+                    stream.truncate(product_contract.SOURCE_LIMIT + 1)
+            self.assertEqual(product_contract.source_identity(source), before)
+            (source / "scripts" / "marker.py").write_text("value = 3\n")
+            self.assertNotEqual(product_contract.source_identity(source), before)
+
     def test_source_digest_is_order_independent(self):
         with tempfile.TemporaryDirectory() as tmp:
             source = _source(Path(tmp))

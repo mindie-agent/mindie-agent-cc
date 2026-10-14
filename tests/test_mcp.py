@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from support import env_for, make_config
 
@@ -132,6 +133,49 @@ class RemoteObservationBoundTests(unittest.TestCase):
         for invalid in ("300000", True, 1.5):
             with self.subTest(value=invalid), self.assertRaises(ValueError):
                 mcp_server.clamp_remote_args({"yield_time_ms": invalid})
+
+    def test_uncertain_remote_effect_keeps_the_actual_session_layout(self):
+        import mcp_server
+        import receipt_layout
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ):
+            state = Path(tmp)
+            session = "native-session"
+
+            def uncertain(_name, _args):
+                root = Path(os.environ["REMOTE_DEV_STATE_DIR"])
+                self.assertEqual(root, state / "remote" / session)
+                self.assertTrue((root.parent / "remote-layout.json").is_file())
+                (root / "job.json").write_text('{"state":"uncertain"}')
+                raise RuntimeError("submission uncertain")
+
+            with patch.object(mcp_server, "state_dir", return_value=state), \
+                    patch("remote_dev.mcp.tools.call_tool", side_effect=uncertain):
+                with self.assertRaisesRegex(RuntimeError, "submission uncertain"):
+                    mcp_server.remote_call("remote_bash", {}, session)
+            self.assertEqual(receipt_layout.receipt_root(state / "remote"), state / "remote")
+            self.assertIn("uncertain", (state / "remote" / session / "job.json").read_text())
+
+    def test_incompatible_layout_prevents_dispatch_without_replacing_receipts(self):
+        import mcp_server
+        from remote_dev.core.errors import RemoteExecutionError
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            base = state / "remote"
+            base.mkdir()
+            layout = base / "remote-layout.json"
+            layout.write_text(json.dumps({
+                "schema": "mindie-cc-remote-layout/1", "format": 9,
+                "release_version": "0.0.1",
+            }))
+            before = layout.read_bytes()
+            with patch.object(mcp_server, "state_dir", return_value=state), \
+                    patch("remote_dev.mcp.tools.call_tool") as dispatch:
+                with self.assertRaises(RemoteExecutionError) as caught:
+                    mcp_server.remote_call("remote_bash", {}, "native-session")
+                self.assertEqual(caught.exception.submission_state, "not_sent")
+                dispatch.assert_not_called()
+            self.assertEqual(layout.read_bytes(), before)
+            self.assertFalse((base / "native-session").exists())
 
 
 class RemoteFailureProjectionTests(unittest.TestCase):

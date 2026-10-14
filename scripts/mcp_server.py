@@ -2,8 +2,8 @@
 """Adapter-owned MCP: knowledge tools and general remote-dev.
 
 Identity is never taken from tool arguments. Native PreToolUse binds
-claudecode/toolUseId; this process consumes it once. Knowledge calls
-require a shared active lease. Remote-dev requires the bind only.
+claudecode/toolUseId; this process consumes it once. Public knowledge reads
+and remote-dev require the native bind, independently of contribution.
 """
 
 from __future__ import annotations
@@ -50,15 +50,20 @@ KNOWLEDGE_TOOL_DEFS = [
     ),
     dict(
         name="knowledge_query",
-        description="Search the selected domain's knowledge and experience. References are advisory.",
+        description=(
+            "Search domain knowledge. Each match has a readable block ref and a "
+            "feedback_ref. For more related matches, pass related_next as continuation "
+            "without query. A changed corpus rejects the continuation. References are advisory."
+        ),
         inputSchema=dict(
             type="object",
             properties=dict(
                 query={"type": "string"},
                 limit={"type": "integer", "minimum": 1, "maximum": 20},
                 conditions={"type": "object"},
+                continuation={"type": "string"},
             ),
-            required=["query"],
+            oneOf=[{"required": ["query"]}, {"required": ["continuation"]}],
             additionalProperties=False,
         ),
     ),
@@ -219,9 +224,19 @@ def remote_tools():
 def remote_call(name, args, session):
     from remote_dev.mcp.schemas import ALIASES
     from remote_dev.mcp.tools import call_tool
+    from remote_dev.core.errors import RemoteExecutionError
+    from receipt_layout import prepare_layout
 
-    root = state_dir() / "remote" / session
-    root.mkdir(parents=True, exist_ok=True)
+    base = state_dir() / "remote"
+    try:
+        with prepare_layout(base):
+            root = base / session
+            root.mkdir(parents=True, exist_ok=True)
+    except (ValueError, OSError) as exc:
+        raise RemoteExecutionError(
+            "remote state preparation failed; existing receipts preserved",
+            category="internal", submission_state="not_sent",
+        ) from exc
     for inherited in (
         "CLAUDE_SESSION_ID",
         "CLAUDE_CODE_SESSION_ID",

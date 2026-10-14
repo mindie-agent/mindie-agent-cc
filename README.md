@@ -17,11 +17,12 @@ initialization are optional; reuse the user's existing choices. See
 Current capture uses the harness's public transcript projection followed by
 local deterministic redaction. Complete user and visible assistant messages
 are saved without tool payloads or a body-writing model. Setup and updates
-automatically install the scanner and metadata worker. The optional metadata
-worker can return only title and summary; failure leaves a source excerpt.
-Its model policy belongs to the adapter, with minimal/disabled thinking, and
-does not add user configuration. Native model acceptance is separate from
-the component tests of this path.
+automatically install the scanner and required block-index worker. The worker
+returns bounded navigation metadata, never a replacement body. A failed or
+uncertain indexing attempt remains visible with its execution and usage receipt;
+an excerpt is not substituted for a completed index. The isolated worker uses
+the selected native Claude model profile. Native model acceptance is separate
+from the component tests of this path.
 
 
 Claude Code adapter for MindIE Agent. This repository owns the native plugin entry, task identity, hooks, transcript parsing, installation and runtime switching. Shared knowledge and remote development stay in their own repositories.
@@ -105,11 +106,12 @@ claude plugin install mindie-agent@mindie-agent-cc --json -y
 claude plugin list --json
 ```
 
-Explicit task entry is the mindie-agent skill (Claude Code may show it bare or
-namespaced; `/mindie-agent:init` is its alias). First use offers recommended
-the missing public contribution destination and project scope. There
-is no default consent; the selected choice persists for the installation and
-is never re-asked, including after restarts, upgrades or failures. Contribution
+The mindie-agent skill describes available capabilities; `/mindie-agent:init`
+is an optional configuration/status entry. Ordinary tasks do not need a
+per-task activation command. During first setup, choose the public contribution
+destination and project scope, or leave contribution off. There is no default
+consent; the selected choice persists for the installation and is never
+re-asked after restarts, upgrades or failures. Contribution
 needs explicit repository, account, project root and public visibility, named
 in the same entry invocation:
 
@@ -136,7 +138,10 @@ pins and `hatchling`. See [framework stability](docs/framework-stability.md).
 These checks do not establish native host acceptance.
 
 With contribution off there is no Stop transcript collection, capture or
-organizer call. Remote-dev works independently of knowledge activation.
+organizer call. With approved contribution, native Stop automatically associates
+its verified transcript within the approved project scope; explicit task
+deactivation remains authoritative. Public knowledge reads and remote-dev
+work independently of capture authorization.
 Knowledge is optional reference material; no task must query, write or vote.
 
 See [framework stability and verification](docs/framework-stability.md) for the

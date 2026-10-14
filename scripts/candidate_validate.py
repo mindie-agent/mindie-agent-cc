@@ -18,7 +18,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from product_contract import identity, read_json, validate_receipt
+from product_contract import identity, package_files, read_json, validate_receipt
 from runtime_probe import build_probe_script
 
 
@@ -50,9 +50,7 @@ def _plugin(source):
 def adapter_check(source):
     """This candidate owns its Claude Code adapter layout and safety checks."""
     plugin = _plugin(source)
-    if any(path.is_symlink() for path in plugin.rglob("*")):
-        raise ValueError("plugin source must contain regular files")
-    if sum(path.stat().st_size for path in plugin.rglob("*") if path.is_file()) > 16 * 1024 * 1024:
+    if sum(path.stat().st_size for path in package_files(source)) > 16 * 1024 * 1024:
         raise ValueError("plugin package exceeds 16 MiB")
     hooks = read_json(plugin / "hooks" / "hooks.json")[0]["hooks"]
     if "Stop" not in hooks or len(hooks["Stop"]) != 1:

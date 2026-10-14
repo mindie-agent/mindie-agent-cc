@@ -152,6 +152,28 @@ def _plugin_root(source):
     return source
 
 
+def package_files(source):
+    """Select executable/plugin inputs, excluding checkout and runtime state."""
+    plugin = _plugin_root(source)
+    result = set()
+    for name in (".claude-plugin", ".mcp.json", "hooks", "scripts", "skills",
+                 "product-contract.json", "runtime-requirements.txt"):
+        path = plugin / name
+        entries = [path]
+        if path.is_dir() and not path.is_symlink():
+            entries.extend(path.rglob("*"))
+        for item in entries:
+            if "__pycache__" in item.parts or item.suffix == ".pyc":
+                continue
+            if item.is_symlink():
+                raise ValueError("candidate package must not contain symlinks")
+            if item.exists() and not item.is_dir():
+                if not item.is_file():
+                    raise ValueError("candidate package must contain regular files")
+                result.add(item)
+    return result
+
+
 def source_identity(source):
     """Bind preparation to source bytes, including the candidate validator."""
     source = Path(source)
@@ -161,11 +183,7 @@ def source_identity(source):
         path = source / name
         if path.is_file() or path.is_symlink():
             files.append(path)
-    files.extend(
-        path for path in plugin.rglob("*")
-        if "__pycache__" not in path.parts and path.suffix != ".pyc"
-        and (path.is_file() or path.is_symlink()) and path not in files
-    )
+    files.extend(package_files(source))
     digest = hashlib.sha256()
     size = 0
     for path in sorted(set(files)):
