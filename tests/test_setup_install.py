@@ -22,7 +22,7 @@ def run_setup(python, *args, source=ROOT, real_product=False, env=None):
             "import sys; sys.path.insert(0, sys.argv.pop(1)); "
             "import setup,updater,product_contract; "
             "updater.probe_runtime=lambda python,deadline,generation,**kw: "
-            "dict(product_contract.identity(generation),status='validated'); "
+            "dict(product_contract.identity(generation,kw.get('revision')),status='validated'); "
             "setup.main()"
         )
         command = [str(python), "-c", helper, str(scripts)]
@@ -65,6 +65,14 @@ class SetupTests(unittest.TestCase):
             self.assertEqual(adapter["product_validation"], engine["product_validation"])
             self.assertEqual(report["product_validation"], engine["product_validation"])
             self.assertEqual(report["product_validation"]["status"], "validated")
+            import product_contract
+            generation = Path(report["generation"])
+            selected = json.loads((generation / "config" / "cc.adapter.json").read_text())
+            self.assertEqual(selected["product_validation"], report["product_validation"])
+            expected = product_contract.identity(
+                generation, report["product_validation"]["candidate_revision"],
+            )
+            self.assertEqual(report["product_validation"], dict(expected, status="validated"))
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 

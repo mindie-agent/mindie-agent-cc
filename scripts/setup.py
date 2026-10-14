@@ -398,17 +398,29 @@ def main():
     generation = genstate.generations_dir(adapter_value) / identity
     if not (generation / updater.COMPLETE).is_file():
         updater.snapshot_source(PLUGIN_ROOT, generation)
-        gen_adapter = updater.write_generation_configs(
-            generation, Path(python), adapter_value
-        )
         host_package = updater.build_host_package(
             generation, dict(adapter_value, python=python), identity,
             package_dir=generation / "host-package",
+        )
+        product_validation = updater.probe_runtime(
+            Path(python), time.monotonic() + updater.CHECK_BUDGET, generation,
+            revision=identity if re.fullmatch(updater.SHA, identity) else None,
+        )
+        gen_adapter = updater.write_generation_configs(
+            generation, Path(python), adapter_value, product_validation,
         )
         (generation / updater.COMPLETE).write_text(identity + "\n", encoding="utf-8")
     else:
         gen_adapter = generation / "config" / "cc.adapter.json"
         host_package = generation / "host-package"
+        product_validation = updater.validate_prepared_generation(
+            generation, Path(python), gen_adapter, identity,
+            time.monotonic() + updater.CHECK_BUDGET,
+        )
+    value["product_validation"] = product_validation
+    adapter_value["product_validation"] = product_validation
+    write_private(engine_config, value, replace=True)
+    write_private(config, adapter_value, replace=True)
     genstate.write_current(
         {
             "generation": str(generation),

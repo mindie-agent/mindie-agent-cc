@@ -514,9 +514,39 @@ def _adapter_engine(adapter: dict) -> str:
     return engine
 
 
-def write_generation_configs(generation: Path, python: Path, adapter: dict) -> Path:
+def _with_product_validation(engine: dict, validation: dict) -> dict:
+    """Move only the declared product feed; preserve custom feeds and opt-out."""
+    from product_contract import publication_feed
+
+    updated = dict(engine)
+    previous = engine.get("product_validation", {}).get("publication", {})
+    expected = publication_feed(validation)
+    managed = {
+        (previous.get("repository"), previous.get("domain")),
+        (expected["repository"], expected["domain"]),
+    }
+    if "feeds" in engine:
+        fields = {key: value for key, value in expected.items() if key != "interval_seconds"}
+        updated["feeds"] = [
+            dict(feed, **fields)
+            if (feed.get("repository"), feed.get("domain")) in managed else dict(feed)
+            for feed in engine["feeds"]
+        ]
+    updated["product_validation"] = validation
+    return updated
+
+
+def write_generation_configs(generation: Path, python: Path, adapter: dict,
+                             validation: dict) -> Path:
+    import product_contract
+
+    product_contract.validate_receipt(
+        json.dumps(validation),
+        product_contract.identity(generation, validation.get("candidate_revision")),
+    )
     engine = load_engine_config(adapter)
     engine.pop("agent_command", None)
+    engine = _with_product_validation(engine, validation)
     config_dir = generation / "config"
     gen_engine = config_dir / "cc.engine.json"
     gen_adapter = config_dir / "cc.adapter.json"
@@ -530,6 +560,7 @@ def write_generation_configs(generation: Path, python: Path, adapter: dict) -> P
         python=str(python),
         engine_config=str(gen_engine),
         base_config=adapter.get("base_config") or str(config_path()),
+        product_validation=validation,
     ))
     return gen_adapter
 
@@ -566,6 +597,49 @@ def build_host_package(generation: Path, adapter: dict, sha: str,
     return package
 
 
+def validate_prepared_generation(generation: Path, python: Path, gen_adapter: Path,
+                                 sha: str, deadline: float) -> dict:
+    """Recheck local source/runtime; reuse only the exact publication receipt."""
+    from native_claude import render_hooks, render_mcp
+
+    try:
+        if (generation / COMPLETE).read_text(encoding="utf-8").strip() != sha:
+            raise ValueError("prepared generation completion marker changed")
+        selected = read_json(gen_adapter)
+        if (not isinstance(selected, dict) or selected.get("python") != str(python)
+                or selected.get("engine_config") != str(generation / "config" / "cc.engine.json")):
+            raise ValueError("prepared runtime configuration changed")
+        engine = load_engine_config(selected)
+        validation = selected.get("product_validation")
+        if not isinstance(validation, dict) or validation != engine.get("product_validation"):
+            raise ValueError("prepared product validation receipt is missing or inconsistent")
+        if _with_product_validation(engine, validation) != engine:
+            raise ValueError("prepared publication feed contract changed")
+        revision = sha if re.fullmatch(SHA, sha) else None
+        result = probe_runtime(python, deadline, generation, revision=revision,
+                               verified_receipt=validation)
+        launcher = launch_dir(selected) / sha / LAUNCHER
+        config_file = selected.get("base_config")
+        if not isinstance(config_file, str) or not Path(config_file).is_absolute():
+            raise ValueError("prepared base configuration is missing")
+        hooks = render_hooks(str(python), str(launcher), config_file)
+        mcp = render_mcp(str(python), str(launcher), config_file)
+        if not _package_identity(generation / "host-package", stamp_version(sha, generation),
+                                 hooks, mcp, generation):
+            raise ValueError("prepared native package changed")
+        for name in (LAUNCHER, "bounded.py", "diagnostic_support.py",
+                     "diagnostic_fallback.py", "diagnostic-build.json"):
+            if (launcher.parent / name).read_bytes() != (generation / "scripts" / name).read_bytes():
+                raise ValueError("prepared launcher changed")
+        return result
+    except CheckFailed:
+        raise
+    except Exception as exc:
+        raise CheckFailed(
+            f"prepared generation validation failed: {type(exc).__name__}: {str(exc)[:200]}"
+        ) from exc
+
+
 def stage_generation(sha: str, remote: str, adapter: dict, deadline: float,
                      build=build_runtime, release_version=None) -> tuple[Path, Path, Path]:
     target = generations_dir(adapter) / sha
@@ -575,8 +649,10 @@ def stage_generation(sha: str, remote: str, adapter: dict, deadline: float,
         if python.exists() and gen_adapter.is_file():
             if release_version is not None:
                 validate_release_manifest(target, release_version)
+            validate_prepared_generation(target, python, gen_adapter, sha, deadline)
+            validate_generation_state(python, target, adapter, deadline)
             return target, python, gen_adapter
-        shutil.rmtree(target)
+        raise CheckFailed("completed generation is missing its runtime or adapter configuration")
     elif target.exists():
         shutil.rmtree(target)
     staging = generations_dir(adapter) / f".staging-{sha}-{os.getpid()}"
@@ -593,18 +669,24 @@ def stage_generation(sha: str, remote: str, adapter: dict, deadline: float,
     except Exception:
         shutil.rmtree(staging, ignore_errors=True)
         raise
+    launcher = launch_dir(adapter) / sha
+    retained_launcher = launcher.exists()
     try:
         if release_version is not None:
             validate_release_manifest(target, release_version)
         python = build(target, deadline)
-        probe_runtime(python, deadline, target, revision=sha)
         validate_generation_state(python, target, adapter, deadline)
-        gen_adapter = write_generation_configs(target, python, adapter)
         build_host_package(target, dict(adapter, python=str(python)), sha)
+        # Package preparation stamps diagnostic metadata into the source.
+        # Bind validation to these final bytes before marking it reusable.
+        validation = probe_runtime(python, deadline, target, revision=sha)
+        gen_adapter = write_generation_configs(target, python, adapter, validation)
         (target / COMPLETE).write_text(f"{sha}\n", encoding="utf-8")
         return target, python, gen_adapter
     except Exception:
         shutil.rmtree(target, ignore_errors=True)
+        if not retained_launcher:
+            shutil.rmtree(launcher, ignore_errors=True)
         raise
 
 
