@@ -6,7 +6,7 @@ task registration code is present but not natively verified). No daemon,
 no model, no SessionStart work.
 
 check: serialized by a nonblocking check.lock under one absolute
-deadline. Resolve remote main to one SHA -> stage an immutable
+deadline. Resolve the selected source to one SHA -> stage an immutable
 generation with its own pinned venv and its own adapter/engine configs
 -> build the native host package pointing at a NEW versioned launcher
 path (live entrypoints are never mutated by staging) -> under the
@@ -26,9 +26,12 @@ import os
 import random
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -69,6 +72,10 @@ except ImportError as exc:
     raise SystemExit("committed updater dependency is unavailable") from None
 
 DEFAULT_REMOTE = "https://github.com/mindie-agent/mindie-agent-cc.git"
+RELEASE_API = "https://api.github.com/repos/mindie-agent/mindie-agent-cc/releases/latest"
+RELEASE_LABEL = "mindie-agent-cc"
+NORMAL_VERSION = re.compile(r"\d+\.\d+\.\d+")
+NORMAL_TAG = re.compile(r"v?\d+\.\d+\.\d+")
 INTERVAL_SECONDS = 300
 CHECK_BUDGET = 240.0
 ROLLBACK_BUDGET = 45.0
@@ -183,13 +190,157 @@ def _git(args, *, timeout, deadline, cwd=None, transport=False):
                        cwd=cwd, env=GIT_ENV, transport=transport)
 
 
+def update_channel(adapter: dict | None = None) -> str:
+    """Ordinary installs resolve a published Release. Development selects main."""
+    selected = os.environ.get("MINDIE_CC_UPDATE_CHANNEL")
+    if not selected and isinstance(adapter, dict):
+        selected = adapter.get("update_channel")
+    channel = selected or "release"
+    if channel not in {"release", "main"}:
+        raise CheckFailed("unsupported update channel")
+    return channel
+
+
+def _classify_release_failure(text):
+    from bounded import classify_transport_text
+
+    kind = classify_transport_text(text)
+    if kind is None:
+        return None
+    category, retry_after = kind
+    error = CheckFailed(_STATIC_FAILURE.get(category, "release source unavailable"))
+    error.category = category
+    if retry_after is not None:
+        error.retry_after = retry_after
+    return error
+
+
+def _http_release_failure(code, headers, body):
+    if code == 429 or code == 403 and "rate limit" in body.lower():
+        retry_after = None
+        if headers is not None:
+            raw = headers.get("Retry-After")
+            try:
+                retry_after = float(raw) if raw is not None else None
+            except (TypeError, ValueError):
+                retry_after = None
+        error = CheckFailed("rate limited")
+        error.category = "rate_limited"
+        if retry_after is not None:
+            error.retry_after = retry_after
+        return error
+    classified = _classify_release_failure(f"HTTP {code}\n{body[:8192]}")
+    if classified is not None:
+        return classified
+    if code == 401:
+        error = CheckFailed("authentication failed")
+        error.category = "authentication"
+        return error
+    if code == 403:
+        error = CheckFailed("permission denied")
+        error.category = "permission"
+        return error
+    return None
+
+
+def read_latest_release(opener=None):
+    """Read GitHub's latest Release. That endpoint excludes drafts and prereleases."""
+    request = urllib.request.Request(
+        RELEASE_API,
+        headers={"Accept": "application/vnd.github+json", "User-Agent": RELEASE_LABEL},
+    )
+    open_url = opener or urllib.request.urlopen
+    try:
+        with open_url(request, timeout=30) as response:
+            raw = response.read(256 * 1024 + 1)
+    except urllib.error.HTTPError as exc:
+        try:
+            body = exc.read(8192)
+            text = body.decode("utf-8", "replace") if isinstance(body, (bytes, bytearray)) else ""
+        except Exception:
+            text = ""
+        classified = _http_release_failure(exc.code, exc.headers, text)
+        if classified is not None:
+            raise classified from None
+        raise CheckFailed("release metadata rejected") from None
+    except urllib.error.URLError as exc:
+        reason = exc.reason
+        if isinstance(reason, (TimeoutError, socket.timeout)):
+            error = CheckFailed("temporary network failure")
+            error.category = "temporary_network"
+            raise error from None
+        classified = _classify_release_failure(str(reason)[:4000])
+        if classified is not None:
+            raise classified from None
+        raise CheckFailed("release source unavailable") from None
+    except (TimeoutError, socket.timeout):
+        error = CheckFailed("temporary network failure")
+        error.category = "temporary_network"
+        raise error from None
+    if len(raw) > 256 * 1024:
+        raise CheckFailed("release metadata too large")
+    try:
+        payload = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise CheckFailed("release metadata rejected") from exc
+    if not isinstance(payload, dict):
+        raise CheckFailed("release metadata rejected")
+    if payload.get("prerelease") is True or payload.get("draft") is True:
+        raise CheckFailed("latest release endpoint returned a prerelease or draft")
+    tag = payload.get("tag_name")
+    if not isinstance(tag, str) or not NORMAL_TAG.fullmatch(tag):
+        raise CheckFailed("release tag must declare a normal product version")
+    return tag, tag.removeprefix("v")
+
+
+def resolve_ref(remote: str, ref: str, deadline: float) -> str:
+    peeled = ref + "^{}"
+    output = _git(
+        ["ls-remote", remote, ref, peeled], timeout=30, deadline=deadline, transport=True,
+    )
+    found = {}
+    for line in output.splitlines():
+        parts = line.split()
+        if len(parts) != 2 or not re.fullmatch(SHA, parts[0]):
+            continue
+        found[parts[1]] = parts[0]
+    sha = found.get(peeled, found.get(ref, ""))
+    if not re.fullmatch(SHA, sha):
+        raise CheckFailed("update source did not resolve to a commit")
+    return sha
+
+
 def resolve_main(remote: str, deadline: float) -> str:
-    output = _git(["ls-remote", remote, "refs/heads/main"], timeout=30,
-                  deadline=deadline, transport=True)
-    match = re.search(rf"\b({SHA})\s+refs/heads/main", output)
-    if not match:
-        raise CheckFailed("remote main did not resolve to a commit SHA")
-    return match.group(1)
+    """Explicit development source. Ordinary release installs do not call this."""
+    return resolve_ref(remote, "refs/heads/main", deadline)
+
+
+def resolve_release(remote: str, deadline: float, opener=None) -> tuple[str, str]:
+    """Resolve one published non-prerelease Release to its exact tag commit."""
+    tag, version = read_latest_release(opener)
+    return resolve_ref(remote, "refs/tags/" + tag, deadline), version
+
+
+def resolve_update(remote: str, adapter: dict, deadline: float, opener=None):
+    channel = update_channel(adapter)
+    if channel == "main":
+        return resolve_main(remote, deadline), None
+    return resolve_release(remote, deadline, opener)
+
+
+def manifest_version(source: Path) -> str:
+    manifest = read_json(source / ".claude-plugin" / "plugin.json")
+    version = manifest.get("version") if isinstance(manifest, dict) else None
+    match = NORMAL_VERSION.fullmatch(version.split("+", 1)[0]) if isinstance(version, str) else None
+    if match is None:
+        raise CheckFailed("candidate plugin must declare a normal product version")
+    return match.group(0)
+
+
+def validate_release_manifest(source: Path, version: str) -> None:
+    """The fetched tree's product version must be the resolved Release version."""
+    if manifest_version(source) != version:
+        raise CheckFailed("release source version must match its normal release tag")
 
 
 def _venv_python(venv: Path) -> Path:
@@ -279,14 +430,66 @@ def build_runtime(generation: Path, deadline: float) -> Path:
     return python
 
 
-def probe_runtime(python: Path, deadline: float, generation: Path) -> None:
-    from setup import probe_script
+def probe_runtime(python: Path, deadline: float, generation: Path, *, revision=None,
+                  verified_receipt=None) -> dict:
+    """Run the candidate validator. Import success is not compatibility."""
+    import product_contract
 
-    parser = str(generation / "scripts" / "transcript.py")
-    output = bounded_run([str(python), "-c", probe_script(parser)], "",
-                         timeout=min(60, _remaining(deadline, RESERVE)))
-    if not output.strip().endswith("OK"):
-        raise CheckFailed(f"generation runtime probe failed: {output.strip()[:300]}")
+    def command(argv, timeout=None, max_output=65536, on_failure=None):
+        try:
+            return bounded_run(
+                [str(item) for item in argv], "",
+                timeout=None if timeout is None else min(timeout, _remaining(deadline, RESERVE)),
+                max_output=max_output,
+            )
+        except Exception as exc:
+            if on_failure is None:
+                raise
+            code = getattr(exc, "returncode", 1)
+            if type(code) is not int:
+                code = 1
+            raise on_failure("", code) from exc
+
+    try:
+        return product_contract.probe(
+            python, generation / "scripts", command,
+            revision=revision, verified_receipt=verified_receipt,
+        )
+    except Exception as exc:
+        if isinstance(exc, CheckFailed):
+            raise
+        raise CheckFailed(
+            f"candidate validation failed: {type(exc).__name__}: {str(exc)[:240]}"
+        ) from exc
+
+
+def validate_generation_state(python: Path, generation: Path, adapter: dict,
+                              deadline: float) -> None:
+    """Reject unknown or incompatible durable state before any switch."""
+    helper = generation / "scripts" / "state_compatibility.py"
+    if not helper.is_file():
+        raise CheckFailed("candidate lacks its persisted-state compatibility check")
+    engine = _adapter_engine(adapter)
+    try:
+        output = bounded_run(
+            [str(python), str(helper), engine], "",
+            timeout=min(30, _remaining(deadline, RESERVE)),
+        )
+        result = json.loads(output)
+    except Exception as exc:
+        raise CheckFailed(
+            "persisted state compatibility is unconfirmed: "
+            + type(exc).__name__ + ": " + str(exc)[:200]
+        ) from exc
+    if result != {"status": "compatible"}:
+        raise CheckFailed("candidate did not confirm persisted-state compatibility")
+
+
+def _adapter_engine(adapter: dict) -> str:
+    engine = adapter.get("engine_config")
+    if not isinstance(engine, str) or not engine:
+        raise CheckFailed("adapter has no engine config for state compatibility")
+    return engine
 
 
 def write_generation_configs(generation: Path, python: Path, adapter: dict) -> Path:
@@ -342,7 +545,7 @@ def build_host_package(generation: Path, adapter: dict, sha: str,
 
 
 def stage_generation(sha: str, remote: str, adapter: dict, deadline: float,
-                     build=build_runtime) -> tuple[Path, Path, Path]:
+                     build=build_runtime, release_version=None) -> tuple[Path, Path, Path]:
     target = generations_dir(adapter) / sha
     if (target / COMPLETE).is_file():
         python = _venv_python(target / ".venv")
@@ -367,8 +570,11 @@ def stage_generation(sha: str, remote: str, adapter: dict, deadline: float,
         shutil.rmtree(staging, ignore_errors=True)
         raise
     try:
+        if release_version is not None:
+            validate_release_manifest(target, release_version)
         python = build(target, deadline)
-        probe_runtime(python, deadline, target)
+        probe_runtime(python, deadline, target, revision=sha)
+        validate_generation_state(python, target, adapter, deadline)
         gen_adapter = write_generation_configs(target, python, adapter)
         build_host_package(target, dict(adapter, python=str(python)), sha)
         (target / COMPLETE).write_text(f"{sha}\n", encoding="utf-8")
@@ -1038,7 +1244,7 @@ def _note_resolve_failure(adapter, exc, current_sha):
         next_retry_at=time.time() + _retry_delay(
             count, getattr(exc, "retry_after", None) if category else None
         ),
-        diagnostic=_update_diagnostic("resolve_main", exc),
+        diagnostic=_update_diagnostic("resolve_update", exc),
     )
     if not category:
         fields["failure_class"] = None
@@ -1090,7 +1296,10 @@ def _check_once(adapter: dict, deadline: float, *, force, build, idle,
         }))
         return 0
     try:
-        sha = resolve_main(remote, deadline)
+        if update_channel(adapter) == "main":
+            sha, release_version = resolve_main(remote, deadline), None
+        else:
+            sha, release_version = resolve_release(remote, deadline)
     except Exception as exc:
         recorded = _note_resolve_failure(adapter, exc, current.get("sha"))
         print(json.dumps({
@@ -1133,7 +1342,8 @@ def _check_once(adapter: dict, deadline: float, *, force, build, idle,
             adapter, current, sha, deadline, force, idle, install, lock_timeout)
     try:
         generation, python, gen_adapter = stage_generation(
-            sha, remote, adapter, deadline, build=build)
+            sha, remote, adapter, deadline, build=build,
+            release_version=release_version)
     except Exception as exc:
         record = _remember_failure(adapter, sha, exc)
         diagnostic = _update_diagnostic("stage_generation", exc)

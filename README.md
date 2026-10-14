@@ -30,35 +30,68 @@ Development is in progress. This is not a released or fully accepted implementat
 
 The first internal product Release is being prepared as `0.0.1`, with tag
 `v0.0.1` and no beta suffix. Its candidate manifest and native packages use
-that product version. The current runtime pins and updater still need to adopt
-the current shared contracts and a normal Release source before publication.
-Version preparation and component tests do not establish native macOS/Windows
-acceptance. Benchmark work is separate from this release.
+that product version. A normal installation follows the latest published
+non-prerelease GitHub Release and resolves that tag to one commit. It does
+not follow `main`. `--channel main` is the explicit development source.
+The Git tag and Release are not published yet, so these instructions do not
+provide a command that installs `v0.0.1` today. Version preparation and
+component tests do not establish native macOS/Windows acceptance. Benchmark
+work is separate from this release.
 
 MindIE Agent inherits all nine [VAWS design principles](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.md). See the [Harness boundary and lifecycle contract](https://github.com/mindie-agent/mindie-agent/blob/main/docs/harness-boundary-and-lifecycle.md).
 
 Acceptance requires actual local Claude Code runs and observed external outcomes. Passing unit tests or fabricated hook input does not establish native acceptance. macOS is the first real host; Windows desktop acceptance remains pending.
 
-## Install on macOS
+## Install
 
 Requires Python 3.11+, Git and an installed, authenticated Claude Code with
 native plugin support. The installer creates its own pinned persistent runtime,
 retains the plugin source, installs and reads back the native package, and
 registers model-free update checks. Community contribution stays off.
 
-The knowledge interpreter also needs SQLite 3.43.0 or newer with FTS5 and
-`contentless_delete` support. Installation checks the actual SQLite library;
-the Python version alone does not establish this capability.
+The current knowledge runtime does not require SQLite FTS5
+`contentless_delete`. Installation checks the pinned component commits and
+the current block-index, result, and usage worker contract. A successful
+import by itself is not that check. Native Windows and macOS host acceptance
+are separate from these component checks.
+
+Until `v0.0.1` exists as a published Release, install from the candidate
+source that will be tagged. After publication, start from that tag or its
+source archive. The default channel is `release`:
 
 ```bash
 git clone https://github.com/mindie-agent/mindie-agent-cc.git
 cd mindie-agent-cc
+git checkout v0.0.1
 python3 scripts/setup.py
 ```
 
+The published tag is not available yet. For a candidate checkout, omit
+`git checkout v0.0.1`. `--channel main` is only for an explicit development
+install that should follow `main`.
+
+On Windows PowerShell, from the same candidate or published tag:
+
+```powershell
+py -3.11 scripts\setup.py
+```
+
+`py -3` is acceptable when it resolves to Python 3.11 or newer. Setup uses
+`XDG_DATA_HOME` for its data root when that variable is set, and otherwise
+`$HOME/.local/share/mindie-agent`. Configuration uses `XDG_CONFIG_HOME`
+when set, and otherwise `$HOME/.config/mindie-agent/cc.json`. PowerShell
+reads those as `$env:XDG_DATA_HOME`, `$env:XDG_CONFIG_HOME`, and `$HOME`.
+After setup, read the version back from the native plugin list. Component
+tests do not replace that readback.
+
+```powershell
+claude plugin list --json
+```
+
 After setup succeeds, the downloaded source can be moved or removed. Keep the
-runtime and launchers under `${XDG_DATA_HOME:-$HOME/.local/share}/mindie-agent/cc`.
-Configuration is `${XDG_CONFIG_HOME:-$HOME/.config}/mindie-agent/cc.json`.
+runtime and launchers under the data root above, in the `cc` directory.
+On macOS that is `${XDG_DATA_HOME:-$HOME/.local/share}/mindie-agent/cc` and
+configuration is `${XDG_CONFIG_HOME:-$HOME/.config}/mindie-agent/cc.json`.
 
 For isolated development only, setup accepts `--config`, `--root`,
 `--claude-config-dir` and `--no-schedule`. `--knowledge-python` is an operator
@@ -111,10 +144,24 @@ current behavior, reproducible checks and acceptance boundaries.
 
 ## Updates and maintenance
 
-The existing OS schedule checks remote main and the public knowledge feed
-every five minutes without a model. Pinned dependencies, source, interpreter
-and configuration switch together. An actual in-flight call defers switching;
-an idle task grant does not. Failures remain visible without replaying work.
+The existing OS schedule checks the selected update source and the public
+knowledge feed every five minutes without a model. The default source is the
+latest published non-prerelease GitHub Release. Its tag is resolved to one
+commit, and the fetched manifest version must match that Release. A failure
+to resolve the Release remains a failed check; it does not mean the install
+is current and it does not fall back to `main`. An explicit `main` channel
+keeps the development source.
+
+Pinned dependencies, source, interpreter and configuration switch together.
+Before that switch, the candidate checks current component provenance and
+whether the existing knowledge state and remote execution receipts are
+compatible. An unknown or released incompatible format stops the switch.
+Bodies, cursors, paid worker results, and external receipts are left in
+place. An actual in-flight call defers switching; an idle task grant does
+not. A failed install restores the previous native selection when readback
+proves it. An uncertain external install is not retried as if it never
+started. Cleanup or bookkeeping failure after a completed business result
+is reported separately and does not replace that result.
 
 Select a retained launcher from the installed configuration, then use it from
 any directory after the downloaded source is removed:
@@ -133,7 +180,7 @@ PYCODE
 python3 "$MINDIE_LAUNCHER" --config "$MINDIE_CONFIG" updater status
 ```
 
-Replace `status` with `check` to check main, or `uninstall-schedule` to stop
+Replace `status` with `check` to resolve the selected source, or `uninstall-schedule` to stop
 automatic checks. `install-schedule` restores scheduling. A known temporary
 network or certificate-trust failure is retried by the next scheduled check
 when its recorded retry time is due. TLS validation stays enabled.

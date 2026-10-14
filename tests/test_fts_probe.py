@@ -1,11 +1,11 @@
-"""Behavioral FTS probe checks. The unsupported double is not an old or Windows SQLite.
+"""The runtime probe checks the current worker contract.
 
-Exact Git pin enforcement stays in the product probe ahead of this check.
+SQLite FTS5 contentless_delete is not a requirement of the current core.
+These checks name the interpreter they execute and do not claim host acceptance.
 """
 
 import os
 from pathlib import Path
-import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -21,53 +21,8 @@ import inspect
 import setup
 from support import explicit_local_candidate_args
 
-CAPABILITY = "FTS5 contentless_delete=1 (SQLite >=3.43.0)"
-
-
-def _exec(source, connect, namespace=None):
-    real = sqlite3.connect
-    sqlite3.connect = connect
-    namespace = {} if namespace is None else namespace
-    try:
-        exec(source, namespace)
-    finally:
-        sqlite3.connect = real
-    return namespace
-
-
-class _Recording:
-    def __init__(self, raw, name, closed):
-        self._raw = raw
-        self._name = name
-        self._closed = closed
-
-    def execute(self, *args, **kwargs):
-        return self._raw.execute(*args, **kwargs)
-
-    def close(self):
-        self._closed.append(self._name)
-        return self._raw.close()
-
-
-def _recording_connect(seen, closed):
-    real = sqlite3.connect
-
-    def connect(name, *args, **kwargs):
-        seen.append(name)
-        return _Recording(real(name, *args, **kwargs), name, closed)
-
-    return connect
-
-
-class _Unsupported:
-    def __init__(self):
-        self.closed = False
-
-    def execute(self, _sql, *_args):
-        raise sqlite3.OperationalError("no such module: fts5")
-
-    def close(self):
-        self.closed = True
+CURRENT = Path("/Users/maoxx241/code/mindie-release-20261014/test-venv/bin/python")
+OLD = Path("/Users/maoxx241/code/mindie-release-20261014/cc-test-venv/bin/python")
 
 
 def _child_env():
@@ -76,63 +31,60 @@ def _child_env():
     return env
 
 
-def _run(source, cwd):
+def _run(python, source):
     return subprocess.run(
-        [sys.executable, "-c", source],
-        cwd=cwd,
+        [str(python), "-c", source],
+        cwd=ROOT,
         capture_output=True,
         text=True,
-        timeout=15,
+        timeout=30,
         env=_child_env(),
     )
 
 
-class FtsProbeTests(unittest.TestCase):
-    def test_supported_ddl_succeeds_and_closes(self):
-        seen, closed = [], []
-        namespace = _exec(
-            setup._FTS_PROBE,
-            _recording_connect(seen, closed),
-            {"missing": ["import-already-failed"]},
-        )
-        self.assertEqual(namespace["missing"], ["import-already-failed"])
-        self.assertEqual(seen, [":memory:"])
-        self.assertEqual(closed, [":memory:"])
-        script = setup.probe_script("/probe/transcript.py")
-        child = "missing = []\n" + script[script.rindex("import sqlite3\n") :]
-        with tempfile.TemporaryDirectory() as tmp:
-            completed = _run(child, tmp)
-            self.assertEqual(completed.returncode, 0, completed.stderr)
-            self.assertEqual(completed.stdout.strip(), "OK")
-            self.assertEqual(list(Path(tmp).iterdir()), [])
+class WorkerProbeTests(unittest.TestCase):
+    def test_probe_does_not_require_retired_fts_capability(self):
+        script = setup.probe_script(str(SCRIPTS / "transcript.py"))
+        self.assertNotIn("contentless_delete", script)
+        self.assertNotIn("fts5", script.lower())
+        self.assertIn("usage_totals", script)
+        self.assertIn("validate_identity", script)
+        self.assertIn("validate_outcome", script)
+        self.assertEqual(setup._FTS_PROBE, "")
 
-    def test_unsupported_error_names_actual_version_and_closes(self):
-        fake = _Unsupported()
+    @unittest.skipUnless(CURRENT.is_file(), "current core interpreter is absent")
+    def test_current_core_satisfies_worker_probe(self):
+        script = setup.probe_script(str(SCRIPTS / "transcript.py"))
+        completed = _run(CURRENT, script)
+        self.assertEqual(completed.returncode, 0, completed.stderr[-500:])
+        self.assertEqual(completed.stdout.strip(), "OK")
 
-        def connect(name, *args, **kwargs):
-            self.assertEqual(name, ":memory:")
-            return fake
-
-        namespace = {"missing": ["x" * 500]}
-        _exec(setup._FTS_PROBE, connect, namespace)
-        self.assertTrue(fake.closed)
-        text = namespace["missing"][0]
-        self.assertTrue(text.startswith("sqlite " + sqlite3.sqlite_version + " lacks "))
-        self.assertIn(CAPABILITY, text[:200])
-        self.assertIn(sqlite3.sqlite_version, text[:200])
-        self.assertIn("OperationalError", text)
-        shown = ("MISSING: " + "; ".join(namespace["missing"])).strip()[:300]
-        self.assertIn(sqlite3.sqlite_version, shown)
-        self.assertIn(CAPABILITY, shown)
+    @unittest.skipUnless(OLD.is_file(), "old core interpreter is absent")
+    def test_old_core_is_not_accepted_as_worker_compatible(self):
+        script = setup.probe_script(str(SCRIPTS / "transcript.py"))
+        completed = _run(OLD, script)
+        self.assertNotEqual(completed.stdout.strip(), "OK")
+        self.assertIn("MISSING:", completed.stdout)
 
     def test_exit1_after_ok_is_rejected_before_writes(self):
         fault = "print('OK', flush=True)\nraise SystemExit(1)\n"
         continued = []
+        real = setup.run
+
+        def wrapped(argv, data="", timeout=15, **kwargs):
+            script = argv[-1] if argv else ""
+            if "commit_id" in script:
+                return "OK\n"
+            return real(argv, data, timeout=timeout, **kwargs)
+
         with tempfile.TemporaryDirectory() as tmp:
-            direct = _run(fault, tmp)
+            direct = subprocess.run(
+                [sys.executable, "-c", fault], cwd=tmp, capture_output=True,
+                text=True, timeout=15, env=_child_env(),
+            )
             self.assertEqual(direct.returncode, 1)
             self.assertEqual(direct.stdout, "OK\n")
-            with patch.object(setup, "PROBE_SCRIPT", fault):
+            with patch.object(setup, "run", wrapped), patch.object(setup, "PROBE_SCRIPT", fault):
                 with self.assertRaises(SystemExit) as caught:
                     kwargs = {}
                     declared = explicit_local_candidate_args()

@@ -52,7 +52,7 @@ class SetupTests(unittest.TestCase):
             root = Path(directory)
             source = root / "candidate"
             (source / "scripts").mkdir(parents=True)
-            for name in ("setup.py", "paths.py", "bounded.py"):
+            for name in ("setup.py", "paths.py", "bounded.py", "runtime_probe.py"):
                 shutil.copy2(ROOT / "scripts" / name, source / "scripts" / name)
             # Valid official requirement shape, deliberately wrong exact commit.
             import re

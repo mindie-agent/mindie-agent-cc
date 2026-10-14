@@ -49,6 +49,7 @@ class UpdaterTests(unittest.TestCase):
         def fake_resolve(remote, deadline):
             return sha
 
+        adapter["update_channel"] = "main"
         self.updater.resolve_main = fake_resolve
         code = self.updater._check_once(
             adapter,

@@ -177,6 +177,7 @@ class PackageRefreshTests(unittest.TestCase):
         return generation, host, before, launcher
 
     def _run_check(self, idle, install, force=False):
+        self.adapter["update_channel"] = "main"
         self.updater.resolve_main = lambda remote, deadline: SHA
         previous_here = self.updater.HERE
         self.updater.HERE = Path(self.genstate.read_current(self.adapter)["generation"]) / "scripts"

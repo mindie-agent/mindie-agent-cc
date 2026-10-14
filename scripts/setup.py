@@ -22,77 +22,15 @@ if str(HERE) not in sys.path:
 
 from bounded import run
 from paths import PLUGIN_ROOT, config_path as default_config_path
+from runtime_probe import PROBE_MODULES, build_probe_script
 
-PROBE_MODULES = (
-    "mindie_knowledge.loop.cli",
-    "mindie_knowledge.loop.activation",
-    "mindie_knowledge.loop.engine",
-    "remote_dev.mcp.tools",
-)
-_PROBE_TEMPLATE = """
-import importlib
-missing = []
-for name in {modules!r}:
-    try:
-        importlib.import_module(name)
-    except Exception as exc:
-        missing.append(f"{{name}} ({{type(exc).__name__}}: {{exc}})")
-if not missing:
-    from mindie_knowledge.loop.engine import Engine
-    from mindie_knowledge.loop import cli
-    if not callable(getattr(Engine, "stop_if_idle", None)):
-        missing.append("core engine lacks the stop_if_idle API")
-    if not callable(getattr(cli, "load_transcript_adapter", None)):
-        missing.append("core cli lacks load_transcript_adapter")
-if not missing:
-    try:
-        module = cli.load_transcript_adapter({{"transcript_adapter": {parser!r}}})
-        if module is None:
-            missing.append("transcript adapter did not load")
-    except Exception as exc:
-        missing.append(f"transcript adapter load failed ({{type(exc).__name__}}: {{exc}})")
-"""
-
-# In-memory only. contentless_delete=1 is SQLite >= 3.43 and an FTS5 build.
-_FTS_PROBE = r"""
-import sqlite3
-_fts = None
-try:
-    _fts = sqlite3.connect(":memory:")
-    _fts.execute("CREATE VIRTUAL TABLE probe USING fts5(body, content='', contentless_delete=1)")
-    _fts.execute("INSERT INTO probe(rowid, body) VALUES (1, 'alpha')")
-    if _fts.execute("SELECT rowid FROM probe WHERE probe MATCH 'alpha'").fetchall() != [(1,)]:
-        raise RuntimeError("insert MATCH failed")
-    _fts.execute("UPDATE probe SET body='beta' WHERE rowid=1")
-    if _fts.execute("SELECT rowid FROM probe WHERE probe MATCH 'beta'").fetchall() != [(1,)]:
-        raise RuntimeError("update MATCH failed")
-    if _fts.execute("SELECT rowid FROM probe WHERE probe MATCH 'alpha'").fetchall():
-        raise RuntimeError("stale MATCH survived update")
-    _fts.execute("DELETE FROM probe WHERE rowid=1")
-    if _fts.execute("SELECT rowid FROM probe WHERE probe MATCH 'beta'").fetchall():
-        raise RuntimeError("delete MATCH failed")
-except Exception as exc:
-    missing.insert(0, (
-        "sqlite " + sqlite3.sqlite_version
-        + " lacks FTS5 contentless_delete=1 (SQLite >=3.43.0): "
-        + type(exc).__name__ + ": " + str(exc)[:160]
-    ))
-finally:
-    if _fts is not None:
-        _fts.close()
-"""
-
-_PROBE_TAIL = """
-print("MISSING: " + "; ".join(missing) if missing else "OK")
-"""
+# The current core no longer uses SQLite FTS5 contentless_delete. Import
+# success is also not enough: the candidate probe checks the worker contract.
+_FTS_PROBE = ""
 
 
 def probe_script(parser: str) -> str:
-    return (
-        _PROBE_TEMPLATE.format(modules=list(PROBE_MODULES), parser=parser)
-        + _FTS_PROBE
-        + _PROBE_TAIL
-    )
+    return build_probe_script(parser)
 
 
 PROBE_SCRIPT = probe_script(
@@ -199,14 +137,14 @@ def probe_runtime(python, pins=None, local_candidates=None):
             f"{python} does not have the exact required commits: {pin_result.strip()}"
         )
     try:
-        output = run([python, "-c", PROBE_SCRIPT], "", timeout=15)
+        output = run([python, "-c", PROBE_SCRIPT], "", timeout=30)
     except Exception as exc:
         raise SystemExit(
             f"knowledge runtime probe failed in {python}: {type(exc).__name__}: {str(exc)[:200]}"
         )
     if not output.strip().endswith("OK"):
         raise SystemExit(
-            f"{python} is missing pinned dependencies: {output.strip()}. "
+            f"{python} is missing the current worker contract: {output.strip()}. "
             "Install runtime-requirements.txt first."
         )
 
@@ -328,6 +266,15 @@ def main():
     )
     parser.add_argument("--update-remote", default=None,
                         help="git remote tracked for automatic updates")
+    parser.add_argument(
+        "--channel",
+        choices=["release", "main"],
+        default="release",
+        help=(
+            "release installs the latest published non-prerelease Release; "
+            "main is the explicit development source"
+        ),
+    )
     parser.add_argument("--no-schedule", action="store_true",
                         help="do not register the automatic update check")
     parser.add_argument("--no-native-install", action="store_true",
@@ -433,6 +380,7 @@ def main():
         adapter_value["claude_config_dir"] = str(args.claude_config_dir.expanduser().absolute())
     if args.update_remote:
         adapter_value["update_remote"] = args.update_remote
+    adapter_value["update_channel"] = args.channel
     write_private(config, adapter_value)
     sharing = write_community(community_config, community, python=python)
     import genstate

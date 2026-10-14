@@ -171,6 +171,7 @@ class RetryTests(unittest.TestCase):
         launcher = genstate.launch_dir(self.adapter) / CURRENT / "mindie_launch.py"
         launcher.parent.mkdir(parents=True)
         launcher.write_text("# retained launcher\n", encoding="utf-8")
+        self.adapter["update_channel"] = "main"
         self.calls = {"stage": 0, "switch": 0, "resolve": 0}
         self.clock = Clock()
         self._time = patch("updater.time.time", self.clock)
@@ -201,7 +202,7 @@ class RetryTests(unittest.TestCase):
             self.calls["resolve"] += 1
             return SHA
 
-        def stage(sha, remote, adapter, deadline, build=None):
+        def stage(sha, remote, adapter, deadline, build=None, release_version=None):
             self.calls["stage"] += 1
             if self.calls["stage"] <= 4:
                 _run(NET, transport=True)
@@ -326,7 +327,7 @@ class RetryTests(unittest.TestCase):
         self.assertEqual(view, {"status": "unavailable"})
 
     def test_unknown_switch_timeout_stays_guarded(self):
-        def stage(sha, remote, adapter, deadline, build=None):
+        def stage(sha, remote, adapter, deadline, build=None, release_version=None):
             self.calls["stage"] += 1
             return Path(adapter["state_dir"]), Path(sys.executable), self.config_path
 
