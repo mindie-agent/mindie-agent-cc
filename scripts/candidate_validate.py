@@ -164,8 +164,8 @@ def validate(source, expected, verified_receipt=None):
     actual = checked("source", "source_invalid", lambda: identity(source, expected.get("candidate_revision")))
     if actual != expected:
         raise CheckFailure("source", "source_changed")
-    checked("adapter", "adapter_incompatible", lambda: adapter_check(Path(source)))
     installed_revisions(actual["runtime"])
+    checked("adapter", "adapter_incompatible", lambda: adapter_check(Path(source)))
     checked("runtime_api", "api_incompatible", lambda: runtime_check(Path(__file__).resolve().parent))
     if verified_receipt is None:
         checked("publication_contract", "read_failed", lambda: publication_contract(actual["publication"]))

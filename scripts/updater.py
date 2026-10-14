@@ -463,6 +463,24 @@ def probe_runtime(python: Path, deadline: float, generation: Path, *, revision=N
         ) from exc
 
 
+def remote_state_base(adapter: dict) -> Path:
+    """The directory ``mcp_server.remote_call`` already writes under.
+
+    ``paths.state_dir(adapter) / "remote"`` is the parent of each native
+    session directory. Do not substitute the engine root or Codex's gate
+    directory. The caller passes this path; the helper does not look it up
+    again and does not move an existing session.
+    """
+    from paths import state_dir
+
+    if not isinstance(adapter, dict):
+        raise CheckFailed("adapter config is missing for remote state compatibility")
+    base = (state_dir(adapter) / "remote").absolute()
+    if not base.is_absolute():
+        raise CheckFailed("remote state base is not absolute")
+    return base
+
+
 def validate_generation_state(python: Path, generation: Path, adapter: dict,
                               deadline: float) -> None:
     """Reject unknown or incompatible durable state before any switch."""
@@ -470,9 +488,10 @@ def validate_generation_state(python: Path, generation: Path, adapter: dict,
     if not helper.is_file():
         raise CheckFailed("candidate lacks its persisted-state compatibility check")
     engine = _adapter_engine(adapter)
+    remote = remote_state_base(adapter)
     try:
         output = bounded_run(
-            [str(python), str(helper), engine], "",
+            [str(python), str(helper), engine, str(remote)], "",
             timeout=min(30, _remaining(deadline, RESERVE)),
         )
         result = json.loads(output)
@@ -551,6 +570,8 @@ def stage_generation(sha: str, remote: str, adapter: dict, deadline: float,
         python = _venv_python(target / ".venv")
         gen_adapter = target / "config" / "cc.adapter.json"
         if python.exists() and gen_adapter.is_file():
+            if release_version is not None:
+                validate_release_manifest(target, release_version)
             return target, python, gen_adapter
         shutil.rmtree(target)
     elif target.exists():
@@ -684,13 +705,6 @@ def native_install(adapter: dict, package: Path, deadline: float,
 def switch(adapter: dict, current: dict, generation: Path, python: Path,
            gen_adapter: Path, sha: str, deadline: float,
            idle, install, lock_timeout, *, package: Path | None = None) -> None:
-    receipts_dir(adapter).mkdir(parents=True, exist_ok=True)
-    atomic_write(receipts_dir(adapter) / f"{sha}.json", {
-        "sha": sha,
-        "at": time.time(),
-        "previous": current,
-        "generation": str(generation),
-    })
     native_attempted = False
     stopped = False
     final = None
@@ -698,6 +712,16 @@ def switch(adapter: dict, current: dict, generation: Path, python: Path,
     if wait <= 0:
         raise LockTimeout("no time left for the exclusive switch lock")
     with OperationLock(adapter).exclusive(timeout=wait):
+        # State may change after staging, including while a staged generation
+        # waits for active work. Check before retirement or native mutation.
+        validate_generation_state(python, generation, adapter, deadline)
+        receipts_dir(adapter).mkdir(parents=True, exist_ok=True)
+        atomic_write(receipts_dir(adapter) / f"{sha}.json", {
+            "sha": sha,
+            "at": time.time(),
+            "previous": current,
+            "generation": str(generation),
+        })
         try:
             idle_result = idle(adapter, current, deadline)
             stopped = idle_result.get("service") == "stopped"

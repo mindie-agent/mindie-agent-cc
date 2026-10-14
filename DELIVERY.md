@@ -62,9 +62,13 @@ core message that an explicit migration is required. Invalid layout JSON
 is also rejected. In both rejection fixtures the database body and receipt
 bytes were unchanged, and no replacement directory was created.
 
-Remote receipts are resolved from `remote_receipt_dir` or, when absent,
-`<engine root>/remote-receipts`. This lane does not move the live remote
-worker store. K3's remote execution path still chooses the real directory.
+Remote receipts use the existing adapter path `paths.state_dir(adapter) / "remote"`,
+with native session children unchanged. The layout is declared before external
+work so uncertain submissions remain recognizable. Foreign formats, including
+unreleased ones, are refused without relabelling or deleting their contents.
+State is checked again inside the exclusive switch lock, before service
+retirement, native installation or a switch receipt. Cached candidates therefore
+cannot bypass a later state incompatibility.
 
 ## Process runner interface for the root integration
 
@@ -93,36 +97,28 @@ current `bounded.py` should be kept, with these behaviors preserved:
 
 ## Commands and results
 
-From `tests/`, with the system Python 3.11.13:
+The initial implementation passed its recorded focused checks. Review found
+private interpreter paths and the wrong remote-state authority in that version;
+the following results replace those as evidence for the final lane changes.
+
+Run from `tests/` with the current pinned runtime interpreter:
 
 ```sh
-python3 -m unittest test_release_source test_candidate_contract \
-  test_state_compatibility test_fts_probe test_updater \
-  test_transport_retry test_package_refresh
+../../test-venv/bin/python -m unittest test_state_compatibility test_fts_probe \
+  test_release_source test_candidate_contract test_updater \
+  test_package_refresh test_transport_retry -v
 ```
 
-Result: 45 tests, OK.
+Result: 50 passed. Tests use `sys.executable`, temporary synthetic stores and a
+synthetic old-contract import fixture; none silently skip for a maintainer's
+private path. The actual `switch` entry is tested to reject incompatible state
+before retirement or installation. A simulated uncertain remote submission
+preserves its layout and job. Candidate validation checks installed pin identity
+before importing runtime-owned state, matching the reviewed Codex fix.
 
-```sh
-python3 -m unittest test_bounded \
-  test_setup_install.SetupTests.test_setup_rejects_wrong_commit_before_writing_configuration
-```
-
-Result: 6 tests, OK.
-
-State and current-core probe tests call
-`/Users/maoxx241/code/mindie-release-20261014/test-venv/bin/python`
-read-only. That environment reports knowledge commit `add5c56313b5257410d52dc736544a0b8e30d55f`.
-The old-core probe uses
-`/Users/maoxx241/code/mindie-release-20261014/cc-test-venv/bin/python`
-and returns `MISSING:` rather than `OK`. Neither environment was modified.
-
-`test_setup_install.SetupTests.test_setup_no_native_no_schedule` and
-`test_independent_cc.SetupIdentityTests.test_explicit_local_candidate_accepts_only_recorded_vcs_commit`
-fail on this machine because the default interpreter is not the pinned
-runtime and `MINDIE_TEST_KNOWLEDGE_CHECKOUT` is unset. They fail before
-writing configuration. That is the existing pin gate, not a new Release
-failure.
+K3 and Grok follow-up model sessions ended with HTTP 408. Their edits and usage
+are preserved; root completed the narrow review fixes without repeating model
+work. This lane has not been installed in a native Claude host.
 
 ## Integration needs for K3 and the root agent
 
@@ -131,8 +127,7 @@ failure.
   against the file's old commits.
 - Keep K3's `bounded.py` protocol and add the interface above, including
   the Codex `a5de698` group-kill receipt.
-- Point remote execution receipts at the directory K3 actually uses, or
-  set `remote_receipt_dir` in the engine config before a release switch.
+- Wrap the existing remote call in `receipt_layout.prepare_layout` before creating the session directory or invoking remote-dev. No new engine setting or moved receipt path is needed.
 - Current `transcript.py` has no `history_source`. The probe therefore
   requires `FileIdentity`, `identify`, and `read_material` only. If K3
   adds historical import, the probe should require `history_source` too.

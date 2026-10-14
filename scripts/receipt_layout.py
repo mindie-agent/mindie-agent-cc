@@ -1,8 +1,19 @@
 """Remote execution receipt formats may reset in development, never after release.
 
-This records durable external execution receipts beside the adapter state.
-It does not own the remote worker. A released format that this runtime does
-not understand fails before any receipt file is moved, deleted, or rewritten.
+This records the format of the directory ``mcp_server.remote_call`` already
+uses: ``paths.state_dir(adapter) / "remote"``. Each native session is one
+child of that directory, and ``REMOTE_DEV_STATE_DIR`` points at that child.
+Shared remote-dev stores jobs and uncertain receipts inside the session
+directory and does not publish its own format contract, so this file is the
+adapter's contract for that real tree.
+
+``remote-layout.json`` lives in the remote base, beside the session
+directories. It does not name Codex's ``gate-v<N>`` root and it does not
+relocate a session. A released format this runtime does not understand fails
+before any session path is moved, deleted, reset, or rewritten.
+
+The remote adapter calls ``prepare_layout`` before submitting external work.
+The declaration must survive a failed or uncertain submission.
 """
 
 from contextlib import contextmanager
@@ -16,8 +27,10 @@ import tempfile
 FORMAT = 1
 # The first product release protects remote effects, including uncertain writes.
 RELEASE_VERSION = "0.0.1"
-SCHEMA = "mindie-remote-layout/1"
+SCHEMA = "mindie-cc-remote-layout/1"
 _LIMIT = 4096
+# Files that remote-dev writes inside one native session directory.
+_DURABLE = ("jobs", "logs", "reads", "artifacts", "patches", "context")
 
 
 def _version(value):
@@ -38,7 +51,7 @@ def _present(path):
 
 
 def _read(base):
-    path = Path(base) / "gate-layout.json"
+    path = Path(base) / "remote-layout.json"
     if not _present(path):
         return None
     if not stat.S_ISREG(path.lstat().st_mode):
@@ -56,53 +69,67 @@ def _read(base):
     return value
 
 
+def _occupied(base):
+    """True when a native session directory already holds remote-dev state."""
+    base = Path(base)
+    if not base.is_dir():
+        return False
+    for session in base.iterdir():
+        if not session.is_dir() or session.name.startswith("."):
+            continue
+        for name in _DURABLE:
+            found = session / name
+            if found.is_dir() or found.is_file():
+                return True
+        if any(path.suffix == ".json" and path.is_file() for path in session.glob("*")):
+            return True
+    return False
+
+
 def receipt_root(base):
-    """Read-only compatibility check. A released foreign format needs migration."""
+    """Read-only check of the actual remote base. Nothing is created or moved.
+
+    A compatible result means the existing session directories may stay where
+    ``remote_call`` wrote them. A released foreign format rejects before a
+    switch and does not select a replacement directory.
+    """
     base = Path(base)
     previous = _read(base)
     _version(RELEASE_VERSION)
-    if previous is None and any(
-            path for directory in base.glob("gate-v[0-9]*")
-            for pattern in ("*.sqlite3", "*.authority.json", "*.json")
-            for path in directory.glob(pattern) if path.is_file()):
+    if previous is None and _occupied(base):
         raise ValueError("remote receipt layout is missing; existing receipts were preserved")
-    if previous is not None:
-        directory = base / ("gate-v" + str(previous["format"]))
-        if not directory.is_dir():
-            raise ValueError(
-                "initialized remote receipt directory is missing; layout was preserved"
-            )
-        if previous["format"] != FORMAT and previous["release_version"] is not None:
-            raise ValueError(
-                "released remote receipts require an explicit format migration; "
-                "receipts were preserved"
-            )
-    return base / ("gate-v" + str(FORMAT))
+    if previous is not None and previous["format"] != FORMAT:
+        raise ValueError(
+            "remote receipts require an explicit format migration; "
+            "receipts were preserved"
+        )
+    return base
 
 
 @contextmanager
 def prepare_layout(base):
-    """Publish the layout only after the caller finishes using the directory."""
+    """Declare the existing layout before any possible external effect."""
     base = Path(base)
     base.mkdir(parents=True, exist_ok=True)
     selected = receipt_root(base)
     previous = _read(base)
-    yield selected
     release = RELEASE_VERSION
     if previous is not None and previous["format"] == FORMAT:
         release = release or previous["release_version"]
     value = dict(schema=SCHEMA, format=FORMAT, release_version=release)
     if value == previous:
+        yield selected
         return
-    descriptor, name = tempfile.mkstemp(dir=base, prefix=".gate-layout-")
+    descriptor, name = tempfile.mkstemp(dir=base, prefix=".remote-layout-")
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
             json.dump(value, stream, sort_keys=True)
             stream.write("\n")
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(name, base / "gate-layout.json")
+        os.replace(name, base / "remote-layout.json")
         name = None
     finally:
         if name is not None:
             Path(name).unlink(missing_ok=True)
+    yield selected

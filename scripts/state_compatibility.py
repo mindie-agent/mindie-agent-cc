@@ -3,35 +3,34 @@
 Unknown and incompatible durable formats fail here. This check does not
 delete, reset, migrate, or rewrite bodies, cursors, paid worker results, or
 external execution receipts.
+
+Knowledge state stays under the engine root. Remote jobs and uncertain
+receipts stay under the adapter state root that ``mcp_server.remote_call``
+already writes: ``paths.state_dir(adapter) / "remote" / <native session>``.
+That directory is also the value assigned to ``REMOTE_DEV_STATE_DIR``. The
+caller resolves it and passes the remote base explicitly. This module does
+not invent a second store and does not relocate an existing session.
 """
 
 import json
+import os
 from pathlib import Path
 import sys
 
 import receipt_layout
 
 
-def remote_receipt_dir(engine):
-    """Receipts live beside adapter state, never inside a knowledge body."""
-    configured = engine.get("remote_receipt_dir")
-    if isinstance(configured, str) and configured:
-        return Path(configured)
-    root = engine.get("root")
-    if not isinstance(root, str) or not root:
-        raise ValueError("engine config has no durable root for remote receipts")
-    return Path(root) / "remote-receipts"
-
-
-def check(engine_config):
+def check(engine_config, remote_base):
     from mindie_knowledge.state_layout import state_root
 
     try:
         config = json.loads(Path(engine_config).read_text(encoding="utf-8"))
         if not isinstance(config, dict):
             raise ValueError("engine config is not an object")
+        if not isinstance(remote_base, str) or not os.path.isabs(remote_base):
+            raise ValueError("remote state base must be an absolute path")
         state_root(config["root"], config["domain"])
-        receipt_layout.receipt_root(remote_receipt_dir(config))
+        receipt_layout.receipt_root(remote_base)
     except Exception as exc:
         message = str(exc)
         if "preserved" not in message:
@@ -41,4 +40,6 @@ def check(engine_config):
 
 
 if __name__ == "__main__":
-    print(json.dumps(check(sys.argv[1])))
+    if len(sys.argv) != 3:
+        raise SystemExit("usage: state_compatibility.py ENGINE_CONFIG REMOTE_BASE")
+    print(json.dumps(check(sys.argv[1], sys.argv[2])))

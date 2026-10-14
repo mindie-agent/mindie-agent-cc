@@ -1,7 +1,11 @@
 """The runtime probe checks the current worker contract.
 
 SQLite FTS5 contentless_delete is not a requirement of the current core.
-These checks name the interpreter they execute and do not claim host acceptance.
+These checks use the selected interpreter, sys.executable. CI installs the
+pinned runtime there, so the current-core check runs instead of skipping.
+An old core is a synthetic interpreter whose modules omit the current
+contract. No private filesystem path is required. These checks do not claim
+host acceptance.
 """
 
 import os
@@ -21,8 +25,7 @@ import inspect
 import setup
 from support import explicit_local_candidate_args
 
-CURRENT = Path("/Users/maoxx241/code/mindie-release-20261014/test-venv/bin/python")
-OLD = Path("/Users/maoxx241/code/mindie-release-20261014/cc-test-venv/bin/python")
+CURRENT = Path(sys.executable)
 
 
 def _child_env():
@@ -31,15 +34,47 @@ def _child_env():
     return env
 
 
-def _run(python, source):
+def _run(python, source, extra_env=None):
+    env = _child_env()
+    if extra_env:
+        env.update(extra_env)
+        # The old-core fixture is the only caller that sets PYTHONPATH.
+        # _child_env removes it so ordinary checks cannot inherit one.
+        if "PYTHONPATH" in extra_env:
+            env["PYTHONPATH"] = extra_env["PYTHONPATH"]
     return subprocess.run(
         [str(python), "-c", source],
         cwd=ROOT,
         capture_output=True,
         text=True,
         timeout=30,
-        env=_child_env(),
+        env=env,
     )
+
+
+def _missing_contract(directory):
+    """Packages that import and omit the current worker symbols.
+
+    The selected interpreter still runs the probe. These modules hide the
+    pinned runtime for that one process, so rejection does not depend on a
+    private older virtualenv.
+    """
+    root = Path(directory)
+    packages = {
+        "mindie_knowledge/__init__.py": "",
+        "mindie_knowledge/loop/__init__.py": "",
+        "mindie_knowledge/materials/__init__.py": "",
+        "mindie_knowledge/community/__init__.py": "",
+        "remote_dev/__init__.py": "",
+        "remote_dev/mcp/__init__.py": "",
+        "langmem/__init__.py": "",
+        "langmem/short_term.py": "def summarize_messages(*args, **kwargs):\n    return None\n",
+    }
+    for relative, body in packages.items():
+        path = root.joinpath(*relative.split("/"))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+    return root
 
 
 class WorkerProbeTests(unittest.TestCase):
@@ -52,17 +87,16 @@ class WorkerProbeTests(unittest.TestCase):
         self.assertIn("validate_outcome", script)
         self.assertEqual(setup._FTS_PROBE, "")
 
-    @unittest.skipUnless(CURRENT.is_file(), "current core interpreter is absent")
     def test_current_core_satisfies_worker_probe(self):
         script = setup.probe_script(str(SCRIPTS / "transcript.py"))
         completed = _run(CURRENT, script)
         self.assertEqual(completed.returncode, 0, completed.stderr[-500:])
         self.assertEqual(completed.stdout.strip(), "OK")
 
-    @unittest.skipUnless(OLD.is_file(), "old core interpreter is absent")
     def test_old_core_is_not_accepted_as_worker_compatible(self):
         script = setup.probe_script(str(SCRIPTS / "transcript.py"))
-        completed = _run(OLD, script)
+        with tempfile.TemporaryDirectory() as tmp:
+            completed = _run(CURRENT, script, {"PYTHONPATH": str(_missing_contract(tmp))})
         self.assertNotEqual(completed.stdout.strip(), "OK")
         self.assertIn("MISSING:", completed.stdout)
 
