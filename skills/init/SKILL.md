@@ -26,4 +26,9 @@ The independent reporting choice is offered once with the first setup
 
 There is no automatic yes. A saved choice persists for this installation and
 is never re-asked. Remote-dev works without this binding.
+
+During installation or first-use setup, present the [user notice](../mindie-agent/references/user-notice.md),
+then follow [optional workspace setup](../mindie-agent/references/workspace-setup.md).
+Reuse the user's creation and initialization decisions.
+
 $ARGUMENTS
