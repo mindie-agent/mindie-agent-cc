@@ -63,7 +63,6 @@ KNOWLEDGE_TOOL_DEFS = [
                 conditions={"type": "object"},
                 continuation={"type": "string"},
             ),
-            oneOf=[{"required": ["query"]}, {"required": ["continuation"]}],
             additionalProperties=False,
         ),
     ),
@@ -190,6 +189,13 @@ def knowledge_call(name, args, session):
     from mindie_knowledge.loop.cli import rpc
     from paths import engine_config_path
 
+    if name == "knowledge_query":
+        # Keep the native schema a plain object; enforce the shared argument
+        # contract before any service/storage operation.
+        from mindie_knowledge.materials.provenance import query_request
+
+        query_request(args.get("query"), args.get("limit", 5),
+                      args.get("conditions"), args.get("continuation"))
     # Identity comes from the consumed native toolUseId bind. Public reads
     # use the native tool binding and do not require a capture lease.
     method = name.removeprefix("knowledge_")

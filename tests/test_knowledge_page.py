@@ -114,12 +114,27 @@ class KnowledgePageTests(unittest.TestCase):
         self.assertEqual(query["inputSchema"]["properties"]["limit"]["maximum"], 20)
         self.assertEqual(set(query["inputSchema"]["properties"]),
                          {"query", "limit", "conditions", "continuation"})
-        from jsonschema import validate, ValidationError
+        from jsonschema import validate
         validate({"query": "synthetic material"}, query["inputSchema"])
         validate({"continuation": "opaque-next-page", "limit": 3}, query["inputSchema"])
-        for invalid in ({}, {"query": "x", "continuation": "opaque-next-page"}):
-            with self.subTest(invalid=invalid), self.assertRaises(ValidationError):
-                validate(invalid, query["inputSchema"])
+        for unsupported in ("oneOf", "anyOf", "allOf"):
+            self.assertNotIn(unsupported, query["inputSchema"])
+
+    def test_query_rejects_invalid_arguments_before_starting_service(self):
+        import mcp_server
+        from unittest.mock import patch
+
+        for invalid in ({}, {"query": "x", "continuation": "opaque-next-page"},
+                        {"continuation": "malformed"}, {"query": "x", "limit": True}):
+            with self.subTest(invalid=invalid), \
+                    patch("knowledge_service.existing_service") as existing, \
+                    patch("knowledge_service.ensure_service") as start, \
+                    patch("mindie_knowledge.loop.cli.rpc") as rpc:
+                with self.assertRaises(ValueError):
+                    mcp_server.knowledge_call("knowledge_query", invalid, SESSION)
+                existing.assert_not_called()
+                start.assert_not_called()
+                rpc.assert_not_called()
 
     def test_explain_without_host_bind_fails_closed(self):
         message = {
