@@ -284,8 +284,10 @@ def publish_entry(path, adapter_file):
         "import os, sys\n"
         f"os.environ['MINDIE_CC_CONFIG'] = {str(adapter_file)!r}\n"
         "os.environ.pop('PYTHONPATH', None)\n"
-        f"os.execv({sys.executable!r}, [{sys.executable!r}, '-I', "
-        f"{str(HERE / 'mindie_launch.py')!r}, *sys.argv[1:]])\n"
+        f"sys.path.insert(0, {str(HERE)!r})\n"
+        "from bounded import exec_or_wait\n"
+        f"exec_or_wait([{sys.executable!r}, '-I', "
+        f"{str(HERE / 'mindie_launch.py')!r}, *sys.argv[1:]], dict(os.environ))\n"
     )
     _publish_bytes(Path(path), value.encode("utf-8"))
 

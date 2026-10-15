@@ -27,6 +27,25 @@ def _alive(pid: int) -> bool:
 
 
 class BoundedTests(unittest.TestCase):
+    def test_entry_cleanup_does_not_replace_spawn_failure(self):
+        from unittest.mock import Mock
+
+        failure = PermissionError("assignment failed")
+        process = Mock()
+        with patch.object(bounded, "POSIX", False), \
+                patch.object(bounded.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200, create=True), \
+                patch.object(bounded.subprocess, "CREATE_NO_WINDOW", 0x8000000, create=True), \
+                patch.object(bounded.subprocess, "Popen", return_value=process), \
+                patch.object(bounded, "_own_windows_tree", side_effect=failure), \
+                patch.object(bounded, "_kill_tree", side_effect=OSError("cleanup failed")), \
+                patch.object(bounded, "_resume_windows_process") as resume:
+            with self.assertRaises(PermissionError) as caught:
+                bounded.exec_or_wait(["python", "-c", "pass"], {})
+        self.assertIs(caught.exception, failure)
+        self.assertIn("terminate_owned_tree", caught.exception.__notes__[0])
+        resume.assert_not_called()
+        process.wait.assert_called_once_with(timeout=5)
+
     def test_core_managed_call_does_not_rejudge_the_shared_owner(self):
         with patch.object(bounded, "_maintenance_owner", side_effect=AssertionError("second owner")), \
                 patch.object(bounded.os, "getppid", return_value=1):

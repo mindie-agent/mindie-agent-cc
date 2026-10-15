@@ -927,7 +927,14 @@ class StopGateTests(LaneCase):
                 try:
                     proc, rows, wake = self._stop(case, project, sentinel=sentinel)
                     self.assertEqual(proc.returncode, 0, proc.stderr.decode()[:500])
-                    self.assertEqual(json.loads(proc.stdout.decode() or "{}"), {})
+                    output = json.loads(proc.stdout.decode() or "{}")
+                    if name == "corrupt":
+                        self.assertEqual(set(output), {"systemMessage"})
+                        self.assertIn("capture encountered an error", output["systemMessage"])
+                        self.assertNotIn("decision", output)
+                        self.assertNotIn("continue", output)
+                    else:
+                        self.assertEqual(output, {})
                     self.assertEqual(rows, [], rows)
                     self.assertFalse(wake)
                     self.assertEqual(_service_pids(case), [])

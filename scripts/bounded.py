@@ -274,6 +274,41 @@ def _resume_windows_process(process):
         raise ctypes.WinError(convert(status))
 
 
+def exec_or_wait(command, env):
+    """Keep a native entry alive until its selected interpreter actually exits."""
+    if POSIX:
+        os.execve(command[0], command, env)
+    process = subprocess.Popen(
+        command, env=env,
+        stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr,
+        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW | 0x4,
+    )
+    failure = None
+    returncode = None
+    try:
+        _own_windows_tree(process, allow_service=True)
+        _resume_windows_process(process)
+        returncode = process.wait()
+    except BaseException as exc:
+        failure = exc
+    for stage, cleanup in (
+        ("terminate_owned_tree", lambda: _kill_tree(process)),
+        ("reap_entry_child", lambda: process.wait(timeout=5)),
+    ):
+        try:
+            cleanup()
+        except BaseException as exc:
+            if failure is None:
+                failure = exc
+                if returncode is not None:
+                    failure.add_note(f"The entry child already exited with code {returncode}.")
+            else:
+                failure.add_note(f"Entry cleanup failed at {stage}: {type(exc).__name__}")
+    if failure is not None:
+        raise failure
+    raise SystemExit(returncode)
+
+
 def _kill_tree(process, pgid=None):
     if POSIX:
         if getattr(process, "_mindie_tree_terminated", False):

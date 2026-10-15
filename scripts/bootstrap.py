@@ -132,7 +132,7 @@ def main(argv=None):
     env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
     command = [str(python), str(scripts / "mindie_launch.py"),
                "--source", str(source), *argv]
-    os.execve(str(python), command, env)
+    bounded.exec_or_wait(command, env)
 
 
 if __name__ == "__main__":
