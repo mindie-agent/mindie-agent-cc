@@ -10,9 +10,12 @@ The caller owns queue transactions and scans returned metadata; this worker
 never stores source text, rewrites a body, substitutes a fallback summary, or
 retries an uncertain/billed model request.
 
-The single native call is the local ``claude`` CLI in an isolated workdir with
+The single native invocation is the local ``claude`` CLI in an isolated workdir with
 no business tools, hooks, plugins or MCP. The native structured-output
-submission tool remains available for delivering the result. Provider and model come from the selected
+submission tool remains available for delivering the result, including one
+native correction turn when the first response is ordinary text. Usage is the
+native invocation's accumulated usage; one invocation is not one HTTP request.
+Provider and model come from the selected
 native profile's settings (never a shipped host-specific default or
 credential). A missing native model is a configuration failure, not a silent
 default. Cancellation, maintenance-owner death and output bounds still end the
@@ -292,7 +295,7 @@ def _invoke_native(prompt, schema, env, model, receipt):
             "--json-schema",
             summarizer.canonical(schema),
             "--max-turns",
-            "1",
+            "2",
             "--setting-sources",
             "",
             "--tools",

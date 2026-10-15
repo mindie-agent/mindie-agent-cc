@@ -19,13 +19,18 @@ from native acceptance and from backend quality.
 | Native initialization | Isolated `--init-only` completed SessionStart preparation without a conversation on both tested versions. Exit zero alone was insufficient: a Windows attempt returned zero while MCP loading failed, so discovery and fixed-runtime readback are separate gates. | `tests/test_setup_install.py` covers first preparation, compatibility and state-preserving activation. |
 | Native Hook payload and warning | Real Stop events on both tested versions supplied native session identity and transcript location. Static `systemMessage` warning output uses no block decision or model context. Explicit valid off remains quiet; malformed authority is a warning. | `tests/test_launch_entry.py` checks bad configuration, missing fields, invalid schemas and valid off without a model. |
 | MCP stdio | Real native SDK control initialization discovered plugin MCP servers on both versions without a model turn. The facade handles cancellation independently of active tool work. | `tests/test_front_control.py` keeps a real facade process alive across cancellation and a complete helper-binding change. This is a process contract test, not evidence of a complete native update. |
-| Structured result submission | Actual 2.1.269 on macOS and 2.1.299 on Windows with the product flags advertise only `StructuredOutput` to a localhost synthetic provider. With the shared Harness-neutral prompt, exact output schema and real adapter parser, one tool submission passes shared validation; ordinary JSON text instead hits `native_max_turns` with `--max-turns 1`. Each case sends exactly one localhost message request. | `WorkerEnvelopeTests.test_structured_output_is_authoritative_over_prose`, `test_structured_tool_result_event_is_not_an_extra_model_call` and `test_native_max_turns_error_is_failed_with_known_usage` preserve the strict result and usage contract. |
+| Structured result submission | Actual 2.1.269 on macOS and 2.1.299 on Windows advertise only `StructuredOutput` to a localhost synthetic provider. A direct submission passes the exact schema and shared validation. A later 2.1.299 WSL control established that ordinary JSON text needs the native structured-output correction: `--max-turns 1` ends before that correction; `--max-turns 2` permits the native enforcement message and second submission. The adapter permits that single native correction and still accepts only `structured_output`. | `WorkerEnvelopeTests.test_structured_output_is_authoritative_over_prose`, `test_structured_tool_result_event_is_not_an_extra_model_call`, `test_native_structured_correction_preserves_accumulated_usage_in_one_invocation` and `test_native_max_turns_error_is_failed_with_known_usage` preserve the strict result and usage contract. |
 
 The local HTTP structured-output experiment uses fabricated token counters.
 Its native cost estimate is not a paid model-usage receipt. It proves the native
 submission and parser path; it does not prove that a particular backend will
 follow the instructions. Earlier paid failures remain failed and are not
 replayed or relabeled as successes.
+
+`model_calls` counts the admitted native invocation, not its HTTP requests.
+The native result supplies accumulated usage across its internal turns. The
+WSL text-then-submission control made two localhost requests and reported
+`num_turns: 3` because native tool-result events also contribute to that count.
 
 The release review retains the exact native binaries, source hashes, complete
 native events and experiment receipts outside the product tree. The registry

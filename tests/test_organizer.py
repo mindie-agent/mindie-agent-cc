@@ -365,6 +365,24 @@ class WorkerEnvelopeTests(unittest.TestCase):
         self.assertTrue(value["usage_known"])
         summarizer.validate_outcome(value, payload)
 
+    def test_native_structured_correction_preserves_accumulated_usage_in_one_invocation(self):
+        payload = make_payload()
+        captured = []
+        usage = dict(input_tokens=20, cache_creation_input_tokens=6,
+                     cache_read_input_tokens=4, output_tokens=10)
+        value = self.execute(
+            payload, native_envelope(metadata_for(payload), num_turns=3, usage=usage),
+            captured=captured,
+        )
+        self.assertEqual(len(captured), 1)
+        self.assertEqual(value["status"], "returned")
+        self.assertEqual(value["model_calls"], 1)
+        self.assertEqual(value["usage"],
+                         dict(input_tokens=26, cached_input_tokens=4, output_tokens=10))
+        self.assertTrue(value["usage_known"])
+        self.assertEqual(value["billing_status"], "reported")
+        summarizer.validate_outcome(value, payload)
+
     def test_native_max_turns_error_is_failed_with_known_usage(self):
         payload = make_payload()
         native = json.loads(native_envelope(None, is_error=True, num_turns=2))
@@ -461,7 +479,7 @@ class WorkerEnvelopeTests(unittest.TestCase):
         self.assertIn("--print", argv)
         self.assertEqual(json.loads(argv[argv.index("--json-schema") + 1]),
                          summarizer.output_schema([block["block_id"] for block in payload["blocks"]]))
-        self.assertEqual(argv[argv.index("--max-turns") + 1], "1")
+        self.assertEqual(argv[argv.index("--max-turns") + 1], "2")
         self.assertIn("--model", argv)
         self.assertEqual(argv[argv.index("--model") + 1], "fixture-model")
         self.assertEqual(argv[argv.index("--effort") + 1], "low")

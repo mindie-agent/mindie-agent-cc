@@ -201,6 +201,7 @@
       "test_ids": [
         "tests/test_organizer.py::WorkerEnvelopeTests.test_structured_output_is_authoritative_over_prose",
         "tests/test_organizer.py::WorkerEnvelopeTests.test_structured_tool_result_event_is_not_an_extra_model_call",
+        "tests/test_organizer.py::WorkerEnvelopeTests.test_native_structured_correction_preserves_accumulated_usage_in_one_invocation",
         "tests/test_organizer.py::WorkerEnvelopeTests.test_native_max_turns_error_is_failed_with_known_usage"
       ],
       "evidence_refs": [
