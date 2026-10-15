@@ -23,10 +23,12 @@ from runtime_probe import build_probe_script
 
 
 class CheckFailure(ValueError):
-    def __init__(self, stage, code, component=None):
+    def __init__(self, stage, code, component=None, *, process=None):
         self.failure = dict(stage=stage, code=code)
         if component is not None:
             self.failure["component"] = component
+        if process is not None:
+            self.failure["process"] = process
         super().__init__(stage + ": " + code)
 
 
@@ -123,9 +125,54 @@ def runtime_check(scripts):
         raise ValueError(output.getvalue().strip() or "candidate runtime probe returned no result")
 
 
+def publication_git(args, code, env):
+    """Project only execution facts from one owned Git process."""
+    from bounded import (
+        CommandCancelled, CommandTimedOut, OutputLimitExceeded, OwnerExited, run,
+    )
+
+    receipt = {}
+    try:
+        output = run(args, "", timeout=None, env=env, check=False, receipt=receipt)
+    except Exception as exc:
+        # An incomplete _spawn may already have created/resumed a process.
+        # Only the runner's explicit pre-start cancellation proves no start.
+        before_start = (receipt.get("started") is False
+                        and isinstance(exc, (CommandCancelled, OwnerExited)))
+        execution = ("completed" if receipt.get("completed") is True
+                     else "not_started" if before_start else "unknown")
+        returncode = receipt.get("returncode", getattr(exc, "returncode", None))
+        reason = "process_failed"
+        if isinstance(exc, CommandCancelled):
+            reason = "cancelled"
+        elif isinstance(exc, OwnerExited):
+            reason = "owner_exited"
+        elif receipt.get("started") is False:
+            reason = "spawn_failed"
+        elif execution == "unknown" and isinstance(exc, (TimeoutError, CommandTimedOut)):
+            reason = "timeout"
+        elif execution == "unknown" and isinstance(exc, OutputLimitExceeded):
+            reason = "output_limit"
+        elif execution == "completed" and returncode != 0:
+            reason = "nonzero_exit"
+        raise CheckFailure("publication_fetch", code, process=dict(
+            execution=execution, reason=reason, returncode=returncode,
+            cleanup_failed=receipt.get("cleanup_failed") is True,
+        )) from exc
+    returncode = receipt.get("returncode")
+    if receipt.get("completed") is not True or returncode != 0 or receipt.get("cleanup_failed"):
+        reason = ("process_failed" if receipt.get("completed") is not True
+                  else "nonzero_exit" if returncode != 0 else "cleanup_failed")
+        raise CheckFailure("publication_fetch", code, process=dict(
+            execution="completed" if receipt.get("completed") is True else "unknown",
+            reason=reason, returncode=returncode,
+            cleanup_failed=receipt.get("cleanup_failed") is True,
+        ))
+    return output
+
+
 def publication_contract(publication):
     """One read-only fetch. No checkout, Git hooks, or retries."""
-    from bounded import run
     from mindie_knowledge.publication_contract import read_git_contract
 
     env = dict(
@@ -135,17 +182,14 @@ def publication_contract(publication):
     with tempfile.TemporaryDirectory(prefix="mindie-publication-contract-") as directory:
         git = ["git", "-c", "core.hooksPath=" + os.devnull, "-C", directory]
 
-        def once(args):
-            return run(args, "", timeout=None, env=env)
-
-        checked("publication_fetch", "fetch_failed", lambda: once(git + ["init", "--bare", "--quiet"]))
-        checked("publication_fetch", "fetch_failed", lambda: once(git + [
+        publication_git(git + ["init", "--bare", "--quiet"], "init_failed", env)
+        publication_git(git + [
             "fetch", "--no-auto-maintenance", "--depth=1", "--no-tags",
             "https://github.com/" + publication["repository"] + ".git",
             publication["verified_commit"],
-        ]))
-        observed = checked(
-            "publication_fetch", "fetch_failed", lambda: once(git + ["rev-parse", "FETCH_HEAD"])
+        ], "fetch_failed", env)
+        observed = publication_git(
+            git + ["rev-parse", "FETCH_HEAD"], "revision_read_failed", env,
         ).strip()
         if observed != publication["verified_commit"]:
             raise CheckFailure("publication_fetch", "revision_mismatch")
