@@ -50,6 +50,22 @@ SUMMARY_EFFORT = "low"
 # metadata; the result text itself is checked against MAX_RESPONSE_BYTES.
 MAX_ENVELOPE_BYTES = summarizer.MAX_RESPONSE_BYTES + 16 * 1024
 
+# Native 2.1.269 result/terminal enums. Unknown values never become log text.
+NATIVE_FAILURE_REASONS = {
+    "error_max_turns": "native_max_turns",
+    "error_max_budget_usd": "native_budget_exhausted",
+    "error_max_structured_output_retries": "native_structured_output_exhausted",
+}
+NATIVE_RESULT_SUBTYPES = {"success", "error_during_execution", *NATIVE_FAILURE_REASONS}
+NATIVE_TERMINAL_REASONS = {
+    "blocking_limit", "rapid_refill_breaker", "prompt_too_long", "image_error",
+    "model_error", "api_error", "malformed_tool_use_exhausted",
+    "aborted_streaming", "aborted_tools", "stop_hook_prevented", "hook_stopped",
+    "tool_deferred", "max_turns", "background_requested", "completed",
+    "budget_exhausted", "structured_output_retry_exhausted",
+    "tool_deferred_unavailable", "turn_setup_failed",
+}
+
 
 class ConfigurationError(ValueError):
     """The worker configuration or the admitted policy is unusable."""
@@ -172,6 +188,34 @@ def _usage_counters(raw):
     }
 
 
+def _native_failure_diagnostic(data):
+    """Keep terminal cause and shape without storing model/provider free text."""
+    def label(key, allowed):
+        value = data.get(key)
+        return value if isinstance(value, str) and value in allowed else "unknown"
+
+    def number(key, lower, upper):
+        value = data.get(key)
+        return value if type(value) is int and lower <= value <= upper else None
+
+    def shape(key):
+        value = data.get(key)
+        kind = ("absent" if key not in data else "null" if value is None
+                else "text" if isinstance(value, str) else "array" if isinstance(value, list)
+                else "object" if isinstance(value, dict) else "other")
+        return dict(type=kind, count=len(value) if isinstance(value, (str, list, dict)) else None)
+
+    return summarizer.canonical(dict(
+        schema="mindie-cc-native-failure/1", is_error=True,
+        subtype=label("subtype", NATIVE_RESULT_SUBTYPES),
+        terminal_reason=label("terminal_reason", NATIVE_TERMINAL_REASONS),
+        num_turns=number("num_turns", 0, 1_000_000),
+        api_error_status=number("api_error_status", 100, 599),
+        errors=shape("errors"), result=shape("result"),
+        structured_output_present=data.get("structured_output") is not None,
+    ))
+
+
 def _parse_native_result(output, receipt):
     """One `claude --print --output-format json` envelope; never retain text."""
     try:
@@ -187,7 +231,10 @@ def _parse_native_result(output, receipt):
     # StructuredOutput result. The CLI --max-turns bound limits model turns.
     if data.get("is_error") is True:
         receipt["turn_failed"] = True
-        raise NativeFailure("native invocation reported an error result", reason="native_turn_failed")
+        receipt["failure_diagnostic"] = _native_failure_diagnostic(data)
+        subtype = data.get("subtype")
+        reason = NATIVE_FAILURE_REASONS.get(subtype, "native_turn_failed") if isinstance(subtype, str) else "native_turn_failed"
+        raise NativeFailure("native invocation reported an error result", reason=reason)
     # A well-formed non-error result envelope is terminal evidence; a missing
     # answer inside it is a known failure, not an uncertain call.
     receipt["turn_completed"] = True
@@ -406,7 +453,8 @@ def run(payload):
                  and isinstance(usage, dict)
                  and all(type(usage.get(key)) is int and usage[key] >= 0 for key in summarizer.COUNTERS))
     return summarizer.outcome(payload, status=status, result=result,
-                              raw_result=model.raw_result if model else None, usage=usage,
+                              raw_result=(receipt.get("failure_diagnostic")
+                                          or (model.raw_result if model else None)), usage=usage,
                               model_calls=int(bool(receipt.get("native_started"))), usage_known=known,
                               elapsed_ms=round((time.monotonic() - started) * 1000),
                               error=error, error_reason=error_reason,

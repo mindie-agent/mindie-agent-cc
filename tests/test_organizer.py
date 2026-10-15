@@ -368,11 +368,63 @@ class WorkerEnvelopeTests(unittest.TestCase):
         native["subtype"] = "error_max_turns"
         value = self.execute(payload, json.dumps(native))
         self.assertEqual(value["status"], "failed")
-        self.assertEqual(value["error_reason"], "native_turn_failed")
+        self.assertEqual(value["error_reason"], "native_max_turns")
         self.assertEqual(value["model_calls"], 1)
         self.assertTrue(value["usage_known"])
         self.assertEqual(value["billing_status"], "reported")
         summarizer.validate_outcome(value, payload)
+
+    def test_terminal_limits_keep_distinct_safe_diagnostics_and_one_call(self):
+        payload = make_payload()
+        for subtype, reason in organizer.NATIVE_FAILURE_REASONS.items():
+            with self.subTest(subtype=subtype):
+                native = json.loads(native_envelope(None, is_error=True, num_turns=2))
+                native.update(subtype=subtype, terminal_reason="max_turns",
+                              errors=["PRIVATE_PROMPT sk-secret", {"token": "SECRET_VALUE"}],
+                              result="PRIVATE_RESULT", session_id="PRIVATE_SESSION",
+                              api_error_status=429)
+                calls = []
+                value = self.execute(payload, json.dumps(native), captured=calls)
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(value["status"], "failed")
+                self.assertEqual(value["error_reason"], reason)
+                self.assertIsNone(value["result"])
+                self.assertTrue(value["usage_known"])
+                self.assertEqual(value["billing_status"], "reported")
+                self.assertEqual(value["usage"]["input_tokens"], 13)
+                detail = json.loads(value["raw_result"])
+                self.assertEqual(detail["schema"], "mindie-cc-native-failure/1")
+                self.assertEqual(detail["subtype"], subtype)
+                self.assertEqual(detail["terminal_reason"], "max_turns")
+                self.assertEqual(detail["num_turns"], 2)
+                self.assertEqual(detail["api_error_status"], 429)
+                self.assertEqual(detail["errors"], {"type": "array", "count": 2})
+                for secret in ("PRIVATE_PROMPT", "sk-secret", "SECRET_VALUE",
+                               "PRIVATE_RESULT", "PRIVATE_SESSION"):
+                    self.assertNotIn(secret, json.dumps(value))
+                self.assertEqual(summarizer.failure_detail(value)["reason"], reason)
+                summarizer.validate_outcome(value, payload)
+
+    def test_unknown_or_malformed_failure_fields_never_become_text(self):
+        payload = make_payload()
+        for subtype in ("PRIVATE_SUBTYPE", ["PRIVATE_SUBTYPE"]):
+            with self.subTest(subtype=subtype):
+                native = json.loads(native_envelope(None, is_error=True))
+                native.update(subtype=subtype, terminal_reason={"token": "SECRET"},
+                              num_turns=True, api_error_status="SECRET",
+                              errors={"SECRET": "PRIVATE_BODY"}, result=["PRIVATE_BODY"])
+                value = self.execute(payload, json.dumps(native))
+                self.assertEqual(value["status"], "failed")
+                self.assertEqual(value["error_reason"], "native_turn_failed")
+                detail = json.loads(value["raw_result"])
+                self.assertEqual(detail["subtype"], "unknown")
+                self.assertEqual(detail["terminal_reason"], "unknown")
+                self.assertIsNone(detail["num_turns"])
+                self.assertIsNone(detail["api_error_status"])
+                self.assertNotIn("PRIVATE", json.dumps(value))
+                self.assertNotIn("SECRET", json.dumps(value))
+                self.assertLess(len(value["raw_result"]), 1024)
+                summarizer.validate_outcome(value, payload)
 
     def test_policy_mismatch_never_calls_the_model(self):
         payload = make_payload()
@@ -600,6 +652,34 @@ class WorkerNativeProcessTests(unittest.TestCase):
             self.assertEqual(value["error_reason"], "configuration_invalid")
             self.assertEqual(value["model_calls"], 0)
             self.assertFalse(marker.exists())
+            summarizer.validate_outcome(value, payload)
+
+    def test_terminal_failure_precedes_nonzero_native_exit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = self._profile(tmp)
+            native = json.loads(native_envelope(None, is_error=True, num_turns=2))
+            native.update(subtype="error_max_turns", terminal_reason="max_turns",
+                          errors=["PRIVATE_NATIVE_ERROR"])
+            fake = Path(tmp) / "fake-claude"
+            fake.write_text(
+                "#!" + sys.executable + "\nimport sys\n"
+                "sys.stdin.buffer.read()\n"
+                "print(" + repr(json.dumps(native)) + ", flush=True)\n"
+                "sys.exit(7)\n", encoding="utf-8")
+            fake.chmod(0o700)
+            env = dict(MINDIE_CC_CONFIG=str(config), MINDIE_CC_BIN=str(fake))
+            with patch.dict(os.environ, env):
+                payload = make_payload()
+                proc = run_worker(payload)
+            self.assertEqual(proc.returncode, 0, proc.stderr.decode()[:400])
+            value = json.loads(proc.stdout)
+            self.assertEqual(value["status"], "failed")
+            self.assertEqual(value["error_reason"], "native_max_turns")
+            self.assertEqual(value["model_calls"], 1)
+            self.assertTrue(value["usage_known"])
+            self.assertEqual(value["usage"]["input_tokens"], 13)
+            self.assertEqual(json.loads(value["raw_result"])["subtype"], "error_max_turns")
+            self.assertNotIn("PRIVATE_NATIVE_ERROR", json.dumps(value))
             summarizer.validate_outcome(value, payload)
 
 

@@ -44,6 +44,32 @@ Duplicate faults share a fingerprint; an unknown Issue creation result is
 reconciled before any further action and never blindly posted again.
 Logging/reporting failure cannot replace the original business result.
 
+Failed native summaries retain a bounded `mindie-cc-native-failure/1` projection
+in the existing private outcome receipt's `raw_result` field. It contains only
+known native subtype/terminal enums, validated turn and HTTP-status numbers,
+and the shape/count of error or result fields. It never retains provider/model
+free text, unknown labels, session IDs, prompts or credentials. Unknown native
+values remain explicitly unknown. The original usage, billing state and failed
+outcome remain authoritative; no additional model invocation is made.
+
+Native turn-limit, cost-budget and structured-output exhaustion have separate
+static shared failure reasons, so the caller's summary detail identifies the
+failed boundary. The enum source was verified in the installed Claude Code
+2.1.269 result schema and terminal constructors. This does not identify the
+subtype of an older failure whose original envelope was already discarded.
+Scratch deletion remains required after owned-process cleanup.
+
+The failure-projection change was reviewed against all nine design principles
+(design-principles blob `62cdd5ae40553df2f0f7f7d022141123792d2944`): it addresses
+an observed inability to diagnose a paid failure without another invocation (1);
+uses a finite projection in the existing receipt and caller failure contract
+(2, 4); adds no settings or user workflow (3, 5, 7); does not promote summaries
+to evidence or alter body authority (6); reuses the ledger, usage accounting,
+scratch owner and valid prior native reads (8); and preserves specific failures,
+known usage, secrecy and no-replay behavior (9). Synthetic tests cover all
+three limits, untrusted free text/types and a terminal failure followed by a
+nonzero process exit. The original paid failure is preserved, not retried.
+
 Reporting enable saves the explicit preference before changing its policy.
 Unreadable or damaged consent leaves the real policy unchanged. A policy and
 saved choice that disagree are exposed as `consent_mismatch`, including the
