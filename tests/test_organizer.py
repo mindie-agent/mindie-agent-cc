@@ -52,7 +52,8 @@ def native_envelope(metadata, *, is_error=False, num_turns=1,
     return json.dumps(dict(
         type="result", subtype="error_during_execution" if is_error else "success",
         is_error=is_error, num_turns=num_turns,
-        result=json.dumps(metadata) if result_text is None else result_text,
+        result="" if result_text is None else result_text,
+        structured_output=metadata,
         usage=usage, session_id="native-session",
     ))
 
@@ -159,17 +160,31 @@ class WorkerEnvelopeTests(unittest.TestCase):
         self.assertFalse(value["cleanup_failed"])
         summarizer.validate_outcome(value, payload)
 
-    def test_fenced_result_is_adapted_then_strictly_validated(self):
+    def test_structured_output_is_authoritative_over_prose(self):
         payload = make_payload()
         metadata = metadata_for(payload)
-        fenced = "```json\n" + json.dumps(metadata) + "\n```"
-        value = self.execute(payload, native_envelope(metadata, result_text=fenced))
+        value = self.execute(payload, native_envelope(metadata, result_text="Unstructured prose."))
         self.assertEqual(value["status"], "returned")
         self.assertEqual(value["result"], metadata)
-        prose = native_envelope(metadata, result_text="not json at all")
-        value = self.execute(payload, prose)
+
+    def test_missing_structured_output_does_not_repair_fenced_prose(self):
+        payload = make_payload()
+        blocks = metadata_for(payload)["blocks"][0]
+        fenced = "```json\n" + json.dumps(blocks) + "\n```\n```json\n{\"navigation\":\"N\"}\n```"
+        value = self.execute(payload, native_envelope(None, result_text=fenced))
         self.assertEqual(value["status"], "failed")
-        self.assertEqual(value["error_reason"], "result_json_invalid")
+        self.assertEqual(value["error_reason"], "native_output_unreadable")
+        self.assertTrue(value["usage_known"])
+        self.assertEqual(value["model_calls"], 1)
+        summarizer.validate_outcome(value, payload)
+
+    def test_structured_output_still_requires_exact_shared_contract(self):
+        payload = make_payload()
+        metadata = metadata_for(payload)
+        metadata["navigation"] = "not the required title and summary object"
+        value = self.execute(payload, native_envelope(metadata))
+        self.assertEqual(value["status"], "failed")
+        self.assertEqual(value["error"], "invalid_result")
         self.assertTrue(value["usage_known"])
         self.assertEqual(value["model_calls"], 1)
         summarizer.validate_outcome(value, payload)
@@ -302,6 +317,9 @@ class WorkerEnvelopeTests(unittest.TestCase):
         self.assertEqual(call["max_output"], organizer.MAX_ENVELOPE_BYTES)
         argv = call["argv"]
         self.assertIn("--print", argv)
+        self.assertEqual(json.loads(argv[argv.index("--json-schema") + 1]),
+                         summarizer.output_schema([block["block_id"] for block in payload["blocks"]]))
+        self.assertEqual(argv[argv.index("--max-turns") + 1], "1")
         self.assertIn("--model", argv)
         self.assertEqual(argv[argv.index("--model") + 1], "fixture-model")
         self.assertEqual(argv[argv.index("--effort") + 1], "low")
@@ -319,11 +337,11 @@ class WorkerEnvelopeTests(unittest.TestCase):
         self.assertNotEqual(child_env.get("CLAUDE_CONFIG_DIR"), "")
 
     def test_second_model_call_is_rejected(self):
-        model = organizer.NativeClaudeModel(dict(MODEL_ENV), "fixture-model")
+        model = organizer.NativeClaudeModel(dict(MODEL_ENV), "fixture-model", summarizer.output_schema())
         with patch.object(organizer.bounded, "run",
                           fake_run(native_envelope(dict(blocks=[], navigation={})))):
             first = model.invoke([])
-            self.assertEqual(first.content, json.dumps(dict(blocks=[], navigation={})))
+            self.assertEqual(json.loads(first.content), dict(blocks=[], navigation={}))
             with self.assertRaises(organizer.NativeFailure):
                 model.invoke([])
 
@@ -390,7 +408,7 @@ class WorkerNativeProcessTests(unittest.TestCase):
             "metadata = dict(blocks=[dict(block_id=i, title='T', summary='S') for i in ids],\n"
             "                navigation=dict(title='N', summary='NS'))\n"
             "print(json.dumps(dict(type='result', subtype='success', is_error=False, num_turns=1,\n"
-            "      result=json.dumps(metadata),\n"
+            "      result='', structured_output=metadata,\n"
             "      usage=dict(input_tokens=10, cache_creation_input_tokens=3,\n"
             "                 cache_read_input_tokens=2, output_tokens=5))), flush=True)\n"
             + tail,

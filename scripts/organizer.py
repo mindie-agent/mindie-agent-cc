@@ -172,17 +172,6 @@ def _usage_counters(raw):
     }
 
 
-def _fence_stripped(text):
-    """Drop one surrounding code fence; anything else stays for strict parsing."""
-    stripped = text.strip()
-    if not stripped.startswith("```"):
-        return text
-    lines = stripped.splitlines()
-    if len(lines) >= 2 and lines[0].strip("`").strip().lower() in {"", "json"} and lines[-1].strip() == "```":
-        return "\n".join(lines[1:-1]).strip()
-    return text
-
-
 def _parse_native_result(output, receipt):
     """One `claude --print --output-format json` envelope; never retain text."""
     try:
@@ -203,10 +192,10 @@ def _parse_native_result(output, receipt):
     # A well-formed non-error result envelope is terminal evidence; a missing
     # answer inside it is a known failure, not an uncertain call.
     receipt["turn_completed"] = True
-    message = data.get("result")
-    if not isinstance(message, str) or not message.strip():
-        raise InvalidResultError("completed summary message is unavailable")
-    receipt["final_message"] = _fence_stripped(message)
+    metadata = data.get("structured_output")
+    if not isinstance(metadata, dict):
+        raise InvalidResultError("completed structured summary is unavailable")
+    receipt["final_message"] = summarizer.canonical(metadata)
 
 
 def _terminal_result(raw):
@@ -222,7 +211,7 @@ def _terminal_result(raw):
     return isinstance(data, dict) and data.get("type") == "result"
 
 
-def _invoke_native(prompt, env, model, receipt):
+def _invoke_native(prompt, schema, env, model, receipt):
     """One bounded native call in an isolated workdir; no retry, no deadline."""
     isolated = Path(tempfile.mkdtemp(prefix="mindie-cc-summary-"))
     try:
@@ -251,6 +240,10 @@ def _invoke_native(prompt, env, model, receipt):
             "--print",
             "--output-format",
             "json",
+            "--json-schema",
+            summarizer.canonical(schema),
+            "--max-turns",
+            "1",
             "--setting-sources",
             "",
             "--tools",
@@ -307,9 +300,10 @@ def _invoke_native(prompt, env, model, receipt):
 class NativeClaudeModel:
     """LangMem `.invoke` bridge; no provider SDK, tools, history or retries."""
 
-    def __init__(self, env, model):
+    def __init__(self, env, model, schema):
         self.env = env
         self.model = model
+        self.schema = schema
         self.receipt = dict(native_started=False, turn_completed=False, turn_failed=False,
                             usage=None, cleanup_failed=False)
         self.raw_result = None
@@ -324,7 +318,7 @@ class NativeClaudeModel:
         prompt = summarizer.render_prompt(data)
         if len(prompt.encode("utf-8")) > summarizer.MAX_PROMPT_BYTES:
             raise summarizer.SummaryInputError("complete prompt exceeds budget")
-        _invoke_native(prompt, self.env, self.model, self.receipt)
+        _invoke_native(prompt, self.schema, self.env, self.model, self.receipt)
         if not self.receipt["turn_completed"]:
             raise NativeFailure("native execution did not report completion")
         message = self.receipt.get("final_message")
@@ -391,7 +385,8 @@ def run(payload):
         name = native_model(env)
         if payload["policy_identity"] != identity(env):
             raise ConfigurationError("summary worker policy changed")
-        model = NativeClaudeModel(env, name)
+        schema = summarizer.output_schema([block["block_id"] for block in payload["blocks"]])
+        model = NativeClaudeModel(env, name, schema)
         result = summarizer.summarize_batch(payload, model)
     except Exception as exc:
         error = _category(exc)
