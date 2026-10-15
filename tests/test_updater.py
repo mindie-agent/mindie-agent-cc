@@ -86,11 +86,11 @@ class UpdaterTests(unittest.TestCase):
                 self.updater.probe_runtime(Path(sys.executable), time.monotonic() + 180, SCRIPTS.parent)
         self.assertEqual(seen, dict(output=failure.mindie_output, code=1))
 
-    def test_candidate_validator_uses_remaining_check_budget(self):
+    def test_candidate_validator_honors_explicit_caller_deadline(self):
         import product_contract
 
         expected = dict(product_contract.identity(SCRIPTS.parent), status="validated")
-        deadline = 100 + self.updater.RESERVE + 37
+        deadline = 100 + 37
         with patch.object(self.updater.time, "monotonic", return_value=100), \
                 patch.object(self.updater, "bounded_run",
                              return_value=json.dumps(expected)) as run:
@@ -100,11 +100,11 @@ class UpdaterTests(unittest.TestCase):
         self.assertEqual(run.call_args.kwargs["timeout"], 37)
         self.assertEqual(run.call_args.kwargs["max_output"], 65536)
 
-    def test_candidate_validator_does_not_start_after_check_budget_is_exhausted(self):
-        deadline = 100 + self.updater.RESERVE + 4
+    def test_candidate_validator_does_not_start_after_caller_deadline(self):
+        deadline = 99
         with patch.object(self.updater.time, "monotonic", return_value=100), \
                 patch.object(self.updater, "bounded_run") as run:
-            with self.assertRaisesRegex(self.updater.CheckFailed, "whole-check deadline exhausted"):
+            with self.assertRaisesRegex(self.updater.bounded.CommandCancelled, "explicit caller deadline exhausted"):
                 self.updater.probe_runtime(Path(sys.executable), deadline, SCRIPTS.parent)
         run.assert_not_called()
 

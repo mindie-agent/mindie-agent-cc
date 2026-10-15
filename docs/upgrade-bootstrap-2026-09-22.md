@@ -28,7 +28,14 @@ SHA under `update/native-packages`; an invalid pointer fails visibly instead
 of falling back to bootstrap.
 
 Refresh uses the existing check/operation locks, idle check, native installer,
-absolute deadline and service handoff. Before package construction it records
+caller-owned execution and shared service handoff. Scheduler cadence is not an
+execution deadline: healthy build, validation, native installation and feed sync
+continue until completion, explicit caller cancellation or owner exit. Lock
+acquisition, native registry readback, connection and cleanup waits retain their
+own finite boundaries. Native mutation interruption is reconciled by exact
+readback; an unknown outcome blocks automatic replay or rollback. The final
+check result reports plugin and feed outcomes separately, including committed
+partial results and cleanup or receipt failures. Before package construction it records
 an intent in `failed.json`; failure or interruption suppresses another install
 for that SHA until explicit recovery. A busy pre-install operation restores
 the preceding failure record. Failure to clean up that intent is reported as

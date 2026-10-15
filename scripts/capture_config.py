@@ -1,18 +1,14 @@
 """Install-time wiring for deterministic public transcript capture."""
 import json
 from pathlib import Path
-import subprocess
 
 
 def prepare(python, scripts):
-    result = subprocess.run(
+    import bounded
+    output = bounded.run(
         [str(python), '-m', 'mindie_knowledge.loop.transcript_redaction'],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=90,
-        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
     )
-    if result.returncode:
-        raise RuntimeError('could not install the verified transcript redactor')
-    path = result.stdout.decode('utf-8').strip()
+    path = output.strip()
     if not Path(path).is_absolute() or not Path(path).is_file():
         raise RuntimeError('installed transcript redactor is missing')
     return dict(capture_mode='public-transcript', redactor_executable=path,
@@ -36,15 +32,16 @@ def prepare_store(python, scripts, config):
     The bounded local receipt carries the core cause; stderr is never
     forwarded and a failed initialization is never reported as ready.
     """
-    result = subprocess.run(
-        [str(python), str(Path(scripts) / 'capture_config.py'), 'prepare-store'],
-        input=json.dumps(config).encode('utf-8'),
-        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=90,
-        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
-    )
-    output = result.stdout.decode('utf-8', 'replace')
-    if result.returncode:
-        raise store_failure(output, result.returncode)
+    import bounded
+    try:
+        output = bounded.run(
+            [str(python), str(Path(scripts) / 'capture_config.py'), 'prepare-store'],
+            json.dumps(config),
+        )
+    except Exception as exc:
+        if hasattr(exc, 'returncode'):
+            raise store_failure(getattr(exc, 'mindie_output', ''), exc.returncode) from exc
+        raise
     if json.loads(output) != {'status': 'ready'}:
         raise RuntimeError('knowledge store preparation did not confirm readiness')
 

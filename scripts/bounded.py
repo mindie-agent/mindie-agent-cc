@@ -34,10 +34,15 @@ category; raw stderr, argv and URLs are not retained. This call does not retry.
 from __future__ import annotations
 
 import atexit
+from contextlib import contextmanager
+from contextvars import ContextVar
 import math
 import os
+from pathlib import Path
 import re
+import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -50,6 +55,30 @@ if POSIX:
 
 MAX_OUTPUT = 256 * 1024
 _CHUNK = 8192
+_OPERATION = ContextVar("bounded_operation", default=None)
+
+
+@contextmanager
+def operation(cancel=None, *, signals=False, guard_owner=True):
+    """One caller's cancellation and process ownership, shared by nested calls."""
+    cancel = cancel if cancel is not None else threading.Event()
+    token = _OPERATION.set((cancel, guard_owner))
+    handlers = {}
+    if signals and threading.current_thread() is threading.main_thread():
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            handlers[signum] = signal.signal(signum, lambda *_: cancel.set())
+    try:
+        yield cancel
+    finally:
+        for signum, handler in handlers.items():
+            signal.signal(signum, handler)
+        _OPERATION.reset(token)
+
+
+def check_cancelled():
+    active = _OPERATION.get()
+    if active is not None and active[0].is_set():
+        raise CommandCancelled("command cancelled")
 
 
 class CommandCancelled(RuntimeError):
@@ -188,7 +217,27 @@ def _spawn(command, stdin, env, cwd, *, allow_service=False):
         # Assign ownership before the child can create descendants. Attaching
         # a Job to an already-running process races fast child startup.
         kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW | 0x4  # CREATE_SUSPENDED
-    process = subprocess.Popen(**kwargs)
+    active = _OPERATION.get()
+    owner_fds = None
+    if POSIX and not inherited and active is not None and active[1]:
+        owner_read, owner_write = os.pipe()
+        owner_fds = owner_read, owner_write
+        kwargs["args"] = [
+            sys.executable, str(Path(__file__).with_name("owned_process.py")),
+            str(os.getpid()), str(owner_read), *command,
+        ]
+        kwargs["pass_fds"] = (owner_read,)
+    try:
+        process = subprocess.Popen(**kwargs)
+    except BaseException:
+        if owner_fds is not None:
+            os.close(owner_fds[1])
+        raise
+    finally:
+        if owner_fds is not None:
+            os.close(owner_fds[0])
+    if owner_fds is not None:
+        process._mindie_owner_fd = owner_fds[1]
     process._mindie_inherited_group = inherited
     if not POSIX:
         try:
@@ -589,6 +638,10 @@ def _run_posix(process, timeout, max_output, pgid, check, cancel, transport=Fals
             if receipt is not None:
                 receipt["cleanup_failed"] = True
         return output.decode("utf-8", "replace")
+    except CommandCancelled as exc:
+        exc.mindie_output = bytes(output).decode("utf-8", "replace")
+        exc.returncode = process.poll()
+        raise
     finally:
         # Cleanup never masks the business result; failures land on the receipt.
         _cleanup_step(receipt, lambda: _kill_tree(process, pgid), "terminate_owned_tree")
@@ -687,6 +740,11 @@ def _run_windows(process, timeout, max_output, pgid, check, cancel, transport=Fa
             if receipt is not None:
                 receipt["cleanup_failed"] = True
         return bytes(output).decode("utf-8", "replace")
+    except CommandCancelled as exc:
+        with lock:
+            exc.mindie_output = bytes(output).decode("utf-8", "replace")
+        exc.returncode = process.poll()
+        raise
     finally:
         # Cleanup never masks the business result; failures land on the receipt.
         _cleanup_step(receipt, lambda: _kill_tree(process, pgid), "terminate_owned_tree")
@@ -718,6 +776,9 @@ def run(
     terminal=None,
     allow_service=False,
 ):
+    active = _OPERATION.get()
+    if cancel is None and active is not None:
+        cancel = active[0]
     if (not isinstance(argv, (list, tuple)) or not argv
             or not isinstance(argv[0], str) or not argv[0]
             or not all(isinstance(item, str) for item in argv)):
@@ -772,8 +833,20 @@ def run(
                     process, timeout, max_output, pgid, check, cancel, transport,
                     owner=owner, receipt=receipt, terminal=terminal,
                 )
+            receipt["completed"] = True
+            receipt["returncode"] = process.returncode
+            owner_fd = getattr(process, "_mindie_owner_fd", None)
+            if owner_fd is not None:
+                process._mindie_owner_fd = None
+                _cleanup_step(receipt, lambda: os.close(owner_fd), "close_owner_pipe")
             if _cancelled(cancel):
-                raise CommandCancelled("command cancelled")
+                receipt["cancelled_after_completion"] = True
+                error = CommandCancelled("command cancelled after execution completed")
+                error.mindie_output = result
+                error.stdout = result
+                error.returncode = process.returncode
+                error.operation_completed = True
+                raise error
             if receipt["cleanup_failed"] and not explicit_receipt:
                 raise CommandCleanupError(result, receipt)
             return result
@@ -801,6 +874,10 @@ def run(
             exc.cleanup = receipt["cleanup"]
             raise
         finally:
+            owner_fd = getattr(process, "_mindie_owner_fd", None)
+            if owner_fd is not None:
+                process._mindie_owner_fd = None
+                _cleanup_step(receipt, lambda: os.close(owner_fd), "close_owner_pipe")
             try:
                 atexit.unregister(cleanup)
             except Exception:

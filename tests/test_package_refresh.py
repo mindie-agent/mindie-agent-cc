@@ -222,9 +222,9 @@ class PackageRefreshTests(unittest.TestCase):
         self.assertEqual((host / "hooks" / "hooks.json").read_bytes(), before)
         calls.clear()
         code, output = self._run_check(idle, install)
-        self.assertEqual(code, 0)
+        self.assertEqual(code, 1)
         self.assertEqual(calls, [])
-        self.assertIn("suppressed-known-failed", output)
+        self.assertIn("native-outcome-unknown", output)
 
     def test_busy_without_side_effect_keeps_prior_failure(self):
         self._eligible_generation()

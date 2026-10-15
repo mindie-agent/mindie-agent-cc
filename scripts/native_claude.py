@@ -94,7 +94,7 @@ def marketplace_list(config=None, *, timeout=30):
     return data
 
 
-def marketplace_add(package: Path, config=None, *, timeout=60):
+def marketplace_add(package: Path, config=None, *, timeout=None):
     package = Path(package).resolve()
     run(
         [claude_bin(), "plugin", "marketplace", "add", str(package)],
@@ -104,7 +104,7 @@ def marketplace_add(package: Path, config=None, *, timeout=60):
     )
 
 
-def plugin_install(config=None, *, timeout=90):
+def plugin_install(config=None, *, timeout=None):
     output = run(
         [
             claude_bin(),
@@ -126,7 +126,7 @@ def plugin_install(config=None, *, timeout=90):
         return dict(raw=output[:500], outcome="unknown")
 
 
-def plugin_update(config=None, *, timeout=90):
+def plugin_update(config=None, *, timeout=None):
     output = run(
         [
             claude_bin(),
@@ -384,18 +384,25 @@ def sync_stable_package(package: Path, stable: Path) -> Path:
     return stable
 
 
-def install_and_verify(package: Path, version: str, config=None, *, timeout=120,
-                       deadline=None, stable=None, launcher=None, config_file=None):
+def install_and_verify(package: Path, version: str, config=None, *, timeout=None,
+                       deadline=None, stable=None, launcher=None, config_file=None,
+                       receipt=None):
+    import bounded
     from genstate import native_package_path
 
-    if deadline is None:
+    receipt = receipt if receipt is not None else {}
+    receipt.update(outcome="not-started", stage="prepare", mutation_attempted=False)
+    if deadline is None and timeout is not None:
         deadline = time.monotonic() + timeout
 
-    def remaining(cap):
+    def remaining(cap=None):
+        bounded.check_cancelled()
+        if deadline is None:
+            return cap
         left = deadline - time.monotonic()
         if left <= 0.5:
-            raise RuntimeError("native installer deadline exhausted")
-        return min(cap, left)
+            raise bounded.CommandCancelled("native installer caller deadline exhausted")
+        return left if cap is None else min(cap, left)
 
     package = Path(package).resolve()
     if stable is None:
@@ -411,15 +418,17 @@ def install_and_verify(package: Path, version: str, config=None, *, timeout=120,
                 f"marketplace {MARKETPLACE} is registered at {source}, not {stable}"
             )
     else:
-        marketplace_add(stable, config, timeout=remaining(30))
+        mutation_timeout = remaining()
+        receipt.update(outcome="unknown", stage="marketplace-add", mutation_attempted=True)
+        marketplace_add(stable, config, timeout=mutation_timeout)
     listing = plugin_list(config, timeout=remaining(20))
     installed = any(
         isinstance(row, dict) and row.get("id") == PLUGIN_QUALIFIED for row in listing
     )
-    if installed:
-        report = plugin_update(config, timeout=remaining(40))
-    else:
-        report = plugin_install(config, timeout=remaining(40))
+    mutation_timeout = remaining()
+    receipt.update(outcome="unknown", stage="plugin-mutation", mutation_attempted=True)
+    report = (plugin_update if installed else plugin_install)(config, timeout=mutation_timeout)
+    receipt.update(stage="readback", install=report)
     listing = plugin_list(config, timeout=remaining(20))
     markets = marketplace_list(config, timeout=remaining(20))
     verified = verify_readback(
@@ -432,6 +441,7 @@ def install_and_verify(package: Path, version: str, config=None, *, timeout=120,
         config_file=config_file,
         timeout=remaining(20),
     )
+    receipt.update(outcome="verified", stage="complete")
     return dict(
         install=report,
         plugin=verified["plugin"],

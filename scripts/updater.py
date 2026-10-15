@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""MindIE Claude Code automatic updater. One bounded check per invocation.
+"""MindIE Claude Code automatic updater. One owned check per invocation.
 
 Driven by the OS scheduler (launchd every 5 minutes on macOS; Windows
 task registration code is present but not natively verified). No daemon,
 no model, no SessionStart work.
 
-check: serialized by a nonblocking check.lock under one absolute
-deadline. Resolve the selected source to one SHA -> stage an immutable
+check: serialized by a nonblocking check.lock, independently of scheduler
+cadence. Resolve the selected source to one SHA -> stage an immutable
 generation with its own pinned venv and its own adapter/engine configs
 -> build the native host package pointing at a NEW versioned launcher
 path (live entrypoints are never mutated by staging) -> under the
@@ -20,6 +20,8 @@ Feed sync is independent: it runs even when the candidate fails.
 from __future__ import annotations
 
 import argparse
+from contextlib import redirect_stdout
+import io
 import hashlib
 import json
 import os
@@ -41,6 +43,7 @@ if str(HERE) not in sys.path:
 import diagnostic_support
 
 try:
+    import bounded
     from bounded import run as bounded_run
     from genstate import (
         LockTimeout,
@@ -77,11 +80,6 @@ RELEASE_LABEL = "mindie-agent-cc"
 NORMAL_VERSION = re.compile(r"\d+\.\d+\.\d+")
 NORMAL_TAG = re.compile(r"v?\d+\.\d+\.\d+")
 INTERVAL_SECONDS = 300
-CHECK_BUDGET = 240.0
-ROLLBACK_BUDGET = 45.0
-FEED_BUDGET = 60.0
-HANDOFF_BUDGET = 8.0
-RESERVE = ROLLBACK_BUDGET + FEED_BUDGET + HANDOFF_BUDGET
 SHA = r"[0-9a-f]{40}"
 COMPLETE = ".mindie-generation-complete"
 LAUNCHER = "mindie_launch.py"
@@ -183,23 +181,24 @@ class Deferred(RuntimeError):
     """Not applied now; next normal scheduled check may retry."""
 
 
-def _remaining(deadline: float, reserve: float = 0.0) -> float:
-    left = deadline - time.monotonic() - reserve
-    if left < 5:
-        raise CheckFailed("whole-check deadline exhausted")
+def _remaining(deadline: float | None) -> float | None:
+    bounded.check_cancelled()
+    if deadline is None:
+        return None
+    left = deadline - time.monotonic()
+    if left <= 0:
+        raise bounded.CommandCancelled("explicit caller deadline exhausted")
     return left
 
 
-def _op_timeout(deadline: float, reserve: float, cap: float) -> float:
-    left = deadline - reserve - time.monotonic()
-    if left <= 0:
-        raise CheckFailed("no time left in this operation's reserved window")
-    return min(cap, left)
+def _op_timeout(deadline: float | None, cap: float) -> float:
+    left = _remaining(deadline)
+    return cap if left is None else min(cap, left)
 
 
-def _git(args, *, timeout, deadline, cwd=None, transport=False):
-    return bounded_run(["git", *args], "",
-                       timeout=min(timeout, _remaining(deadline, RESERVE)),
+def _git(args, *, deadline=None, cwd=None, transport=False):
+    # The old per-Git caps were execution budgets, not connect timeouts.
+    return bounded_run(["git", *args], "", timeout=_remaining(deadline),
                        cwd=cwd, env=GIT_ENV, transport=transport)
 
 
@@ -306,10 +305,10 @@ def read_latest_release(opener=None):
     return tag, tag.removeprefix("v")
 
 
-def resolve_ref(remote: str, ref: str, deadline: float) -> str:
+def resolve_ref(remote: str, ref: str, deadline: float | None) -> str:
     peeled = ref + "^{}"
     output = _git(
-        ["ls-remote", remote, ref, peeled], timeout=30, deadline=deadline, transport=True,
+        ["ls-remote", remote, ref, peeled], deadline=deadline, transport=True,
     )
     found = {}
     for line in output.splitlines():
@@ -323,18 +322,18 @@ def resolve_ref(remote: str, ref: str, deadline: float) -> str:
     return sha
 
 
-def resolve_main(remote: str, deadline: float) -> str:
+def resolve_main(remote: str, deadline: float | None) -> str:
     """Explicit development source. Ordinary release installs do not call this."""
     return resolve_ref(remote, "refs/heads/main", deadline)
 
 
-def resolve_release(remote: str, deadline: float, opener=None) -> tuple[str, str]:
+def resolve_release(remote: str, deadline: float | None, opener=None) -> tuple[str, str]:
     """Resolve one published non-prerelease Release to its exact tag commit."""
     tag, version = read_latest_release(opener)
     return resolve_ref(remote, "refs/tags/" + tag, deadline), version
 
 
-def resolve_update(remote: str, adapter: dict, deadline: float, opener=None):
+def resolve_update(remote: str, adapter: dict, deadline: float | None, opener=None):
     channel = update_channel(adapter)
     if channel == "main":
         return resolve_main(remote, deadline), None
@@ -421,7 +420,7 @@ def snapshot_source(root: Path, dest: Path) -> None:
             shutil.copy2(item, target)
 
 
-def build_runtime(generation: Path, deadline: float) -> Path:
+def build_runtime(generation: Path, deadline: float | None) -> Path:
     if sys.version_info < MIN_PYTHON:
         raise CheckFailed(f"Python {MIN_PYTHON[0]}.{MIN_PYTHON[1]}+ is required")
     requirements = generation / "runtime-requirements.txt"
@@ -431,11 +430,11 @@ def build_runtime(generation: Path, deadline: float) -> Path:
     venv = generation / ".venv"
     python = _venv_python(venv)
     bounded_run([sys.executable, "-m", "venv", str(venv)], "",
-                timeout=min(180, _remaining(deadline, RESERVE)))
+                timeout=_remaining(deadline))
     bounded_run(
         [str(python), "-m", "pip", "install", "-r", str(requirements)],
         "",
-        timeout=min(600, _remaining(deadline, RESERVE)),
+        timeout=_remaining(deadline),
         max_output=512 * 1024,
         env=PIP_ENV,
         transport=True,
@@ -443,19 +442,21 @@ def build_runtime(generation: Path, deadline: float) -> Path:
     return python
 
 
-def probe_runtime(python: Path, deadline: float, generation: Path, *, revision=None,
+def probe_runtime(python: Path, deadline: float | None, generation: Path, *, revision=None,
                   verified_receipt=None) -> dict:
     """Run the candidate validator. Import success is not compatibility."""
     import product_contract
 
     def command(argv, timeout=None, max_output=65536, on_failure=None):
-        remaining = _remaining(deadline, RESERVE)
+        remaining = _remaining(deadline)
         try:
             return bounded_run(
                 [str(item) for item in argv], "",
-                timeout=remaining if timeout is None else min(timeout, remaining),
+                timeout=remaining if timeout is None else (timeout if remaining is None else min(timeout, remaining)),
                 max_output=max_output,
             )
+        except bounded.CommandCancelled:
+            raise
         except Exception as exc:
             if on_failure is None:
                 raise
@@ -473,7 +474,7 @@ def probe_runtime(python: Path, deadline: float, generation: Path, *, revision=N
             revision=revision, verified_receipt=verified_receipt,
         )
     except Exception as exc:
-        if isinstance(exc, CheckFailed):
+        if isinstance(exc, (CheckFailed, bounded.CommandCancelled)):
             raise
         raise CheckFailed(
             f"candidate validation failed: {type(exc).__name__}: {str(exc)[:240]}"
@@ -499,7 +500,7 @@ def remote_state_base(adapter: dict) -> Path:
 
 
 def validate_generation_state(python: Path, generation: Path, adapter: dict,
-                              deadline: float) -> None:
+                              deadline: float | None) -> None:
     """Reject unknown or incompatible durable state before any switch."""
     helper = generation / "scripts" / "state_compatibility.py"
     if not helper.is_file():
@@ -509,9 +510,11 @@ def validate_generation_state(python: Path, generation: Path, adapter: dict,
     try:
         output = bounded_run(
             [str(python), str(helper), engine, str(remote)], "",
-            timeout=min(30, _remaining(deadline, RESERVE)),
+            timeout=_remaining(deadline),
         )
         result = json.loads(output)
+    except bounded.CommandCancelled:
+        raise
     except Exception as exc:
         raise CheckFailed(
             "persisted state compatibility is unconfirmed: "
@@ -612,7 +615,7 @@ def build_host_package(generation: Path, adapter: dict, sha: str,
 
 
 def validate_prepared_generation(generation: Path, python: Path, gen_adapter: Path,
-                                 sha: str, deadline: float) -> dict:
+                                 sha: str, deadline: float | None) -> dict:
     """Recheck local source/runtime; reuse only the exact publication receipt."""
     from native_claude import render_hooks, render_mcp
 
@@ -646,7 +649,7 @@ def validate_prepared_generation(generation: Path, python: Path, gen_adapter: Pa
             if (launcher.parent / name).read_bytes() != (generation / "scripts" / name).read_bytes():
                 raise ValueError("prepared launcher changed")
         return result
-    except CheckFailed:
+    except (CheckFailed, bounded.CommandCancelled):
         raise
     except Exception as exc:
         raise CheckFailed(
@@ -654,7 +657,7 @@ def validate_prepared_generation(generation: Path, python: Path, gen_adapter: Pa
         ) from exc
 
 
-def stage_generation(sha: str, remote: str, adapter: dict, deadline: float,
+def stage_generation(sha: str, remote: str, adapter: dict, deadline: float | None,
                      build=build_runtime, release_version=None) -> tuple[Path, Path, Path]:
     target = generations_dir(adapter) / sha
     if (target / COMPLETE).is_file():
@@ -672,12 +675,12 @@ def stage_generation(sha: str, remote: str, adapter: dict, deadline: float,
     staging = generations_dir(adapter) / f".staging-{sha}-{os.getpid()}"
     staging.mkdir(parents=True, exist_ok=False)
     try:
-        _git(["init", "-q", str(staging)], timeout=30, deadline=deadline)
-        _git(["remote", "add", "origin", remote], timeout=15,
+        _git(["init", "-q", str(staging)], deadline=deadline)
+        _git(["remote", "add", "origin", remote],
              deadline=deadline, cwd=staging)
-        _git(["fetch", "--depth", "1", "origin", sha], timeout=180,
+        _git(["fetch", "--depth", "1", "origin", sha],
              deadline=deadline, cwd=staging, transport=True)
-        _git(["checkout", "-q", "--detach", "FETCH_HEAD"], timeout=60,
+        _git(["checkout", "-q", "--detach", "FETCH_HEAD"],
              deadline=deadline, cwd=staging)
         os.replace(staging, target)
     except Exception:
@@ -711,9 +714,9 @@ def _generation_engine(current: dict) -> str:
     return adapter["engine_config"]
 
 
-def stop_if_idle(adapter: dict, current: dict, deadline: float) -> dict:
+def stop_if_idle(adapter: dict, current: dict, deadline: float | None) -> dict:
     engine = _generation_engine(current)
-    _remaining(deadline, RESERVE)
+    _remaining(deadline)
     previous_handoff = read_status(adapter).get("service_handoff")
     _record(adapter, service_handoff={"status": "pending",
             "error": "interrupted-stop-or-restore-needs-attention",
@@ -773,68 +776,95 @@ def stop_if_idle(adapter: dict, current: dict, deadline: float) -> dict:
     return result
 
 
-def _readback(adapter: dict, package: Path, version: str, deadline: float,
-              reserve: float = RESERVE) -> dict:
+def _readback(adapter: dict, package: Path, version: str, deadline: float | None,
+              reserve: float = 0.0) -> dict:
     from native_claude import plugin_list, marketplace_list, verify_readback
 
-    listing = plugin_list(adapter, timeout=_op_timeout(deadline, reserve, 30))
-    markets = marketplace_list(adapter, timeout=_op_timeout(deadline, reserve, 30))
+    listing = plugin_list(adapter, timeout=_op_timeout(deadline, 30))
+    markets = marketplace_list(adapter, timeout=_op_timeout(deadline, 30))
     return verify_readback(
         adapter, package, version, listing=listing, markets=markets,
-        timeout=_op_timeout(deadline, reserve, 20),
+        timeout=_op_timeout(deadline, 20),
     )
 
 
-def native_install(adapter: dict, package: Path, deadline: float,
-                   reserve: float = RESERVE) -> dict:
+def _save_native_receipt(adapter, receipt):
+    """Persistence is secondary to the already observed native operation."""
+    try:
+        _record(adapter, native_install=receipt)
+        return True
+    except Exception as exc:
+        receipt["record_error_type"] = type(exc).__name__
+        return False
+
+
+def _native_failure(error, receipt):
+    error.native_receipt = receipt
+    error.native_outcome = receipt["outcome"]
+    return error
+
+
+def native_install(adapter: dict, package: Path, deadline: float | None,
+                   reserve: float = 0.0) -> dict:
     from native_claude import install_and_verify
 
-    package = Path(package).resolve()
-    manifest = json.loads((package / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
-    version = manifest.get("version")
-    if not isinstance(version, str) or not version:
-        raise CheckFailed("host package plugin.json lacks a version")
-    explicit = adapter.get("sha")
-    if isinstance(explicit, str) and explicit:
-        launcher = launch_dir(adapter) / explicit / LAUNCHER
-    else:
-        launcher = launch_dir(adapter) / "bootstrap" / LAUNCHER
-    if not launcher.is_file():
-        raise CheckFailed("expected launcher missing")
+    receipt = {"outcome": "not-started", "stage": "prepare", "sha": adapter.get("sha")}
     try:
-        return install_and_verify(
-            package,
-            version,
-            adapter,
-            deadline=deadline - reserve if reserve else deadline,
-            launcher=str(launcher),
-            config_file=adapter.get("base_config") or str(config_path()),
-        )
-    except CheckFailed:
-        raise
+        package = Path(package).resolve()
+        manifest = json.loads((package / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
+        version = manifest.get("version")
+        if not isinstance(version, str) or not version:
+            raise CheckFailed("host package plugin.json lacks a version")
+        explicit = adapter.get("sha")
+        launcher = launch_dir(adapter) / (explicit if isinstance(explicit, str) and explicit else "bootstrap") / LAUNCHER
+        if not launcher.is_file():
+            raise CheckFailed("expected launcher missing")
     except Exception as exc:
-        try:
-            after = _readback(adapter, native_package_path(adapter), version,
-                              deadline, reserve)
-        except Exception as read_exc:
-            raise CheckFailed(
-                f"native install uncertain ({str(exc)[:200]}); readback also "
-                f"failed ({str(read_exc)[:200]})"
-            )
-        raise CheckFailed(
-            f"native install uncertain ({str(exc)[:200]}); reconciled "
-            f"registry: {json.dumps(after)[:300]}"
+        raise _native_failure(exc, receipt)
+    receipt.update(outcome="unknown", stage="before-native-call", package=str(package),
+                   version=version, launcher=str(launcher))
+    if not _save_native_receipt(adapter, receipt):
+        receipt["outcome"] = "not-started"
+        raise _native_failure(CheckFailed("native install not started: intent recording failed"), receipt)
+    try:
+        result = install_and_verify(
+            package, version, adapter, deadline=deadline, launcher=str(launcher),
+            config_file=adapter.get("base_config") or str(config_path()), receipt=receipt,
         )
+    except Exception as exc:
+        receipt["error_type"] = type(exc).__name__
+        if not receipt.get("mutation_attempted"):
+            receipt["outcome"] = "not-started"
+            _native_failure(exc, receipt)
+            _save_native_receipt(adapter, receipt)
+            raise
+        try:
+            # This finite read-only reconciliation never repeats mutation.
+            with bounded.operation():
+                result = _readback(adapter, native_package_path(adapter), version, None)
+        except Exception as read_exc:
+            receipt.update(outcome="unknown", readback_error_type=type(read_exc).__name__)
+            error = _native_failure(CheckFailed(
+                "native mutation outcome unknown; readback failed; not retried or rolled back"
+            ), receipt)
+            _save_native_receipt(adapter, receipt)
+            raise error from exc
+        receipt.update(outcome="verified", reconciled=True, interrupted=True,
+                       cleanup_failed=bool(getattr(exc, "cleanup_failed", False)),
+                       cleanup=getattr(exc, "cleanup", []))
+    _save_native_receipt(adapter, receipt)
+    return dict(result, native_receipt=receipt)
 
 
 def switch(adapter: dict, current: dict, generation: Path, python: Path,
-           gen_adapter: Path, sha: str, deadline: float,
-           idle, install, lock_timeout, *, package: Path | None = None) -> None:
-    native_attempted = False
+           gen_adapter: Path, sha: str, deadline: float | None,
+           idle, install, lock_timeout, *, package: Path | None = None) -> dict:
+    native_receipt = {"outcome": "not-started"}
     stopped = False
     retirement = None
     final = None
-    wait = min(lock_timeout, deadline - RESERVE - time.monotonic())
+    primary = None
+    wait = _op_timeout(deadline, lock_timeout)
     if wait <= 0:
         raise LockTimeout("no time left for the exclusive switch lock")
     with OperationLock(adapter).exclusive(timeout=wait):
@@ -864,9 +894,11 @@ def switch(adapter: dict, current: dict, generation: Path, python: Path,
             __import__("capture_config").prepare_store(
                 python, generation / "scripts", load_engine_config(candidate_adapter),
             )
-            native_attempted = True
+            native_receipt = {"outcome": "unknown", "sha": sha}
             target = Path(package) if package is not None else generation / "host-package"
-            install(dict(adapter, sha=sha), target, deadline)
+            native_result = install(dict(adapter, sha=sha), target, deadline)
+            native_receipt = ((native_result or {}).get("native_receipt")
+                              or {"outcome": "verified", "sha": sha})
             final = {
                 "generation": str(generation),
                 "python": str(python),
@@ -876,27 +908,54 @@ def switch(adapter: dict, current: dict, generation: Path, python: Path,
             if package is not None:
                 final["native_package"] = str(Path(package).resolve())
             write_current(final, adapter)
-        except Exception:
+        except Exception as error:
+            primary = error
             final = None
             pointer_error = None
             try:
                 write_current(current, adapter)
             except Exception as exc:
                 pointer_error = f"pointer restore FAILED: {str(exc)[:200]}"
-            native_restored = not native_attempted or _rollback_native(
-                adapter, current, install, deadline)
+            native_receipt = getattr(error, "native_receipt", native_receipt)
+            _native_failure(error, native_receipt)
+            if native_receipt["outcome"] == "not-started":
+                native_restored = True
+            elif native_receipt["outcome"] != "verified" or isinstance(error, bounded.CommandCancelled):
+                native_restored = False
+                native_receipt["rollback"] = "not-attempted: native outcome or caller ownership unconfirmed"
+                _save_native_receipt(adapter, native_receipt)
+            else:
+                try:
+                    rollback = _rollback_native(adapter, current, install, deadline)
+                    native_restored = rollback["restored"]
+                    if rollback["native_receipt"] is not None:
+                        native_receipt = rollback["native_receipt"]
+                        _native_failure(error, native_receipt)
+                except Exception as restore_error:
+                    native_restored = False
+                    latest = getattr(restore_error, "native_receipt", None)
+                    if latest is not None:
+                        native_receipt = latest
+                        _native_failure(error, native_receipt)
+                    error.add_note("Native rollback receipt failure: " + type(restore_error).__name__)
             if not pointer_error and native_restored:
                 final = current
             if pointer_error:
-                status = read_status(adapter)
-                status["pointer_restore"] = pointer_error
-                write_status(status, adapter)
+                error.add_note(pointer_error)
+                native_receipt["pointer_restore_error"] = pointer_error
+                _save_native_receipt(adapter, native_receipt)
             raise
 
         finally:
             if stopped:
-                _restore_stopped_service(adapter, final, deadline,
-                                         retirement=retirement, retired=current)
+                try:
+                    _restore_stopped_service(adapter, final, deadline,
+                                             retirement=retirement, retired=current)
+                except Exception as restore_error:
+                    native_receipt["service_record_error_type"] = type(restore_error).__name__
+                    if primary is not None:
+                        primary.add_note("Service restoration record failed: " + type(restore_error).__name__)
+    return native_receipt
 
 
 def _previous_package(adapter: dict, previous: dict) -> Path:
@@ -914,29 +973,36 @@ def _previous_package(adapter: dict, previous: dict) -> Path:
 
 
 def _rollback_native(adapter: dict, previous: dict, install,
-                     deadline: float) -> bool:
+                     deadline: float | None) -> dict:
     package = _previous_package(adapter, previous)
-    status = read_status(adapter)
     restored = False
+    native_receipt = None
     if not package.is_dir():
-        status["rollback"] = (
-            "no retained previous host package; native registry may still "
-            "reference the candidate"
-        )
+        detail = "no retained previous host package; native registry may still reference the candidate"
     else:
         try:
             prev_adapter = dict(read_json(Path(previous["adapter_config"])) or adapter)
             prev_adapter["sha"] = previous.get("sha")
-            install(prev_adapter, package, deadline, reserve=FEED_BUDGET + HANDOFF_BUDGET)
+            result = install(prev_adapter, package, deadline)
+            native_receipt = (result or {}).get("native_receipt")
             restored = True
-            status["rollback"] = "previous native package restored with readback"
+            detail = "previous native package restored with readback"
         except Exception as exc:
-            status["rollback"] = (
-                f"native restore FAILED ({str(exc)[:200]}); previous "
-                "generation NOT proven restored"
-            )
-    write_status(status, adapter)
-    return restored
+            native_receipt = getattr(exc, "native_receipt", None)
+            detail = f"native restore FAILED ({str(exc)[:200]}); previous generation NOT proven restored"
+    # Read the latest record after the native attempt; never overwrite it with
+    # the candidate's pre-rollback snapshot.
+    fields = dict(rollback=detail)
+    if native_receipt is not None:
+        fields["native_install"] = native_receipt
+    try:
+        _record(adapter, **fields)
+    except Exception as exc:
+        if native_receipt is not None:
+            native_receipt["rollback_record_error_type"] = type(exc).__name__
+            _native_failure(exc, native_receipt)
+        raise
+    return dict(restored=restored, native_receipt=native_receipt)
 
 
 def _restore_stopped_service(adapter, final, deadline, *, retirement=None, retired=None):
@@ -956,8 +1022,9 @@ def _restore_stopped_service(adapter, final, deadline, *, retirement=None, retir
         if retirement is not None and retired is not None and final == retired:
             command.append(json.dumps(retirement))
         execution = {}
-        output = bounded_run(command, "", env=env, allow_service=True, check=False,
-                             receipt=execution)
+        with bounded.operation():
+            output = bounded_run(command, "", env=env, allow_service=True, check=False,
+                                 receipt=execution)
         result = json.loads(output)
         if result.get("status") not in {"restored", "not-needed"}:
             _record(adapter, service_handoff={"status": "failed",
@@ -997,8 +1064,43 @@ def _record(adapter, **fields) -> dict:
     if (status.get("service_handoff") or {}).get("status") in {"failed", "pending"}:
         if status.get("result") in {"current", "switched", "package-refreshed"}:
             status["result"] = "degraded"
+    native = status.get("native_install") or {}
+    if any(native.get(key) for key in
+           ("interrupted", "cleanup_failed", "record_error_type", "service_record_error_type")):
+        if status.get("result") in {"current", "switched", "package-refreshed"}:
+            status["result"] = "degraded"
     write_status(status, adapter)
     return status
+
+
+def _applied_status(adapter, native_receipt, **fields):
+    """Deliver the verified adoption even if its secondary record cannot save."""
+    if native_receipt:
+        fields["native_install"] = native_receipt
+        if any(native_receipt.get(key) for key in
+               ("interrupted", "cleanup_failed", "record_error_type", "service_record_error_type")):
+            fields["result"] = "degraded"
+    try:
+        return _record(adapter, **fields)
+    except Exception as exc:
+        return dict(fields, result="degraded", result_record_error=type(exc).__name__)
+
+
+def _native_failed_status(adapter, sha, exc, *, phase="switch"):
+    fields = dict(result="failed", phase=phase, candidate_sha=sha,
+                  error=str(exc)[:400], native_install=exc.native_receipt)
+    try:
+        failure = _remember_failure(adapter, sha, exc)
+        if phase == _PACKAGE_REFRESH_PHASE:
+            atomic_write(failed_path(adapter), dict(failure, phase=phase))
+    except Exception as record_error:
+        fields["failure_record_error"] = type(record_error).__name__
+    try:
+        status = _record(adapter, **fields)
+    except Exception as record_error:
+        status = dict(fields, result_record_error=type(record_error).__name__)
+    print(json.dumps(status))
+    return 1
 
 
 _PACKAGE_REFRESH_PHASE = "package-refresh"
@@ -1153,6 +1255,8 @@ def _clear_refresh_intent(adapter: dict, sha: str) -> None:
 
 
 def _package_refresh_failed(adapter: dict, current: dict, sha: str, exc: BaseException) -> int:
+    if hasattr(exc, "native_receipt"):
+        return _native_failed_status(adapter, sha, exc, phase=_PACKAGE_REFRESH_PHASE)
     diagnostic = _update_diagnostic("package_refresh", exc, revision=sha)
     error = f"{type(exc).__name__}: {str(exc)[:400]}"
     atomic_write(failed_path(adapter), {
@@ -1213,7 +1317,7 @@ def _refresh_current_package(adapter, current, sha, deadline, force, idle,
     })
     try:
         target = _materialize_package(current, planned)
-        switch(
+        native_receipt = switch(
             adapter,
             current,
             Path(current["generation"]),
@@ -1254,14 +1358,22 @@ def _refresh_current_package(adapter, current, sha, deadline, force, idle,
         )
         print(json.dumps({"result": "deferred", "sha": sha}))
         return 0
+    except bounded.CommandCancelled as exc:
+        try:
+            _restore_refresh_intent(adapter, prior, sha)
+        except OSError as cleanup:
+            return _refresh_cleanup_failed(adapter, sha, cleanup, "not-attempted")
+        status = _record(adapter, result="cancelled", error=str(exc))
+        print(json.dumps(status))
+        return 1
     except Exception as exc:
         return _package_refresh_failed(adapter, current, sha, exc)
     try:
         _clear_refresh_intent(adapter, sha)
     except OSError as exc:
         return _refresh_cleanup_failed(adapter, sha, exc, "adopted")
-    status = _record(
-        adapter,
+    status = _applied_status(
+        adapter, native_receipt,
         current_sha=sha,
         result="package-refreshed",
         native_package_result="adopted",
@@ -1447,8 +1559,15 @@ def _clear_resolve_wait(adapter):
         write_status(status, adapter)
 
 
-def _check_once(adapter: dict, deadline: float, *, force, build, idle,
+def _check_once(adapter: dict, deadline: float | None, *, force, build, idle,
                 install, lock_timeout) -> int:
+    pending = (read_status(adapter).get("native_install") or {})
+    if pending.get("outcome") == "unknown":
+        status = _record(adapter, result="native-outcome-unknown",
+                         error="native mutation requires reconciliation; no automatic replay",
+                         native_install=pending)
+        print(json.dumps(status))
+        return 1
     try:
         current = read_current(adapter)
     except ValueError as exc:
@@ -1470,10 +1589,15 @@ def _check_once(adapter: dict, deadline: float, *, force, build, idle,
         }))
         return 0
     try:
+        bounded.check_cancelled()
         if update_channel(adapter) == "main":
             sha, release_version = resolve_main(remote, deadline), None
         else:
             sha, release_version = resolve_release(remote, deadline)
+    except bounded.CommandCancelled as exc:
+        status = _record(adapter, result="cancelled", error=str(exc))
+        print(json.dumps(status))
+        return 1
     except Exception as exc:
         recorded = _note_resolve_failure(adapter, exc, current.get("sha"))
         print(json.dumps({
@@ -1518,7 +1642,13 @@ def _check_once(adapter: dict, deadline: float, *, force, build, idle,
         generation, python, gen_adapter = stage_generation(
             sha, remote, adapter, deadline, build=build,
             release_version=release_version)
+    except bounded.CommandCancelled as exc:
+        status = _record(adapter, result="cancelled", error=str(exc))
+        print(json.dumps(status))
+        return 1
     except Exception as exc:
+        if hasattr(exc, "native_receipt"):
+            return _native_failed_status(adapter, sha, exc)
         record = _remember_failure(adapter, sha, exc)
         diagnostic = _update_diagnostic("stage_generation", exc)
         _record(adapter, current_sha=current.get("sha"), candidate_sha=sha,
@@ -1533,8 +1663,8 @@ def _check_once(adapter: dict, deadline: float, *, force, build, idle,
         }))
         return 1
     try:
-        switch(adapter, current, generation, python, gen_adapter, sha,
-               deadline, idle, install, lock_timeout)
+        native_receipt = switch(adapter, current, generation, python, gen_adapter, sha,
+                                deadline, idle, install, lock_timeout)
     except LockTimeout:
         _record(adapter, current_sha=current.get("sha"), candidate_sha=sha,
                 result="deferred-busy", error="operation lock stayed shared")
@@ -1546,7 +1676,13 @@ def _check_once(adapter: dict, deadline: float, *, force, build, idle,
         print(json.dumps({"result": "deferred", "sha": sha,
                           "reason": str(exc)[:300]}))
         return 0
+    except bounded.CommandCancelled as exc:
+        status = _record(adapter, result="cancelled", error=str(exc))
+        print(json.dumps(status))
+        return 1
     except Exception as exc:
+        if hasattr(exc, "native_receipt"):
+            return _native_failed_status(adapter, sha, exc)
         record = _remember_failure(adapter, sha, exc)
         diagnostic = _update_diagnostic("switch", exc)
         _record(adapter, current_sha=current.get("sha"), candidate_sha=sha,
@@ -1561,7 +1697,8 @@ def _check_once(adapter: dict, deadline: float, *, force, build, idle,
         }))
         return 1
     _clear_active_failure(adapter, sha)
-    status = _record(adapter, current_sha=sha, result="switched", needs_host_reload=True,
+    status = _applied_status(adapter, native_receipt,
+            current_sha=sha, result="switched", needs_host_reload=True,
             error=None,
             note=("MCP/hook dispatch uses the new generation per call; "
                   "existing task authorization is preserved. Native "
@@ -1571,22 +1708,49 @@ def _check_once(adapter: dict, deadline: float, *, force, build, idle,
 
 
 def check(config=None, *, force=False, build=build_runtime,
-          idle=stop_if_idle, install=native_install, lock_timeout=30.0) -> int:
+          idle=stop_if_idle, install=native_install, lock_timeout=30.0,
+          deadline=None, cancel=None) -> int:
     adapter = config if isinstance(config, dict) else load_adapter_config()
     update_dir(adapter).mkdir(parents=True, exist_ok=True)
-    deadline = time.monotonic() + CHECK_BUDGET
     try:
-        with check_lock(adapter):
-            code = _check_once(adapter, deadline, force=force, build=build,
-                               idle=idle, install=install,
-                               lock_timeout=lock_timeout)
-            _feed_sync(adapter, deadline)
+        with check_lock(adapter), bounded.operation(cancel, signals=True) as cancelled:
+            # _check_once retains its direct-call JSON contract. The command
+            # emits only the final result, after the independent feed outcome.
+            plugin_output = io.StringIO()
+            with redirect_stdout(plugin_output):
+                code = _check_once(adapter, deadline, force=force, build=build,
+                                   idle=idle, install=install,
+                                   lock_timeout=lock_timeout)
+            plugin = json.loads(plugin_output.getvalue())
+            for key in ("plugin_result", "feed_sync", "feed_results", "feed_error",
+                        "feed_process", "logging_maintenance"):
+                plugin.pop(key, None)
+            feed_observation = None
             try:
-                _logging_maintenance(adapter, deadline)
+                feed_ok = _feed_sync(adapter, deadline)
             except Exception as exc:
-                # Retention/storage failures must not replace the update outcome.
-                _update_diagnostic("logging_maintenance", exc)
-            return code
+                feed_observation = getattr(exc, "feed_outcome", None)
+                if feed_observation is None:
+                    raise
+                feed_ok = False
+                feed_observation = dict(feed_observation, feed_record_error=type(exc).__name__)
+            if not cancelled.is_set():
+                try:
+                    _logging_maintenance(adapter, deadline)
+                except Exception as exc:
+                    _update_diagnostic("logging_maintenance", exc)
+            observed = feed_observation if feed_observation is not None else read_status(adapter)
+            status = dict(observed, **plugin, plugin_result=plugin)
+            status["result"] = ("cancelled" if cancelled.is_set() else
+                                "degraded" if not code and not feed_ok else
+                                plugin.get("result", "failed"))
+            try:
+                write_status(status, adapter)
+            except Exception as exc:
+                status.update(result="degraded", result_record_error=type(exc).__name__)
+                code = 1
+            print(json.dumps(status))
+            return 1 if code or not feed_ok or cancelled.is_set() else 0
     except LockTimeout:
         print(json.dumps({"result": "check-already-running"}))
         return 0
@@ -1605,18 +1769,18 @@ def _logging_maintenance(adapter, deadline):
     with a JSON result is parsed normally, never silently discarded.
     """
     status = read_status(adapter)
-    remaining = deadline - time.monotonic()
-    if remaining <= 0.1:
+    remaining = None if deadline is None else deadline - time.monotonic()
+    if remaining is not None and remaining <= 0.1:
         status["logging_maintenance"] = {"status": "skipped_budget"}
         write_status(status, adapter)
         return
     try:
-        with OperationLock(adapter).shared(timeout=min(0.5, remaining)):
+        with OperationLock(adapter).shared(timeout=0.5 if remaining is None else min(0.5, remaining)):
             current = read_current(adapter)
         # Pass the REAL remaining window: the CLI's 75s default includes
         # offline work and skips the upgrade unless a full 60s handoff plus
         # 1s exit remains; 2s is this parent's exit/startup margin.
-        available = min(75, deadline - time.monotonic())
+        available = 75 if deadline is None else min(75, deadline - time.monotonic())
         if available <= 0:
             status["logging_maintenance"] = {"status": "skipped_budget"}
             write_status(status, adapter)
@@ -1645,40 +1809,61 @@ def _logging_maintenance(adapter, deadline):
     write_status(status, adapter)
 
 
-def _feed_sync(adapter: dict, deadline: float) -> bool:
+def _feed_sync(adapter: dict, deadline: float | None) -> bool:
     status = read_status(adapter)
-    left = deadline - time.monotonic()
-    if left <= 0:
-        status["feed_sync"] = "skipped: check budget exhausted"
-        status["feed_error"] = "skipped: check budget exhausted"
+    left = None if deadline is None else deadline - time.monotonic()
+    if left is not None and left <= 0:
+        status["feed_sync"] = "skipped: explicit caller deadline exhausted"
+        status["feed_error"] = "skipped: explicit caller deadline exhausted"
         status.pop("feed_results", None)
         write_status(status, adapter)
         return False
     try:
-        with OperationLock(adapter).shared(timeout=min(5, left)):
+        with OperationLock(adapter).shared(timeout=5 if left is None else min(5, left)):
             current = read_current(adapter)
             engine = _generation_engine(current)
+            execution = {}
             output = bounded_run(
                 [current["python"], "-m", "mindie_knowledge.loop.cli",
                  "sync", "--config", engine],
                 "",
-                timeout=min(FEED_BUDGET, deadline - time.monotonic()),
+                timeout=_remaining(deadline),
+                check=False,
+                receipt=execution,
             )
         aggregate, rows, summary = fold_feed_results(output)
+        status["feed_process"] = execution
+        if execution.get("cleanup_failed") or execution.get("returncode", 0) != 0:
+            aggregate = "degraded" if any(
+                row["status"] in _FEED_OK or row["status"] == "partial" for row in rows
+            ) else "sync_failed"
+            summary = "; ".join(filter(None, (summary, "feed process failed or cleanup failed; not replayed")))
         status["feed_sync"] = aggregate
         status["feed_results"] = rows
         if summary:
             status["feed_error"] = summary
         else:
             status.pop("feed_error", None)
-        write_status(status, adapter)
-        return aggregate == "ok"
     except Exception as exc:
-        status["feed_sync"] = "sync_failed"
+        status["feed_sync"] = "cancelled" if isinstance(exc, bounded.CommandCancelled) else "sync_failed"
         status["feed_error"] = str(exc)[:240]
+        if "execution" in locals():
+            status["feed_process"] = execution
         status.pop("feed_results", None)
+        output = getattr(exc, "mindie_output", getattr(exc, "stdout", ""))
+        if isinstance(output, str) and output:
+            try:
+                outcome, rows, _ = fold_feed_results(output)
+                status["feed_results"] = rows
+                status["feed_completed_outcome"] = outcome
+            except ValueError:
+                status["feed_result_decode_failed"] = True
+    try:
         write_status(status, adapter)
-        return False
+    except Exception as exc:
+        exc.feed_outcome = status
+        raise
+    return status["feed_sync"] == "ok"
 
 
 def status() -> int:

@@ -48,6 +48,18 @@ def _source(root, version="0.0.1"):
 
 
 class ProductContractTests(unittest.TestCase):
+    def test_candidate_requires_owner_death_guard_before_install(self):
+        import updater
+
+        validator = _load_validator()
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "candidate"
+            updater.snapshot_source(ROOT, source)
+            validator.adapter_check(source)
+            (source / "scripts" / "owned_process.py").unlink()
+            with self.assertRaisesRegex(ValueError, "missing bounded runtime entry: owned_process.py"):
+                validator.adapter_check(source)
+
     def test_identity_binds_product_requirements_and_source_bytes(self):
         with tempfile.TemporaryDirectory() as tmp:
             source = _source(Path(tmp))

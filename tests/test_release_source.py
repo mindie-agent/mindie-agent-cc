@@ -54,7 +54,7 @@ class ReleaseResolverTests(unittest.TestCase):
             seen["accept"] = request.get_header("Accept")
             return _Response(_release())
 
-        def git(args, *, timeout, deadline, cwd=None, transport=False):
+        def git(args, *, deadline, cwd=None, transport=False):
             self.assertEqual(args[:2], ["ls-remote", "origin"])
             self.assertIn("refs/tags/v0.0.1", args)
             self.assertNotIn("refs/heads/main", args)
@@ -71,7 +71,7 @@ class ReleaseResolverTests(unittest.TestCase):
         def opener(_request, timeout):
             return _Response(_release("v1.2.3"))
 
-        def git(args, *, timeout, deadline, cwd=None, transport=False):
+        def git(args, *, deadline, cwd=None, transport=False):
             return (
                 OTHER + "\trefs/tags/v1.2.3\n"
                 + SHA + "\trefs/tags/v1.2.3^{}\n"
@@ -102,7 +102,7 @@ class ReleaseResolverTests(unittest.TestCase):
                     )
 
     def test_missing_tag_is_a_failed_resolve(self):
-        def git(args, *, timeout, deadline, cwd=None, transport=False):
+        def git(args, *, deadline, cwd=None, transport=False):
             return ""
 
         with patch.object(updater, "_git", git):
@@ -211,7 +211,7 @@ class LocalTagResolutionTests(unittest.TestCase):
 
             with patch.object(updater, "_git", wrapped):
                 commit, version = updater.resolve_release(
-                    str(bare), time.monotonic() + updater.RESERVE + 30, opener,
+                    str(bare), time.monotonic() + 30, opener,
                 )
             self.assertEqual(version, "0.0.1")
             self.assertEqual(commit, first)

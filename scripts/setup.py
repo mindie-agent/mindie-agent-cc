@@ -128,7 +128,7 @@ def probe_runtime(python, pins=None, local_candidates=None):
     pins = runtime_pins() if pins is None else pins
     pin_script = _PIN_TEMPLATE.format(pins=pins, local=local_candidates or {})
     try:
-        pin_result = run([python, "-c", pin_script], "", timeout=15)
+        pin_result = run([python, "-c", pin_script], "")
     except Exception as exc:
         raise SystemExit(
             f"dependency pin probe failed in {python}: {type(exc).__name__}: {str(exc)[:200]}"
@@ -138,7 +138,7 @@ def probe_runtime(python, pins=None, local_candidates=None):
             f"{python} does not have the exact required commits: {pin_result.strip()}"
         )
     try:
-        output = run([python, "-c", PROBE_SCRIPT], "", timeout=30)
+        output = run([python, "-c", PROBE_SCRIPT], "")
     except Exception as exc:
         raise SystemExit(
             f"knowledge runtime probe failed in {python}: {type(exc).__name__}: {str(exc)[:200]}"
@@ -193,6 +193,9 @@ def sync_public_feed(python, engine_config):
             "sync command completed but owned-process cleanup failed; "
             "inspect the completed feed results before repeating",
         )
+    if receipt.get("cancelled_after_completion"):
+        feed.update(operation_completed=True, cancelled_after_completion=True,
+                    returncode=receipt.get("returncode"))
     return feed
 
 
@@ -266,12 +269,11 @@ def build_bootstrap_runtime(domain_root: Path) -> str:
         PIP_DISABLE_PIP_VERSION_CHECK="1",
         GIT_TERMINAL_PROMPT="0",
     )
-    run([sys.executable, "-m", "venv", str(venv)], "", timeout=180)
+    run([sys.executable, "-m", "venv", str(venv)], "")
     run(
         [str(python), "-m", "pip", "install", "-r",
          str(PLUGIN_ROOT / "runtime-requirements.txt")],
         "",
-        timeout=600,
         max_output=512 * 1024,
         env=env,
     )
@@ -393,7 +395,7 @@ def main():
     # candidate and return above.
     try:
         product_validation = updater.probe_runtime(
-            Path(python), time.monotonic() + updater.CHECK_BUDGET, PLUGIN_ROOT,
+            Path(python), None, PLUGIN_ROOT,
         )
     except Exception as exc:
         raise SystemExit(str(exc)) from None
@@ -437,7 +439,7 @@ def main():
             package_dir=generation / "host-package",
         )
         product_validation = updater.probe_runtime(
-            Path(python), time.monotonic() + updater.CHECK_BUDGET, generation,
+            Path(python), None, generation,
             revision=identity if re.fullmatch(updater.SHA, identity) else None,
         )
     else:
@@ -445,7 +447,7 @@ def main():
         host_package = generation / "host-package"
         product_validation = updater.validate_prepared_generation(
             generation, Path(python), gen_adapter, identity,
-            time.monotonic() + updater.CHECK_BUDGET,
+            None,
         )
     value["product_validation"] = product_validation
     adapter_value["product_validation"] = product_validation
@@ -544,4 +546,6 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    from bounded import operation
+    with operation(signals=True):
+        main()

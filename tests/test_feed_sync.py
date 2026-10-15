@@ -269,7 +269,7 @@ class FeedSyncTests(unittest.TestCase):
         status = genstate.read_status(self.adapter)
         self.assertEqual(status["result"], "failed")
 
-    def test_check_returns_plugin_code_when_feed_not_ok(self):
+    def test_check_returns_failure_when_feed_not_ok(self):
         def feed(adapter, deadline):
             return False
 
@@ -284,7 +284,10 @@ class FeedSyncTests(unittest.TestCase):
         with patch.object(updater, "_feed_sync", feed):
             with patch.object(updater, "_check_once", current):
                 code = updater.check(self.adapter, lock_timeout=1)
-        self.assertEqual(code, 0)
+        self.assertEqual(code, 1)
+        status = genstate.read_status(self.adapter)
+        self.assertEqual(status["result"], "degraded")
+        self.assertEqual(status["plugin_result"]["result"], "current")
 
 
 if __name__ == "__main__":
