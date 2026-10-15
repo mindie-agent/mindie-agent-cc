@@ -80,6 +80,23 @@ def _missing_contract(directory):
 
 
 class WorkerProbeTests(unittest.TestCase):
+    def test_update_contract_apis_are_required_before_install(self):
+        from mindie_knowledge.loop import cli, lifecycle, locks
+        from mindie_knowledge import releases
+
+        script = runtime_probe.build_probe_script(str(SCRIPTS / "transcript.py"))
+        for module, name, value, message in (
+            (locks, "try_lock_file", None, "shared operation admission locks"),
+            (releases, "supports_harness", None, "compatible Release selection APIs"),
+            (lifecycle, "retire_service", lambda path: None, "bounded control observation"),
+            (cli, "prepare_service", lambda path: None, "bounded readiness probe"),
+        ):
+            with self.subTest(name=name), patch.object(module, name, value), \
+                    redirect_stdout(io.StringIO()) as output:
+                exec(script, {})
+            self.assertIn(message, output.getvalue())
+            self.assertTrue(output.getvalue().startswith("MISSING:"))
+
     def test_git_layout_preflight_is_required_before_install(self):
         from mindie_knowledge import git_layout
 

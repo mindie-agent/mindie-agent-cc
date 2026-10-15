@@ -39,7 +39,7 @@ def _source(root, version="0.0.1"):
     (root / "product-contract.json").write_text(
         (ROOT / "product-contract.json").read_text(encoding="utf-8"), encoding="utf-8",
     )
-    for name in ("pyproject.toml", "uv.lock"):
+    for name in ("pyproject.toml", "uv.lock", "harness-compatibility.json"):
         (root / name).write_bytes((ROOT / name).read_bytes())
     project = root / "pyproject.toml"
     project.write_text(project.read_text(encoding="utf-8").replace(

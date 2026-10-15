@@ -50,15 +50,18 @@ Release exists, use an explicitly reviewed candidate source; do not interpret
 these candidate instructions as a published `v0.0.1`:
 
 ```sh
-claude plugin marketplace add https://github.com/mindie-agent/mindie-agent-cc.git
+claude plugin marketplace add https://github.com/mindie-agent/mindie-agent-cc.git#v0.0.1
 claude plugin install mindie-agent@mindie-agent-cc --scope user
 claude --init-only
 claude plugin list --json
 claude mcp list
 ```
 
-The marketplace's selected Git revision determines the plugin version. MindIE
-does not resolve a second update channel or poll GitHub Releases independently.
+Each Release declares the Claude Code versions and native interfaces it supports.
+The shared Release selector chooses the highest compatible official Release;
+Claude's native Git marketplace and installer own its download and installation
+records. This marketplace's unconditional native auto-update is disabled so it
+cannot bypass that selection. Other marketplaces and native settings are preserved.
 The native `--init-only` command completes installation through SessionStart and
 exits without starting a conversation or calling a model. Check that both MindIE
 MCP servers report `Connected` before treating installation as complete.
@@ -77,7 +80,8 @@ The completed environment is immutable. Damage is reported instead of repaired
 in place while an old session may still use it.
 
 The native `CLAUDE_PLUGIN_DATA/releases/0.0.1/entry.py` binds one exact installed
-interpreter and configuration. SessionStart, MCP and Stop use this entry before
+facade and profile. Each operation reads the selected complete helper, interpreter
+and engine from that profile. SessionStart, MCP and Stop use this entry before
 consulting the cache. Hot Hooks run uv offline with Python downloads disabled;
 Stop never installs a runtime, syncs a feed or invokes the business model.
 
@@ -129,28 +133,39 @@ current behavior, reproducible checks and acceptance boundaries.
 
 ## Updates and maintenance
 
-Use Claude's native marketplace update and plugin update commands. MindIE has
-no code-update timer, `current.json` selector, automatic install retry or second
-package registry. Different native releases must have different plugin versions;
-a fixed release entry cannot be overwritten with different code.
-Complete the selected version's installation with `claude --init-only`, then
-read back its two connections with `claude mcp list`, using the same profile.
-These are installation and update steps; ordinary tasks do not run a preparation
-or reconnect command.
+After more than 24 hours since a successful Release check, the next natural MCP
+use starts one asynchronous check. Ordinary tool calls use an in-process time
+comparison and do not wait for network, scan releases or hash the installation.
+A failed check preserves the last successful time and has a short retry backoff.
+No daemon, code-update timer or second package registry is installed. Stop never
+starts an update.
 
-The unpublished 0.0.1 candidate initializes an empty installation profile and
-verifies an existing identical binding. It rejects other development bindings
-without changing their configuration, services, data or authorization. It does
-not implement migration between unpublished candidates. A fixed entry that no
-longer matches the installation reports `native_reload_required`; it never
-selects another runtime or restarts an old owner. MCP requests check this
-identity before dispatch, including requests from an already connected server.
+The update prepares the selected native package and its complete immutable uv
+runtime outside operation admission. An already prepared candidate retries only
+the short activation control, without refetching Releases or reinstalling.
+In-flight calls hold shared admission; cancellation remains concurrent. Activation
+takes exclusive admission only when it is free, defers while the Core has work,
+retires the exact idle owner and observes the new owner ready before atomically
+publishing the canonical binding. The 30-second observation window is a control
+bound, not a deadline that kills useful work. Unknown installation effects and
+incomplete cleanup remain visible in local receipts and are not blindly replayed.
 
-This boundary does not define upgrades between future published releases.
-Those must preserve existing contribution/reporting choices, scope and durable
-data according to their actual format contract. A host reload is not a request
-to authorize contribution again. Transparent old/new session coexistence and
-automatic candidate migration are not claimed by this release.
+Stop does not wait for this service-switch gate. It takes one complete helper
+snapshot and submits the authorized event to the existing durable capture
+queue. A retired helper cannot revive its old service; the new owner consumes
+the queued event. Explicit off and task revocation still prevent capture.
+
+An existing native facade reads the new complete binding on its next operation.
+Updates require no approval, notification, reload command or renewed contribution
+authorization. Explicit plugin disable, contribution/reporting choices, project
+scope and durable outcomes remain authoritative. Old unsupported development
+profiles are rejected without automatic migration. Real storage formats and
+the facade/helper protocol determine compatibility; product version sorting
+only selects a Release.
+
+See [Harness interface evidence](docs/harness-interface-evidence.md) for the
+registered boundaries and the distinction between component tests, zero-model
+native experiments and completed business acceptance.
 
 SessionStart performs shared knowledge-feed interval/backoff maintenance and
 bounded diagnostic retention, including the existing reporter handoff contract.

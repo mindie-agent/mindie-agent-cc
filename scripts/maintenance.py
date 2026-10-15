@@ -156,3 +156,7 @@ def session_start():
     except OSError as exc:
         result.update(status="incomplete", recording_error=type(exc).__name__)
     return result
+
+
+if __name__ == "__main__":
+    print(json.dumps(session_start()))

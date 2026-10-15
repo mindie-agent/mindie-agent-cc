@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import threading
+from contextlib import nullcontext
 from pathlib import Path
 from unittest.mock import patch
 
@@ -28,7 +29,7 @@ def test_mcp_dispatch_has_no_total_deadline_and_keeps_caller_cancel(tmp_path):
     cancel = threading.Event()
     for surface in ("knowledge", "remote"):
         with patch.object(mindie_launch, "_runtime", return_value=current), \
-                patch.object(mindie_launch, "_verify_installation"), \
+                patch.object(mindie_launch, "installed_binding", return_value=nullcontext({})), \
                 patch.object(mindie_launch.bounded, "run",
                              return_value=json.dumps(response)) as runner:
             assert mindie_launch._dispatch(surface, raw, "slow-read", cancel) == response
@@ -61,7 +62,7 @@ def test_only_knowledge_business_calls_can_transfer_service_ownership(tmp_path):
         raw = json.dumps(dict(jsonrpc="2.0", id="ownership", method=method,
                               params=dict(name=name))).encode()
         with patch.object(mindie_launch, "_runtime", return_value=current), \
-                patch.object(mindie_launch, "_verify_installation"), \
+                patch.object(mindie_launch, "installed_binding", return_value=nullcontext({})), \
                 patch.object(mindie_launch.bounded, "run",
                              return_value=json.dumps(response)) as runner:
             mindie_launch._dispatch(surface, raw, "ownership")
@@ -162,7 +163,11 @@ def test_helper_failure_keeps_visible_warning_even_if_diagnostic_write_fails(cap
     import mindie_launch
 
     with patch.object(mindie_launch, "_sharing_enabled", return_value=True), \
-            patch.object(mindie_launch, "_verify_installation"), \
+            patch.object(mindie_launch, "binding_snapshot", return_value={
+                "python": sys.executable, "runtime_scripts": str(SCRIPTS),
+                "adapter_config": "fixture",
+            }), \
+            patch.object(mindie_launch.Path, "exists", return_value=True), \
             patch.object(mindie_launch, "_read_hook_stdin", return_value=b"{}"), \
             patch.object(mindie_launch.bounded, "run", side_effect=RuntimeError("PRIVATE_SENTINEL")), \
             patch.object(mindie_launch.diagnostic_support, "failure", side_effect=OSError("full")):
@@ -190,19 +195,19 @@ def test_initialize_reports_cached_installed_distribution_version():
 
 def test_incomplete_first_start_does_not_claim_an_available_old_owner(capsys):
     import mindie_launch
-    import maintenance
-
-    with patch.object(mindie_launch, "_verify_installation"), \
-            patch.object(maintenance, "session_start", return_value={"status": "incomplete"}):
+    with patch("harness.require_binding_support", return_value="2.1.269"), \
+            patch.object(mindie_launch, "installed_binding", return_value=nullcontext({
+            "python": sys.executable, "runtime_scripts": str(SCRIPTS),
+            "adapter_config": "fixture",
+    })), patch.object(mindie_launch.bounded, "run",
+                     return_value='{"status":"incomplete"}'):
         assert mindie_launch.main(["hook", "session-start"]) == 0
     message = json.loads(capsys.readouterr().out)["systemMessage"]
     assert message == "MindIE startup maintenance is incomplete."
 
 
-def test_each_mcp_request_checks_the_process_binding_before_a_child_can_run(tmp_path):
+def test_each_mcp_request_selects_current_complete_helper_without_old_entry_reselecting(tmp_path):
     import mindie_launch
-    import pytest
-
     config = make_config(tmp_path)
     fixed = json.loads(config.read_text(encoding="utf-8"))
     raw = b'{"jsonrpc":"2.0","id":"one","method":"tools/call","params":{"name":"remote_bash"}}'
@@ -211,9 +216,11 @@ def test_each_mcp_request_checks_the_process_binding_before_a_child_can_run(tmp_
             patch.object(mindie_launch.bounded, "run", return_value=response) as runner:
         assert mindie_launch._dispatch("remote", raw, "one", binding=fixed)["id"] == "one"
         runner.reset_mock()
-        config.write_text(json.dumps(dict(fixed, engine_config=str(tmp_path / "other.json"))),
-                          encoding="utf-8")
-        with pytest.raises(mindie_launch.DispatchFailure) as caught:
-            mindie_launch._dispatch("remote", raw, "one", binding=fixed)
-        assert caught.value.stage == "native_reload_required"
-        runner.assert_not_called()
+        selected = dict(fixed, engine_config=str(tmp_path / "other.engine.json"),
+                        runtime_scripts=str(tmp_path / "new-scripts"),
+                        python=str(tmp_path / "new-python"))
+        config.write_text(json.dumps(selected), encoding="utf-8")
+        assert mindie_launch._dispatch("remote", raw, "one", binding=fixed)["id"] == "one"
+        assert runner.call_args.args[0][:2] == [
+            selected["python"], str(Path(selected["runtime_scripts"]) / "mcp_server.py")]
+        assert json.loads(config.read_text(encoding="utf-8")) == selected

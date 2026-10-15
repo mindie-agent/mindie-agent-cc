@@ -86,7 +86,11 @@ def make_config(tmp: Path, *, sharing=False, roots=None, summary_command=None):
     write_json(
         config,
         dict(
+            schema="mindie-cc-installation/1",
+            facade_protocol=1,
             python=sys.executable,
+            runtime_scripts=str(SCRIPTS),
+            adapter_config=str(config),
             base_config=str(config),
             engine_config=str(engine),
             community_config=str(community),

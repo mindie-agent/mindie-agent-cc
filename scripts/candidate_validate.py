@@ -74,6 +74,8 @@ def adapter_check(source):
         "bootstrap.py",
         "install_state.py",
         "maintenance.py",
+        "harness.py",
+        "release_update.py",
     ):
         if not (plugin / "scripts" / name).is_file():
             raise ValueError("missing bounded runtime entry: " + name)
@@ -92,8 +94,10 @@ def release_check(plugin):
     from packaging.version import InvalidVersion, Version
     from mindie_knowledge.state_layout import RELEASE_VERSION as knowledge_release
     from receipt_layout import RELEASE_VERSION as receipt_release
+    from harness import compatibility
 
     native_version(plugin)
+    compatibility(plugin)
     for boundary in (knowledge_release, receipt_release):
         if boundary is None:
             raise CheckFailure("adapter", "release_state_undeclared")

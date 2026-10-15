@@ -211,7 +211,7 @@ def package_files(source):
     plugin = _plugin_root(source)
     result = set()
     for name in (".claude-plugin", ".mcp.json", "hooks", "scripts", "skills",
-                 "product-contract.json", "pyproject.toml", "uv.lock"):
+                 "product-contract.json", "harness-compatibility.json", "pyproject.toml", "uv.lock"):
         path = plugin / name
         entries = [path]
         if path.is_dir() and not path.is_symlink():

@@ -35,7 +35,7 @@ def runtime_key(source):
     return digest.hexdigest()
 
 
-def readback(python, source):
+def readback(python, source, *, on_process=None):
     """Check the actual interpreter and noneditable installed adapter bytes."""
     script = """
 import importlib.metadata as m, importlib.util, json, pathlib, sys
@@ -47,7 +47,8 @@ spec = importlib.util.find_spec('mindie_cc')
 print(json.dumps({'scripts':str(pathlib.Path(spec.origin).parent),
                   'prefix':sys.prefix, 'version':d.version}))
 """
-    output = _run("runtime-readback", [str(python), "-I", "-c", script])
+    output = _run("runtime-readback", [str(python), "-I", "-c", script],
+                  on_process=on_process)
     value = json.loads(output)
     if value["version"] != native_version(source):
         raise ValueError("installed adapter version differs from the native plugin")
@@ -61,28 +62,41 @@ print(json.dumps({'scripts':str(pathlib.Path(spec.origin).parent),
     return scripts
 
 
-def _run(stage, command, **kwargs):
+def _run(stage, command, *, on_process=None, **kwargs):
+    process = {}
+    if on_process is not None:
+        on_process(stage, None)
     try:
-        return bounded.run(command, **kwargs)
-    except Exception as exc:
+        output = bounded.run(command, receipt=process, **kwargs)
+        if process.get("cleanup_failed"):
+            raise RuntimeError("runtime preparation cleanup is not confirmed")
+    except BaseException as exc:
         exc.mindie_stage = stage
         exc.add_note(f"MindIE preparation failed at {stage}; not retried.")
+        if on_process is not None:
+            try:
+                on_process(stage, process)
+            except Exception as recording:
+                exc.add_note("preparation outcome recording failed: " + type(recording).__name__)
         raise
+    if on_process is not None:
+        on_process(stage, process)
+    return output
 
 
-def ensure_runtime(source, *, prepare=True):
+def ensure_runtime(source, *, prepare=True, on_process=None):
     with bounded.operation(signals=True):
-        return _ensure_runtime(source, prepare=prepare)
+        return _ensure_runtime(source, prepare=prepare, on_process=on_process)
 
 
-def _ensure_runtime(source, *, prepare):
+def _ensure_runtime(source, *, prepare, on_process=None):
     source = Path(source).resolve()
     if not (source / "uv.lock").is_file():
         raise ValueError("the native plugin does not contain its complete uv.lock")
     runtime = runtime_root() / runtime_key(source)
     python = runtime / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     adapter = {"state_dir": str(runtime.parent)}
-    with OperationLock(adapter).exclusive(timeout=120):
+    with OperationLock(adapter, bootstrap=True).exclusive(timeout=120):
         complete = runtime.with_suffix(".ready.json")
         expected = dict(key=runtime.name, python=str(python),
                         source_sha256=source_identity(source),
@@ -91,7 +105,7 @@ def _ensure_runtime(source, *, prepare):
         if complete.is_file():
             if json.loads(complete.read_text(encoding="utf-8")) != expected:
                 raise ValueError("completed runtime identity differs; not repaired")
-            return python, readback(python, source)
+            return python, readback(python, source, on_process=on_process)
         if not prepare:
             raise RuntimeError("runtime is not prepared; start a new Claude session")
         uv = shutil.which("uv")
@@ -102,8 +116,8 @@ def _ensure_runtime(source, *, prepare):
         env.pop("PYTHONPATH", None)
         _run("locked-runtime-install",
              [uv, "sync", "--project", str(source), "--locked", "--no-editable",
-              "--no-dev", "--python", sys.executable], env=env)
-        scripts = readback(python, source)
+              "--no-dev", "--python", sys.executable], env=env, on_process=on_process)
+        scripts = readback(python, source, on_process=on_process)
         atomic_write(complete, expected)
         return python, scripts
 

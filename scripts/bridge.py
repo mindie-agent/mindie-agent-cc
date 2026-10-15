@@ -128,25 +128,46 @@ def _record_stop(stage, category, exc=None):
 def _observe_stop(result):
     if not isinstance(result, dict):
         _record_stop("handoff", "internal")
-        return
+        return True
     stage = result.get("stage")
     if stage in {"inert", "organized", "no-new-material", "no-shareable-material",
                  "cancelled", "discarded", "processing", "accepted-runtime",
                  "apply-pending", "accepted-local"}:
-        return
+        if result.get("wake") == "failed" or result.get("reason") == "worker-dead":
+            _record_stop("wake", "unavailable")
+            return True
+        return False
     if stage not in {"unavailable", "rejected", "failed"}:
         _record_stop("handoff", "internal")
-        return
+        return True
     reason = result.get("reason")
     if not isinstance(reason, str) or not reason.replace("-", "").replace("_", "").isalnum():
         reason = "handoff"
     if not reason[:1].isalpha():
         reason = "handoff"
     _record_stop(stage, reason)
+    return True
+
+
+def _stop_output(failed=False):
+    if failed:
+        _print({
+            "systemMessage": "MindIE background capture encountered an error. "
+                             "Task completion is unaffected; details are in MindIE diagnostics."
+        })
+    else:
+        _print({})
+    return 0
+
+
+def _stop_failure(stage, category, exc=None):
+    _record_stop(stage, category, exc)
+    return _stop_output(failed=True)
 
 
 def handle_stop():
     attempted = False
+    failed = False
     try:
         event = _read_event()
         if event.get("hook_event_name") not in {None, "Stop"}:
@@ -168,24 +189,18 @@ def handle_stop():
         try:
             settings = sharing_mod.load()
         except Exception as exc:
-            _record_stop("configuration", "unavailable", exc)
-            _print({})
-            return 0
+            return _stop_failure("configuration", "unavailable", exc)
         if not settings.allows_capture():
             if settings.capture_block_kind() == "fault":
-                _record_stop("authorization", "authority_unavailable")
+                return _stop_failure("authorization", "authority_unavailable")
             _print({})
             return 0
         turn = event.get("prompt_id")
         if not isinstance(turn, str) or not turn or len(turn) > 256:
-            _record_stop("identity", "missing_identity")
-            _print({})
-            return 0
+            return _stop_failure("identity", "missing_identity")
         transcript = event.get("transcript_path")
         if not isinstance(transcript, str) or not os.path.isabs(transcript):
-            _record_stop("material", "no_capturable_material")
-            _print({})
-            return 0
+            return _stop_failure("material", "no_capturable_material")
         # Scope and the capture boundary come from the task's own transcript
         # artifact, never from the hook arguments.
         from transcript import capture_source
@@ -193,9 +208,7 @@ def handle_stop():
         try:
             source = capture_source(transcript, session)
         except (OSError, ValueError) as exc:
-            _record_stop("material", "source_unavailable", exc)
-            _print({})
-            return 0
+            return _stop_failure("material", "source_unavailable", exc)
         if not settings.in_scope(source["project_root"]):
             _print({})
             return 0
@@ -204,9 +217,7 @@ def handle_stop():
         admission = gate()
         inspected = admission.inspect(session)
         if inspected.get("status") == "unavailable":
-            _record_stop("admission", "unavailable")
-            _print({})
-            return 0
+            return _stop_failure("admission", "unavailable")
         if inspected.get("status") == "inactive":
             # An explicit deactivation is a revocation; an ordinary Stop never
             # reactivates the task.
@@ -230,12 +241,10 @@ def handle_stop():
         )
         from mindie_knowledge.loop.cli import capture_hook
 
-        _observe_stop(capture_hook(str(engine_path()), forwarded))
+        failed = _observe_stop(capture_hook(str(engine_path()), forwarded))
     except Exception as exc:
-        if attempted:
-            _record_stop("handoff", "internal", exc)
-    _print({})
-    return 0
+        return _stop_failure("handoff" if attempted else "configuration", "internal", exc)
+    return _stop_output(failed)
 
 
 def main(argv=None):

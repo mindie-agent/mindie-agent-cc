@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""Fixed-runtime Claude Hook/MCP entry; native marketplace owns code selection.
-
-Every child uses this installed package and interpreter. There is no mutable
-current pointer, source fetch, installation scheduler, or generation switch.
-"""
+"""Stable native facade; each operation dispatches the selected complete helper."""
 
 from __future__ import annotations
 
@@ -13,6 +9,7 @@ import re
 import sys
 import threading
 import time
+from contextlib import nullcontext
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -20,7 +17,9 @@ import bounded
 
 
 import diagnostic_support
-from install_state import InstallationUnavailable, installed_binding
+from install_state import (
+    InstallationUnavailable, LockTimeout, binding_snapshot, installed_binding,
+)
 
 HOOK_TOTAL = 1.5
 # Knowledge stdout only. A legal maximum page measured 817407 bytes.
@@ -62,7 +61,7 @@ def _record_hook(stage, category, op="stop", exception=None):
         pass
 
 
-def _sharing_enabled() -> bool:
+def _sharing_enabled(binding=None) -> bool:
     """True only when community sharing is explicitly enabled.
 
     A missing adapter or community file, or an explicit off, is quiet.
@@ -72,7 +71,7 @@ def _sharing_enabled() -> bool:
     from entry import _read_regular_json
 
     path = _config_path()
-    state, data = _read_regular_json(path)
+    state, data = (None, binding) if binding is not None else _read_regular_json(path)
     if state == "missing":
         return False
     if state is not None:
@@ -126,12 +125,12 @@ def _fail_open() -> int:
     return 0
 
 
-def _hook_warning(*, reload_required=False) -> int:
+def _hook_warning(*, unavailable=False) -> int:
     # Native user-visible warning; no blocking decision or extra model turn.
     message = (
-        "MindIE native_reload_required: this session uses an unavailable installation. "
-        "Finish the selected installation and reload Claude; existing choices and data are preserved."
-    ) if reload_required else (
+        "MindIE is temporarily unavailable during installation. "
+        "Task completion is unaffected; existing choices and data are preserved."
+    ) if unavailable else (
         "MindIE background capture encountered an error. "
         "Task completion is unaffected; details are in MindIE diagnostics."
     )
@@ -218,54 +217,52 @@ def _hook_can_start_service(op, raw):
     )
 
 
-def _runtime():
-    return dict(python=sys.executable, scripts=str(Path(__file__).resolve().parent),
-                adapter_config=str(_config_path()))
+def _runtime(binding):
+    return dict(python=binding["python"], scripts=binding["runtime_scripts"],
+                adapter_config=binding["adapter_config"])
 
 
 def _verify_installation(expected=None, *, timeout=5.0):
-    # No operation changes the selected binding. Keep this check short so a
-    # long remote call never blocks its cancellation/status control request.
     with installed_binding(expected, timeout=timeout) as value:
         return value
 
 
 def _hook(op: str) -> int:
     deadline = time.monotonic() + HOOK_TOTAL
-    if op == "stop":
-        try:
-            if not _sharing_enabled():
-                if _config_path().exists():
-                    _verify_installation(timeout=max(0, deadline - time.monotonic()))
-                return _fail_open()
-        except InstallationUnavailable as exc:
-            _record_hook("sharing-probe", "configuration", op, exc)
-            return _hook_warning(reload_required=True)
-        except (OSError, ValueError, RuntimeError) as exc:
-            _record_hook("sharing-probe", "configuration", op, exc)
-            return _hook_warning()
+    if op == "stop" and not _config_path().exists():
+        return _fail_open()
     raw = _read_hook_stdin(deadline)
-    selected = _runtime()
-    script = Path(selected["scripts"]) / "bridge.py"
+    stage = "installation"
     try:
-        _verify_installation(timeout=max(0, deadline - time.monotonic()))
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise TimeoutError("hook input deadline exhausted")
-        out = bounded.run(
-            [selected["python"], str(script), op], raw, timeout=remaining,
-            env=_child_env(selected), cwd=str(script.parent), check=True,
-            allow_service=_hook_can_start_service(op, raw),
+        admission = (
+            nullcontext(binding_snapshot()) if op == "stop"
+            else installed_binding(timeout=max(0, deadline - time.monotonic()))
         )
+        with admission as binding:
+            stage = "sharing-probe"
+            if op == "stop" and not _sharing_enabled(binding):
+                return _fail_open()
+            selected = _runtime(binding)
+            script = Path(selected["scripts"]) / "bridge.py"
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("hook input deadline exhausted")
+            stage = "helper_failed"
+            out = bounded.run(
+                [selected["python"], str(script), op], raw, timeout=remaining,
+                env=_child_env(selected), cwd=str(script.parent), check=True,
+                allow_service=_hook_can_start_service(op, raw),
+            )
         value = json.loads(out.strip())
         if not isinstance(value, dict):
             raise ValueError("hook result must be one object")
         print(json.dumps(value, ensure_ascii=False), flush=True)
         return 0
     except Exception as exc:
-        _record_hook("helper_failed", "child_failure", op, exc)
-        if isinstance(exc, InstallationUnavailable):
-            return _hook_warning(reload_required=True)
+        category = "child_failure" if stage == "helper_failed" else "configuration"
+        _record_hook(stage, category, op, exc)
+        if isinstance(exc, LockTimeout):
+            return _hook_warning(unavailable=True)
         if op == "expansion":
             return _expansion_error("MindIE entry failed; inspect reporting-status.")
         return _hook_warning()
@@ -330,7 +327,10 @@ def _front_reject(ident, text: str):
 def _stage_error(ident, message, stage: str, surface: str):
     structured = {"stage": stage}
     text = f"Unavailable ({stage}). Continue independently."
-    if surface == "remote":
+    if stage == "installation_unavailable":
+        structured["execution"] = "not_started"
+        text = "MindIE is temporarily unavailable during installation; this request was not started."
+    elif surface == "remote":
         structured["remote_outcome"] = "unconfirmed"
         key, value = _validated_remote_ref(message)
         name = _local_tool_name(message)
@@ -359,26 +359,29 @@ def _stage_error(ident, message, stage: str, surface: str):
 def _dispatch(surface: str, raw: bytes, ident, cancel=None, *, binding=None):
     if cancel is not None and cancel.is_set():
         raise bounded.CommandCancelled("command cancelled")
-    selected = _runtime()
+    selected = {}
     started = time.monotonic()
-    script = Path(selected["scripts"]) / "mcp_server.py"
     payload = raw if raw.endswith(b"\n") else raw + b"\n"
     message = json.loads(raw)
     allow_service = (surface == "knowledge" and message.get("method") == "tools/call"
                      and _local_tool_name(message) in {
                          "knowledge_query", "knowledge_explain", "knowledge_feedback"})
     try:
-        _verify_installation(binding)
-        out = bounded.run(
-            [selected["python"], str(script), surface, "--once"], payload,
-            env=_child_env(selected), cwd=str(script.parent), cancel=cancel,
-            allow_service=allow_service,
-            **({"max_output": KNOWLEDGE_MAX_OUTPUT} if surface == "knowledge" else {}),
-        )
+        # All operations, including cancellation/status tools, take a shared
+        # OS lock. Activation never interrupts a helper admitted here.
+        with installed_binding(binding) as current:
+            selected = _runtime(current)
+            script = Path(selected["scripts"]) / "mcp_server.py"
+            out = bounded.run(
+                [selected["python"], str(script), surface, "--once"], payload,
+                env=_child_env(selected), cwd=str(script.parent), cancel=cancel,
+                allow_service=allow_service,
+                **({"max_output": KNOWLEDGE_MAX_OUTPUT} if surface == "knowledge" else {}),
+            )
     except bounded.CommandCancelled:
         raise
-    except InstallationUnavailable as exc:
-        raise _dispatch_failure(selected, "native_reload_required", "configuration",
+    except (InstallationUnavailable, LockTimeout) as exc:
+        raise _dispatch_failure(selected, "installation_unavailable", "configuration",
                                 exc, started) from None
     except Exception as exc:
         raise _dispatch_failure(selected, "helper_failed", "child_failure", exc, started) from None
@@ -400,6 +403,10 @@ def _read_mcp_line(stdin):
 
 def _mcp(surface: str) -> int:
     binding = _verify_installation()
+    from harness import require_binding_support
+    require_binding_support(binding)
+    from release_update import BackgroundCheck
+    update = BackgroundCheck(lambda: _verify_installation(binding, timeout=0))
     output_fd = sys.stdout.fileno()
     if os.name == "posix":
         os.set_blocking(output_fd, False)
@@ -483,6 +490,7 @@ def _mcp(surface: str) -> int:
                     active_work -= 1
 
     try:
+        update.start_if_due()
         while not transport_closed.is_set():
             raw = _read_mcp_line(stdin)
             if raw is False:
@@ -523,8 +531,8 @@ def _mcp(surface: str) -> int:
                 continue
             try:
                 _verify_installation(binding)
-            except InstallationUnavailable:
-                send(_stage_error(ident, message, "native_reload_required", surface))
+            except (InstallationUnavailable, LockTimeout):
+                send(_stage_error(ident, message, "installation_unavailable", surface))
                 continue
             local = _local_answer(message)
             if local is not None:
@@ -544,6 +552,8 @@ def _mcp(surface: str) -> int:
                     )
                 )
                 continue
+            if method == "tools/call":
+                update.start_if_due()
             is_control = (
                 method == "tools/call" and _local_tool_name(message) in CONTROL_TOOLS
             )
@@ -589,6 +599,7 @@ def _mcp(surface: str) -> int:
             events = list(pending.values())
         for event in events:
             event.set()
+        update.close()
         deadline = time.monotonic() + EOF_JOIN
         for thread in list(workers):
             remaining = deadline - time.monotonic()
@@ -617,12 +628,17 @@ def main(argv=None) -> int:
     kind = argv[0] if argv else ""
     name = argv[1] if len(argv) > 1 else ""
     if kind == "hook" and name == "session-start":
-        from maintenance import session_start
         try:
-            _verify_installation()
-        except InstallationUnavailable:
-            return _hook_warning(reload_required=True)
-        result = session_start()
+            with installed_binding() as binding:
+                from harness import require_binding_support
+                require_binding_support(binding)
+                selected = _runtime(binding)
+                script = Path(selected["scripts"]) / "maintenance.py"
+                raw = bounded.run([selected["python"], str(script)],
+                                  env=_child_env(selected), cwd=str(script.parent))
+            result = json.loads(raw)
+        except (InstallationUnavailable, LockTimeout):
+            return _hook_warning(unavailable=True)
         if result["status"] != "ready":
             print(json.dumps({"systemMessage": "MindIE startup maintenance is incomplete."}))
             return 0

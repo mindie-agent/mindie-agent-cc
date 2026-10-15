@@ -148,8 +148,8 @@ import bootstrap, install_state
 bootstrap.runtime_root = lambda: Path({str(runtimes)!r})
 bootstrap.runtime_key = lambda source: 'fixed'
 original = install_state._lock_once
-def lock_once(*args):
-    acquired = original(*args)
+def lock_once(*args, **kwargs):
+    acquired = original(*args, **kwargs)
     if not acquired:
         Path({str(waiting)!r}).touch()
     return acquired

@@ -19,7 +19,10 @@ HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
-from install_state import OperationLock, atomic_write
+from install_state import (
+    FACADE_PROTOCOL, INSTALLATION_SCHEMA, InstallationUnavailable, LockTimeout,
+    OperationLock, atomic_write, read_binding,
+)
 from maintenance import sync_public_feed
 from paths import config_path as default_config_path, service_launch_context
 from product_contract import identity
@@ -94,14 +97,10 @@ def validate_candidate(source):
 
 def prepare_binding(source, config=None, *, root=None, domain="vllm-ascend",
                     no_public_feed=False, claude_config_dir=None, community=None):
-    """Initialize an empty profile, or verify this exact installed binding.
-
-    Unpublished development profiles and different bindings are never migrated,
-    retired, or overwritten. Their data and uncertain operations stay intact.
-    """
+    """Prepare immutable candidate bytes; only an empty profile is activated here."""
     from bootstrap import runtime_key
     from capture_config import prepare, prepare_store
-    from install_state import InstallationUnavailable, read_binding
+    from harness import require_engine_support
     from state_compatibility import check
 
     source = Path(source).resolve()
@@ -111,64 +110,149 @@ def prepare_binding(source, config=None, *, root=None, domain="vllm-ascend",
     domain_root = Path(root or Path(os.environ.get("XDG_DATA_HOME")
                                   or Path.home() / ".local/share") / "mindie-agent/cc")
     domain_root = domain_root.expanduser().resolve()
-    initial = dict(state_dir=str(domain_root / "adapter-state"),
+    initial = dict(schema=INSTALLATION_SCHEMA, facade_protocol=FACADE_PROTOCOL,
+                   state_dir=str(domain_root / "adapter-state"),
                    community_config=str(config.with_name("mindie-community.json")),
                    base_config=str(config))
-
-    def existing_binding():
-        value = read_binding(config)
-        binding_dir = Path(value["state_dir"]) / "installations" / key
-        adapter_file = binding_dir / "cc.adapter.json"
-        engine_file = binding_dir / "cc.engine.json"
-        if (value["base_config"] != str(config)
-                or value["engine_config"] != str(engine_file)
-                or value["python"] != sys.executable
-                or not adapter_file.is_file() or _read(adapter_file) != value):
-            raise InstallationUnavailable(
-                "native_reload_required: different or unsupported development binding; "
-                "replacement is unsupported before 0.0.1; existing choices and data are preserved"
-            )
-        engine = _read(engine_file)
-        if "client_contract" in engine:
-            raise InstallationUnavailable("unsupported development profile; preserved unchanged")
-        return value, adapter_file, engine
-
-    # Refuse unsupported profiles before creating even the installation lock.
-    adapter = existing_binding()[0] if config.exists() else initial
-    with OperationLock(adapter).exclusive(timeout=30):
-        if config.exists():
-            value, adapter_file, engine = existing_binding()
-            from candidate_validate import validate
-            validate(source, identity(source), value["product_validation"])
-            check(engine, str(Path(value["state_dir"]) / "remote"))
-            if community is not None:
-                write_community(Path(value["community_config"]), community, python=sys.executable)
-        else:
-            binding = Path(adapter["state_dir"]) / "installations" / key
-            adapter_file, engine_file = binding / "cc.adapter.json", binding / "cc.engine.json"
-            validation = validate_candidate(source)
+    selected = read_binding(config) if config.exists() else None
+    adapter = selected or initial
+    if adapter["base_config"] != str(config):
+        raise InstallationUnavailable("installation profile identity differs")
+    binding = Path(adapter["state_dir"]) / "installations" / key
+    adapter_file, engine_file = binding / "cc.adapter.json", binding / "cc.engine.json"
+    if adapter_file.exists():
+        value = read_binding(adapter_file)
+        from candidate_validate import validate
+        validate(source, identity(source), value["product_validation"])
+        if (value["python"] != sys.executable or value["runtime_scripts"] != str(HERE)
+                or value["base_config"] != str(config)):
+            raise InstallationUnavailable("prepared candidate identity differs")
+        engine = _read(value["engine_config"])
+        require_engine_support(engine, source=source)
+        check(engine, str(Path(value["state_dir"]) / "remote"))
+    else:
+        validation = validate_candidate(source)
+        if selected is None:
             engine = dict(root=str(domain_root), domain=domain,
                           admission_path=str(domain_root / "admission.sqlite3"))
-            check(engine, str(Path(adapter["state_dir"]) / "remote"))
-            engine.update(transcript_adapter=str(HERE / "transcript.py"),
-                          **prepare(sys.executable, HERE),
-                          community_config=adapter["community_config"],
-                          product_validation=validation)
-            if not no_public_feed and domain == validation["publication"]["domain"]:
-                from product_contract import publication_feed
-                engine["feeds"] = [publication_feed(validation)]
-            value = dict(adapter, python=sys.executable, engine_config=str(engine_file),
-                         product_validation=validation)
-            if claude_config_dir:
-                value["claude_config_dir"] = str(Path(claude_config_dir).expanduser().resolve())
-            engine["service_launch_context"] = service_launch_context(adapter_file, value)
+        else:
+            engine = _read(selected["engine_config"])
+        check(engine, str(Path(adapter["state_dir"]) / "remote"))
+        engine.update(transcript_adapter=str(HERE / "transcript.py"),
+                      **prepare(sys.executable, HERE),
+                      community_config=adapter["community_config"],
+                      product_validation=validation)
+        if selected is None and not no_public_feed and domain == validation["publication"]["domain"]:
+            from product_contract import publication_feed
+            engine["feeds"] = [publication_feed(validation)]
+        value = dict(adapter, python=sys.executable, runtime_scripts=str(HERE),
+                     adapter_config=str(adapter_file), engine_config=str(engine_file),
+                     product_validation=validation)
+        if claude_config_dir:
+            value["claude_config_dir"] = str(Path(claude_config_dir).expanduser().resolve())
+        engine["service_launch_context"] = service_launch_context(adapter_file, value)
+        value["claude_config_dir"] = engine["service_launch_context"]["paths"]["CLAUDE_CONFIG_DIR"]
+        require_engine_support(engine, source=source)
+        if selected is None:
             prepare_store(sys.executable, HERE, engine)
-            _publish_bytes(engine_file, (json.dumps(engine, indent=2) + "\n").encode())
-            _publish_bytes(adapter_file, (json.dumps(value, indent=2) + "\n").encode())
+        _publish_bytes(engine_file, (json.dumps(engine, indent=2) + "\n").encode())
+        _publish_bytes(adapter_file, (json.dumps(value, indent=2) + "\n").encode())
+
+    # Validation, dependencies and storage preparation never hold admission.
+    with OperationLock(adapter).exclusive(timeout=30):
+        current = read_binding(config) if config.exists() else None
+        if current is None:
+            from release_update import disable_unfiltered_updates
+            disable_unfiltered_updates(value)
             write_community(Path(value["community_config"]), community, python=sys.executable)
             atomic_write(config, value)
-        os.environ["MINDIE_CC_CONFIG"] = str(adapter_file)
-        return dict(config=str(adapter_file), base_config=str(config), status="ready")
+            current = value
+        elif community is not None:
+            write_community(Path(current["community_config"]), community, python=sys.executable)
+        status = "ready" if current == value else "prepared"
+    os.environ["MINDIE_CC_CONFIG"] = str(adapter_file)
+    return dict(config=str(adapter_file), base_config=str(config), status=status)
+
+
+def activate_binding(candidate_file, *, observation_seconds=30.0):
+    """Switch a native-installed candidate only after idle retirement and readiness.
+
+    The caller verifies native installation facts. This operation never downloads,
+    retries a native mutation, cancels business work, or rewrites saved choices.
+    """
+    from mindie_knowledge.loop.cli import config_at, connect, prepare_service
+    from mindie_knowledge.loop.handoff import _probe
+    from mindie_knowledge.loop.lifecycle import inspect_retirement, retire_service
+
+    candidate = read_binding(candidate_file)
+    config = Path(candidate["base_config"])
+    started = time.monotonic()
+    deadline = started + observation_seconds
+
+    def remaining():
+        return max(0.0, deadline - time.monotonic())
+
+    def incomplete(stage, **facts):
+        return dict(status="incomplete", stage=stage, switched=False,
+                    seconds=time.monotonic() - started, **facts)
+
+    try:
+        with OperationLock(candidate).exclusive(timeout=0):
+            previous = read_binding(config)
+            if previous == candidate:
+                return dict(status="current", switched=False)
+            for key in ("base_config", "state_dir", "community_config"):
+                if previous[key] != candidate[key]:
+                    raise InstallationUnavailable("candidate changes installation data identity")
+            engine = config_at(candidate["engine_config"])
+            if remaining() <= 0:
+                return incomplete("new_readiness", service="not_observed")
+            state = _probe(engine, remaining(), config_path=candidate["engine_config"])
+            if remaining() <= 0:
+                return incomplete("new_readiness", service=state)
+            recorded = inspect_retirement(previous["engine_config"])
+            if state == "ready" and recorded is not None and recorded["status"] == "retired":
+                # A previous switch may have started this exact owner before
+                # the canonical write failed. Its consumer is not the old one.
+                retirement = dict(idle=True, retirement=recorded)
+            else:
+                retirement = retire_service(
+                    previous["engine_config"],
+                    control_timeout=remaining(),
+                )
+                if retirement.get("idle") is not True:
+                    return dict(status="deferred", stage="old_owner", retirement=retirement)
+                if retirement.get("cleanup_failed"):
+                    return dict(status="incomplete", stage="old_retirement", retirement=retirement)
+                if remaining() <= 0:
+                    return incomplete("new_readiness", retirement=retirement)
+                state = _probe(engine, remaining(), config_path=candidate["engine_config"])
+            if remaining() <= 0:
+                return incomplete("new_readiness", service=state, retirement=retirement)
+            if state == "absent":
+                prepare_service(candidate["engine_config"], probe_timeout=remaining())
+            while True:
+                if remaining() <= 0:
+                    return incomplete("new_readiness", service=state, retirement=retirement)
+                state = _probe(engine, remaining(), config_path=candidate["engine_config"])
+                if remaining() <= 0:
+                    return incomplete("new_readiness", service=state, retirement=retirement)
+                if state == "ready":
+                    connect(engine, config_path=candidate["engine_config"])
+                    try:
+                        atomic_write(config, candidate)
+                    except OSError as exc:
+                        return dict(status="incomplete", stage="canonical_publish",
+                                    service="ready", retirement=retirement,
+                                    error_type=type(exc).__name__, switched=False)
+                    return dict(status="activated", switched=True,
+                                seconds=time.monotonic() - started, retirement=retirement)
+                if state not in {"absent", "starting"}:
+                    return dict(status="incomplete", stage="new_owner", service=state,
+                                retirement=retirement)
+                time.sleep(min(0.05, remaining()))
+    except LockTimeout:
+        return dict(status="deferred", stage="active_operation", switched=False)
 
 
 def _publish_bytes(path, value):
@@ -208,7 +292,8 @@ def publish_entry(path, adapter_file):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source", required=True, type=Path)
+    parser.add_argument("--source", type=Path)
+    parser.add_argument("--activate", type=Path)
     parser.add_argument("--config", type=Path, default=default_config_path())
     parser.add_argument("--root", type=Path)
     parser.add_argument("--domain", default="vllm-ascend")
@@ -221,6 +306,13 @@ def main(argv=None):
     parser.add_argument("--community-fork")
     parser.add_argument("--community-visibility", choices=["public"])
     args = parser.parse_args(argv)
+    if args.activate:
+        if args.source:
+            parser.error("--activate does not accept --source")
+        print(json.dumps(activate_binding(args.activate)))
+        return
+    if not args.source:
+        parser.error("--source is required for preparation")
     result = prepare_binding(
         args.source, args.config, root=args.root, domain=args.domain,
         no_public_feed=args.no_public_feed, claude_config_dir=args.claude_config_dir,

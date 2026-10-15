@@ -1,4 +1,4 @@
-"""First installation and refusal preserve unpublished profiles and paid facts."""
+"""One installation profile selects complete helpers without changing user data."""
 import json
 import os
 from pathlib import Path
@@ -25,16 +25,21 @@ def preparing(tmp_path):
         stack.enter_context(patch.object(setup, "validate_candidate", return_value=validation))
         stack.enter_context(patch("candidate_validate.validate", return_value=validation))
         stack.enter_context(patch.object(setup, "identity", return_value={}))
+        stack.enter_context(patch("harness.require_engine_support", return_value="2.1.269"))
+        stack.enter_context(patch("release_update.disable_unfiltered_updates"))
         stack.enter_context(patch("capture_config.prepare", return_value={
             "redactor_executable": str(tmp_path / "redactor"),
             "summary_command": [sys.executable, str(SCRIPTS / "organizer.py")],
         }))
         prepare = stack.enter_context(patch("capture_config.prepare_store"))
         compatible = stack.enter_context(patch("state_compatibility.check"))
+        stack.enter_context(patch("mindie_knowledge.loop.lifecycle.inspect_retirement",
+                                  return_value=None))
         community = stack.enter_context(patch.object(setup, "write_community"))
         stack.enter_context(patch.object(setup, "service_launch_context",
                                         side_effect=lambda path, *args, **kwargs: {
-                                            "paths": {"MINDIE_CC_CONFIG": str(path)},
+                                            "paths": {"MINDIE_CC_CONFIG": str(path),
+                                                      "CLAUDE_CONFIG_DIR": str(tmp_path / "claude")},
                                             "environment": [],
                                         }))
         yield dict(config=config, root=root, prepare=prepare,
@@ -70,7 +75,7 @@ def test_same_binding_recheck_does_not_rewrite_or_repeat_store_preparation(prepa
     f["community"].assert_called_once()
 
 
-def test_different_binding_refused_without_changes_or_retirement(preparing):
+def test_different_binding_is_prepared_without_changing_current_or_retiring(preparing):
     f = preparing
     result = install(f)
     marker = f["root"] / "paid-unknown.json"
@@ -79,10 +84,10 @@ def test_different_binding_refused_without_changes_or_retirement(preparing):
     f["prepare"].reset_mock()
     with patch("bootstrap.runtime_key", return_value="other-unpublished-binding"), \
             patch("service_handoff.stop") as retire:
-        with pytest.raises(InstallationUnavailable, match="native_reload_required"):
-            install(f)
+        candidate = install(f)
+    assert candidate["status"] == "prepared"
     assert (marker.read_bytes(), f["config"].read_bytes(), Path(result["config"]).read_bytes()) == before
-    assert not (f["root"] / "adapter-state/installations/other-unpublished-binding").exists()
+    assert (f["root"] / "adapter-state/installations/other-unpublished-binding").exists()
     retire.assert_not_called()
     f["prepare"].assert_not_called()
 
@@ -92,7 +97,7 @@ def test_unsupported_development_profile_is_rejected_before_lock_creation(prepar
     f["config"].parent.mkdir(parents=True)
     original = '{"engine_config":"old.json","paid":"unknown"}\n'
     f["config"].write_text(original, encoding="utf-8")
-    with pytest.raises(InstallationUnavailable, match="unsupported development"):
+    with pytest.raises(InstallationUnavailable, match="unsupported installation"):
         install(f)
     assert f["config"].read_text(encoding="utf-8") == original
     assert not f["root"].exists()
@@ -112,20 +117,139 @@ def test_state_format_rejection_does_not_publish_installation(preparing):
     f["prepare"].assert_not_called()
 
 
-def test_selected_binding_change_refuses_an_existing_fixed_entry(preparing):
+def test_selected_binding_change_redirects_an_existing_fixed_facade(preparing):
     f = preparing
     result = install(f)
     fixed = setup._read(result["config"])
     with installed_binding(fixed):
         pass
-    selected = dict(fixed, engine_config=str(f["root"] / "other.engine.json"))
+    new_file = f["root"] / "other.adapter.json"
+    selected = dict(fixed, engine_config=str(f["root"] / "other.engine.json"),
+                    adapter_config=str(new_file))
+    new_file.write_text(json.dumps(selected), encoding="utf-8")
     f["config"].write_text(json.dumps(selected), encoding="utf-8")
     before = f["config"].read_bytes()
-    with pytest.raises(InstallationUnavailable, match="native_reload_required"):
-        with installed_binding(fixed):
-            pytest.fail("stale entry was admitted")
+    with installed_binding(fixed) as observed:
+        assert observed == selected
     assert f["config"].read_bytes() == before
     assert setup._read(result["config"]) == fixed
+
+
+def new_candidate(f):
+    original = install(f)
+    with patch("bootstrap.runtime_key", return_value="release-b"):
+        candidate = install(f)
+    return original, candidate
+
+
+def test_busy_owner_keeps_selected_binding_and_choices(preparing):
+    f = preparing
+    original, candidate = new_candidate(f)
+    before = f["config"].read_bytes()
+    with patch("mindie_knowledge.loop.lifecycle.retire_service",
+               return_value={"idle": False, "service": "busy"}) as retirement, \
+            patch("mindie_knowledge.loop.cli.prepare_service") as start:
+        result = setup.activate_binding(candidate["config"])
+    assert result["status"] == "deferred"
+    assert f["config"].read_bytes() == before
+    retirement.assert_called_once()
+    start.assert_not_called()
+
+
+def test_ready_candidate_is_selected_only_after_exact_idle_retirement(preparing):
+    f = preparing
+    original, candidate = new_candidate(f)
+    with patch("mindie_knowledge.loop.lifecycle.retire_service",
+               return_value={"idle": True, "service": "stopped"}), \
+            patch("mindie_knowledge.loop.cli.prepare_service") as start, \
+            patch("mindie_knowledge.loop.handoff._probe", side_effect=["unknown", "absent", "ready"]), \
+            patch("mindie_knowledge.loop.cli.connect"):
+        result = setup.activate_binding(candidate["config"])
+    assert result["status"] == "activated"
+    assert setup._read(f["config"]) == setup._read(candidate["config"])
+    start.assert_called_once()
+    assert setup._read(original["config"]) != setup._read(f["config"])
+
+
+def test_ready_after_write_failure_is_adopted_without_second_start(preparing):
+    f = preparing
+    original, candidate = new_candidate(f)
+    before = f["config"].read_bytes()
+    with patch("mindie_knowledge.loop.lifecycle.retire_service",
+               return_value={"idle": True, "service": "absent"}) as retirement, \
+            patch("mindie_knowledge.loop.cli.prepare_service") as start, \
+            patch("mindie_knowledge.loop.lifecycle.inspect_retirement",
+                  return_value={"status": "retired"}), \
+            patch("mindie_knowledge.loop.handoff._probe", return_value="ready"), \
+            patch("mindie_knowledge.loop.cli.connect"):
+        with patch.object(setup, "atomic_write", side_effect=OSError("disk")):
+            failure = setup.activate_binding(candidate["config"])
+        assert failure["stage"] == "canonical_publish"
+        assert failure["service"] == "ready"
+        assert f["config"].read_bytes() == before
+        result = setup.activate_binding(candidate["config"])
+    assert result["status"] == "activated"
+    start.assert_not_called()
+    retirement.assert_not_called()
+
+
+def test_readiness_window_never_kills_or_restarts_an_unconfirmed_owner(preparing):
+    f = preparing
+    original, candidate = new_candidate(f)
+    before = f["config"].read_bytes()
+    with patch("mindie_knowledge.loop.lifecycle.retire_service",
+               return_value={"idle": True, "service": "stopped"}), \
+            patch("mindie_knowledge.loop.cli.prepare_service") as start, \
+            patch("mindie_knowledge.loop.handoff._probe", return_value="starting"):
+        result = setup.activate_binding(candidate["config"], observation_seconds=0)
+    assert result["status"] == "incomplete"
+    assert result["stage"] == "new_readiness"
+    assert f["config"].read_bytes() == before
+    start.assert_not_called()
+
+
+def test_retired_marker_does_not_bypass_incomplete_old_cleanup(preparing):
+    f = preparing
+    _, candidate = new_candidate(f)
+    before = f["config"].read_bytes()
+    with patch("mindie_knowledge.loop.lifecycle.inspect_retirement",
+               return_value={"status": "retired"}), \
+            patch("mindie_knowledge.loop.handoff._probe", return_value="absent"), \
+            patch("mindie_knowledge.loop.lifecycle.retire_service",
+                  return_value={"idle": True, "cleanup_failed": True}) as retire, \
+            patch("mindie_knowledge.loop.cli.prepare_service") as start:
+        result = setup.activate_binding(candidate["config"])
+    assert result["stage"] == "old_retirement"
+    assert result["retirement"]["cleanup_failed"] is True
+    assert f["config"].read_bytes() == before
+    retire.assert_called_once()
+    start.assert_not_called()
+
+
+def test_all_candidate_probes_receive_positive_remaining_observation_budget(preparing):
+    f = preparing
+    _, candidate = new_candidate(f)
+    with patch("mindie_knowledge.loop.lifecycle.retire_service",
+               return_value={"idle": True, "service": "stopped"}), \
+            patch("mindie_knowledge.loop.cli.prepare_service") as start, \
+            patch("mindie_knowledge.loop.handoff._probe",
+                  side_effect=["unknown", "absent", "ready"]) as probe, \
+            patch("mindie_knowledge.loop.cli.connect"):
+        result = setup.activate_binding(candidate["config"], observation_seconds=3)
+    assert result["status"] == "activated"
+    for call in probe.call_args_list:
+        assert 0 < call.args[1] <= 3
+    assert 0 < start.call_args.kwargs["probe_timeout"] <= 3
+
+
+def test_active_shared_operation_defers_activation_without_retirement(preparing):
+    f = preparing
+    original, candidate = new_candidate(f)
+    with installed_binding(setup._read(original["config"])), \
+            patch("mindie_knowledge.loop.lifecycle.retire_service") as retirement:
+        result = setup.activate_binding(candidate["config"])
+    assert result == {"status": "deferred", "stage": "active_operation", "switched": False}
+    retirement.assert_not_called()
 
 
 def test_immutable_entry_does_not_replace_a_published_runtime(tmp_path):

@@ -11,7 +11,8 @@ never stores source text, rewrites a body, substitutes a fallback summary, or
 retries an uncertain/billed model request.
 
 The single native call is the local ``claude`` CLI in an isolated workdir with
-no tools, hooks, plugins or MCP: provider and model come from the selected
+no business tools, hooks, plugins or MCP. The native structured-output
+submission tool remains available for delivering the result. Provider and model come from the selected
 native profile's settings (never a shipped host-specific default or
 credential). A missing native model is a configuration failure, not a silent
 default. Cancellation, maintenance-owner death and output bounds still end the

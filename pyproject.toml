@@ -8,7 +8,7 @@ version = "0.0.1"
 description = "Native Claude Code adapter for MindIE Agent"
 requires-python = ">=3.11,<3.15"
 dependencies = [
-  "mindie-knowledge @ git+https://github.com/mindie-agent/knowledge@6a4bbf824820b9a72bb81de71034d11a8596e697",
+  "mindie-knowledge @ git+https://github.com/mindie-agent/knowledge@4076ac7d5682a3c12d6cbbea44ec2b03be2f0a84",
   "remote-dev @ git+https://github.com/mindie-agent/remote-dev@dc3f7cecdd9cabbc3cc222f576725d69514cfdf7",
   "mindie-diagnostics @ git+https://github.com/mindie-agent/diagnostics@10cc3391ed358d7b7e0e1acb99ca5be4d1934b47",
 ]
@@ -30,6 +30,7 @@ scripts = "mindie_cc"
 "pyproject.toml" = "mindie_cc/resources/pyproject.toml"
 "uv.lock" = "mindie_cc/resources/uv.lock"
 ".claude-plugin/plugin.json" = "mindie_cc/resources/plugin.json"
+"harness-compatibility.json" = "mindie_cc/resources/harness-compatibility.json"
 
 [tool.uv]
 cache-keys = [
@@ -38,4 +39,5 @@ cache-keys = [
   { file = "scripts/**/*.py" },
   { file = "product-contract.json" },
   { file = ".claude-plugin/plugin.json" },
+  { file = "harness-compatibility.json" },
 ]

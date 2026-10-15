@@ -38,6 +38,8 @@ jobs:
           pin = requirements(".")[0]["mindie-knowledge"]
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write("knowledge=" + pin + "\n")
+      - name: Validate Harness interfaces and immutable release metadata
+        run: uv run --locked --no-editable --group test python scripts/harness.py --source . --tests tests --revision ${{ github.sha }}
       - name: Check out the declared knowledge commit
         uses: actions/checkout@v4
         with:
