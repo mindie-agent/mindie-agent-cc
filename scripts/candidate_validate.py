@@ -13,12 +13,11 @@ import io
 import json
 import os
 from pathlib import Path
-import re
 import sys
 import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from product_contract import identity, package_files, read_json, validate_receipt
+from product_contract import identity, native_version, package_files, read_json, validate_receipt
 from runtime_probe import build_probe_script
 
 
@@ -72,7 +71,10 @@ def adapter_check(source):
         "product_contract.py",
         "runtime_probe.py",
         "setup.py",
-        "updater.py",
+        "bootstrap.py",
+        "install_state.py",
+        "maintenance.py",
+        "legacy_update.py",
     ):
         if not (plugin / "scripts" / name).is_file():
             raise ValueError("missing bounded runtime entry: " + name)
@@ -87,15 +89,22 @@ def adapter_check(source):
 
 
 def release_check(plugin):
-    """A normal product version must declare both durable state boundaries."""
-    version = read_json(plugin / ".claude-plugin" / "plugin.json")[0]["version"]
-    base = version.split("+", 1)[0] if isinstance(version, str) else ""
-    if re.fullmatch(r"\d+\.\d+\.\d+", base):
-        from mindie_knowledge.state_layout import RELEASE_VERSION as knowledge_release
-        from receipt_layout import RELEASE_VERSION as receipt_release
-        if knowledge_release is None or receipt_release is None:
+    """State protection starts at a release; FORMAT owns later compatibility."""
+    from packaging.version import InvalidVersion, Version
+    from mindie_knowledge.state_layout import RELEASE_VERSION as knowledge_release
+    from receipt_layout import RELEASE_VERSION as receipt_release
+
+    release = Version(native_version(plugin))
+    for boundary in (knowledge_release, receipt_release):
+        if boundary is None:
             raise CheckFailure("adapter", "release_state_undeclared")
-        if knowledge_release != base or receipt_release != base:
+        try:
+            protected = Version(boundary)
+        except (InvalidVersion, TypeError) as exc:
+            raise CheckFailure("adapter", "release_version_mismatch") from exc
+        if (protected.is_prerelease or protected.is_postrelease or protected.is_devrelease
+                or protected.local is not None or len(protected.release) != 3
+                or protected > release):
             raise CheckFailure("adapter", "release_version_mismatch")
 
 
@@ -110,10 +119,18 @@ def installed_revisions(pins):
         if not raw:
             raise CheckFailure("runtime_pins", "receipt_missing", name)
         try:
-            actual = (json.loads(raw).get("vcs_info") or {}).get("commit_id")
+            direct = json.loads(raw)
+            actual = (direct.get("vcs_info") or {}).get("commit_id")
         except (ValueError, TypeError, AttributeError) as exc:
             raise CheckFailure("runtime_pins", "receipt_invalid", name) from exc
         if actual != expected:
+            raise CheckFailure("runtime_pins", "revision_mismatch", name)
+        repository = {"mindie-knowledge": "knowledge", "remote-dev": "remote-dev",
+                      "mindie-diagnostics": "diagnostics"}[name]
+        if direct.get("url") not in (
+            f"https://github.com/mindie-agent/{repository}",
+            f"https://github.com/mindie-agent/{repository}.git",
+        ):
             raise CheckFailure("runtime_pins", "revision_mismatch", name)
 
 
@@ -209,6 +226,10 @@ def validate(source, expected, verified_receipt=None):
         raise CheckFailure("source", "source_changed")
     installed_revisions(actual["runtime"])
     checked("adapter", "adapter_incompatible", lambda: adapter_check(Path(source)))
+    version = checked("adapter", "release_version_mismatch",
+                      lambda: importlib.metadata.version("mindie-agent-cc"))
+    if version != actual["native_version"]:
+        raise CheckFailure("adapter", "release_version_mismatch")
     checked("runtime_api", "api_incompatible", lambda: runtime_check(Path(__file__).resolve().parent))
     if verified_receipt is None:
         checked("publication_contract", "read_failed", lambda: publication_contract(actual["publication"]))

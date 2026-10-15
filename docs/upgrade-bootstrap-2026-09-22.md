@@ -7,54 +7,29 @@ that packager to `4c4c0b928e36a280ae76400c9828b15f8fd70a97` reproduced
 Its native package also registers only six slash matchers, omitting the three
 new reporting commands. A fresh installation did not expose these failures.
 
-## Implemented behavior
+## Current replacement
 
-The launcher loads the diagnostic module from its own directory, or from its
-exact SHA's existing generation after checking the completion marker. It does
-not select that module through `current.json`, ambient `PYTHONPATH`, a network
-install, or changes to an existing launch file. When an older packager has not
-emitted `diagnostic-build.json`, the module reads the same generation's
-completion record and stamped native manifest. Missing version facts remain
-absent. Unrelated module copies and symlink metadata are rejected.
+The 0.0.1 candidate now delegates code installation and updates to Claude's
+native Git marketplace. `pyproject.toml` and the complete `uv.lock` install the
+adapter and dependencies noneditably into an immutable runtime. Each native
+release binds a persistent `CLAUDE_PLUGIN_DATA` entry to that exact runtime.
+No production updater, package refresh controller, scheduler or mutable
+`current.json` selection remains.
 
-On the next updater `check`, outside Hooks, the committed generation compares
-its native package with its own hooks, MCP declarations, manifest and skills.
-An old-generated package receives a separate package directory and a
-deterministic `.pkg.<declaration-digest>` native version. The updater retains
-the previous package, selects the new package in the committed tuple, and
-verifies the complete native hooks/MCP cache. Rollback verifies the previous
-package's own declarations. The optional package pointer must belong to this
-SHA under `update/native-packages`; an invalid pointer fails visibly instead
-of falling back to bootstrap.
+Pre-contract migration unregisters only the verified owned old code-update task,
+checks unknown native effects without retrying them, and preserves the original
+configuration and receipts. Idle shared service retirement precedes the one-time
+modern anchor. Already loaded legacy sessions require reloading. New-protocol
+releases use explicit shared-Core successor receipts and compatible client reads;
+they never rewrite the shared profile to select a runtime.
 
-Refresh uses the existing check/operation locks, idle check, native installer,
-caller-owned execution and shared service handoff. Scheduler cadence is not an
-execution deadline: healthy build, validation, native installation and feed sync
-continue until completion, explicit caller cancellation or owner exit. Lock
-acquisition, native registry readback, connection and cleanup waits retain their
-own finite boundaries. Native mutation interruption is reconciled by exact
-readback; an unknown outcome blocks automatic replay or rollback. The final
-check result reports plugin and feed outcomes separately, including committed
-partial results and cleanup or receipt failures. Before package construction it records
-an intent in `failed.json`; failure or interruption suppresses another install
-for that SHA until explicit recovery. A busy pre-install operation restores
-the preceding failure record. Failure to clean up that intent is reported as
-`degraded / state-cleanup-failed`, preserving whether native adoption already
-succeeded. It does not roll back a confirmed success or automatically install
-again. Partial staging directories cannot be reused as completed packages.
+SessionStart owns cold preparation and session-triggered feed/diagnostic
+maintenance. Stop only performs bounded admission; it cannot download Python or
+install a runtime. Useful sync and MCP execution do not inherit a timer cadence
+as their execution deadline. Caller cancellation and ownership cleanup remain.
 
-Diagnostic `version` continues to identify the code build using its immutable
-stamp or same-generation legacy manifest. The native cache's packaging version
-may additionally contain `.pkg.<digest>`; both identify the same code revision.
-Logging does not consult mutable current state or rewrite old stamps to match
-the wrapper version.
-
-Implementation provenance: the bootstrap fixes followed a reproduced import
-failure. A single bounded local Grok development run produced the refresh
-implementation and focused checks, ending naturally after 412.97 seconds
-(exit 1, no restart). Independent review supplied narrow corrections for
-partial packages, pointer ownership, package identity and visible cleanup
-failures. This does not change admission, Hook budgets or reporting consent.
+The evidence below describes the earlier implementation at its stated commits.
+It is retained as history and is not acceptance of this replacement.
 
 ## Actual macOS acceptance
 

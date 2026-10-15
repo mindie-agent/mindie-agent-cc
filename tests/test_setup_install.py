@@ -1,334 +1,245 @@
+"""Fixed release bindings retain shared state and hand off only authenticated owners."""
 import json
+import hashlib
 import os
-import shutil
-import sqlite3
-import subprocess
-import sys
-import tempfile
-import unittest
-from contextlib import closing
 from pathlib import Path
+import sys
+from unittest.mock import patch
 
-from support import explicit_local_candidate_args
+import pytest
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "scripts"))
-
-
-def run_setup(python, *args, source=ROOT, real_product=False, env=None,
-              sync_output=None):
-    """Config cases isolate publication fetches only in this test process."""
-    scripts = source / "scripts"
-    command = [str(python), str(scripts / "setup.py")]
-    if not real_product:
-        helper = (
-            "import sys; sys.path.insert(0, sys.argv.pop(1)); "
-            "import setup,updater,product_contract; "
-            "updater.probe_runtime=lambda python,deadline,generation,**kw: "
-            "dict(product_contract.identity(generation,kw.get('revision')),status='validated'); "
-        )
-        if sync_output is not None:
-            helper += (
-                "\nreal_run=setup.run\n"
-                "def run(argv, stdin='', **kwargs):\n"
-                "    if argv[1:4] == ['-m','mindie_knowledge.loop.cli','sync']:\n"
-                "        assert kwargs.get('timeout') is None\n"
-                f"        return {sync_output!r}\n"
-                "    return real_run(argv, stdin, **kwargs)\n"
-                "setup.run=run\n"
-            )
-        helper += "setup.main()"
-        command = [str(python), "-c", helper, str(scripts)]
-    return subprocess.run(
-        [*command, "--knowledge-python", str(python), *map(str, args)],
-        text=True, capture_output=True, timeout=60, env=env,
-    )
+from support import SCRIPTS
+sys.path.insert(0, str(SCRIPTS))
+import setup
 
 
-class SetupTests(unittest.TestCase):
-    def test_setup_reports_actual_feed_failure_and_keeps_completed_install(self):
-        import genstate
-
-        cases = [
-            ("synced", {}, 0, "ok"),
-            ("unavailable", {}, 1, "sync_failed"),
-            ("deferred", {}, 1, "deferred"),
-            ("synced", {"receipt_status": "failed", "commit": "installed"}, 1, "degraded"),
-            ("synced", {"cleanup_status": "failed", "commit": "installed"}, 1, "degraded"),
-            ("partial", {"metadata_committed": True, "commit": "metadata",
-                         "failed_stage": "material-promotion"}, 1, "degraded"),
-        ]
-        for status, extra, expected, aggregate in cases:
-            with self.subTest(status=status, extra=extra), tempfile.TemporaryDirectory() as directory:
-                tmp = Path(directory)
-                config = tmp / "cc.json"
-                rows = [dict(repository="owner/feed", status=status,
-                             detail="fixture sync outcome", **extra)]
-                proc = run_setup(
-                    sys.executable, "--config", config, "--root", tmp / "data",
-                    "--no-schedule", "--no-native-install",
-                    *explicit_local_candidate_args(), sync_output=json.dumps(rows),
-                )
-                self.assertEqual(proc.returncode, expected, proc.stderr + proc.stdout)
-                report = json.loads(proc.stdout)
-                self.assertEqual(report["feed_sync"]["results"], rows)
-                self.assertEqual(report["feed_sync"]["result"], aggregate)
-                adapter = json.loads(config.read_text(encoding="utf-8"))
-                self.assertTrue(Path(report["engine_config"]).is_file())
-                self.assertTrue(Path(report["community_config"]).is_file())
-                self.assertEqual(genstate.read_current(adapter)["sha"], report["sha"])
-                self.assertTrue(
-                    (Path(report["generation"]) / ".mindie-generation-complete").is_file()
-                )
-
-    def test_setup_no_native_no_schedule(self):
-        tmp = Path(tempfile.mkdtemp())
-        config = tmp / "cc.json"
-        try:
-            proc = run_setup(
-                sys.executable,
-                "--config",
-                str(config),
-                "--root",
-                str(tmp / "data"),
-                "--no-schedule",
-                "--no-native-install",
-                "--no-public-feed",
-                *explicit_local_candidate_args(),
-            )
-            self.assertEqual(proc.returncode, 0, proc.stderr[:1000] + proc.stdout[:1000])
-            report = json.loads(proc.stdout)
-            self.assertTrue(Path(report["config"]).is_file())
-            engine = json.loads(Path(report["engine_config"]).read_text(encoding="utf-8"))
-            self.assertIn("admission_path", engine)
-            self.assertEqual(engine["service_launch_context"]["paths"]["MINDIE_CC_CONFIG"], str(config))
-            self.assertNotIn("session_activation", engine)
-            community = json.loads(Path(report["community_config"]).read_text(encoding="utf-8"))
-            self.assertFalse(community["enabled"])
-            self.assertFalse(Path(report["admission_path"]).exists())
-            from mindie_knowledge.state_layout import state_root
-            state = state_root(tmp / "data" / "cc", "vllm-ascend")
-            self.assertTrue((state / "state-v4.sqlite3").is_file())
-            self.assertFalse((tmp / "data" / "cc" / "vllm-ascend" / "connection.json").exists())
-            adapter = json.loads(config.read_text(encoding="utf-8"))
-            self.assertEqual(adapter["product_validation"], engine["product_validation"])
-            self.assertEqual(report["product_validation"], engine["product_validation"])
-            self.assertEqual(report["product_validation"]["status"], "validated")
-            import product_contract
-            generation = Path(report["generation"])
-            selected = json.loads((generation / "config" / "cc.adapter.json").read_text())
-            generation_engine = json.loads(Path(selected["engine_config"]).read_text())
-            self.assertEqual(
-                generation_engine["service_launch_context"]["paths"]["MINDIE_CC_CONFIG"],
-                str(generation / "config" / "cc.adapter.json"),
-            )
-            self.assertEqual(selected["product_validation"], report["product_validation"])
-            expected = product_contract.identity(
-                generation, report["product_validation"]["candidate_revision"],
-            )
-            self.assertEqual(report["product_validation"], dict(expected, status="validated"))
-        finally:
-            shutil.rmtree(tmp, ignore_errors=True)
-
-    def test_setup_rejects_wrong_commit_before_writing_configuration(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            source = root / "candidate"
-            (source / "scripts").mkdir(parents=True)
-            for name in ("setup.py", "paths.py", "bounded.py", "owned_process.py", "runtime_probe.py"):
-                shutil.copy2(ROOT / "scripts" / name, source / "scripts" / name)
-            # Valid official requirement shape, deliberately wrong exact commit.
-            import re
-            requirements = (ROOT / "runtime-requirements.txt").read_text(encoding="utf-8")
-            requirements = re.sub(r"@[0-9a-f]{40}", "@" + "0" * 40, requirements, count=1)
-            (source / "runtime-requirements.txt").write_text(requirements, encoding="utf-8")
-            config = root / "installation" / "cc.json"
-            data = root / "data"
-            proc = subprocess.run(
-                [sys.executable, str(source / "scripts" / "setup.py"),
-                 "--config", str(config), "--root", str(data),
-                 "--knowledge-python", sys.executable,
-                 "--no-schedule", "--no-native-install", "--no-public-feed"],
-                text=True, capture_output=True, timeout=30,
-            )
-            self.assertNotEqual(proc.returncode, 0)
-            self.assertIn("does not have the exact required commits", proc.stderr)
-            self.assertFalse(config.parent.exists())
-            self.assertFalse(data.exists())
-
-    def test_product_failure_is_reported_before_configuration_or_store_write(self):
-        import updater
-
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            source = root / "candidate"
-            updater.snapshot_source(ROOT, source)
-            # The real product runner receives a candidate-owned failure
-            # envelope; no publication fetch or model request is involved.
-            (source / "scripts" / "candidate_validate.py").write_text(
-                "import json,sys\n"
-                "expected=json.loads(sys.argv[sys.argv.index('--identity')+1])\n"
-                "expected.update(status='failed',failure={'stage':'publication_contract',"
-                "'code':'contract_mismatch'})\n"
-                "print(json.dumps(expected))\n"
-                "raise SystemExit(1)\n",
-                encoding="utf-8",
-            )
-            config = root / "installation" / "cc.json"
-            data = root / "data"
-            proc = run_setup(
-                sys.executable, "--config", config, "--root", data,
-                "--no-schedule", "--no-native-install", "--no-public-feed",
-                *explicit_local_candidate_args(), source=source, real_product=True,
-            )
-            self.assertNotEqual(proc.returncode, 0)
-            self.assertIn("publication_contract: contract_mismatch", proc.stderr)
-            self.assertIn("not retried", proc.stderr)
-            self.assertNotIn("process: nonzero_exit", proc.stderr)
-            self.assertFalse(config.parent.exists())
-            self.assertFalse(data.exists())
-
-    def test_corrupt_store_blocks_configuration_and_preserves_existing_state(self):
-        from mindie_knowledge.loop.store import Store
-        from mindie_knowledge.state_layout import state_root
-
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            data = root / "data"
-            store = Store(data / "cc", "vllm-ascend")
-            store.close()
-            state = state_root(data / "cc", "vllm-ascend")
-            (state / "state-v4.sqlite3").write_bytes(b"corrupt state sentinel")
-            before = {str(path.relative_to(data)): path.read_bytes()
-                      for path in data.rglob("*") if path.is_file() and path.suffix != ".lock"}
-            config = root / "installation" / "cc.json"
-            proc = run_setup(
-                sys.executable, "--config", config, "--root", data,
-                "--no-schedule", "--no-native-install", "--no-public-feed",
-                *explicit_local_candidate_args(),
-            )
-            self.assertNotEqual(proc.returncode, 0)
-            self.assertIn("knowledge store preparation failed", proc.stderr)
-            self.assertIn("database", proc.stderr)
-            self.assertFalse(config.parent.exists())
-            after = {str(path.relative_to(data)): path.read_bytes()
-                     for path in data.rglob("*") if path.is_file() and path.suffix != ".lock"}
-            self.assertEqual(after, before)
-
-    def test_final_candidate_failure_preserves_state_and_allows_ordinary_retry(self):
-        import setup
-        import updater
-        from mindie_knowledge.loop.store import Store
-        from mindie_knowledge.state_layout import state_root
-
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            source = root / "candidate"
-            updater.snapshot_source(ROOT, source)
-            scripts = source / "scripts"
-            shutil.copy2(scripts / "candidate_validate.py", scripts / "fixture_validator.py")
-            fail_publication = root / "fail-final-publication"
-            fail_publication.touch()
-            # Only the publication transport is controlled. Both validations
-            # still check the actual candidate bytes, pins, API and receipts.
-            (scripts / "candidate_validate.py").write_text(
-                "import sys\n"
-                "from pathlib import Path\n"
-                "sys.path.insert(0,str(Path(__file__).resolve().parent))\n"
-                "import fixture_validator as real\n"
-                "def publication(_):\n"
-                f"    if Path({str(fail_publication)!r}).exists() and "
-                "Path(__file__).with_name('diagnostic-build.json').is_file():\n"
-                "        raise real.CheckFailure('publication_fetch','fetch_failed')\n"
-                "real.publication_contract=publication\n"
-                "raise SystemExit(real.main())\n",
-                encoding="utf-8",
-            )
-            config = root / "installation" / "cc.json"
-            community = config.with_name("mindie-community.json")
-            setup.write_community(community, None, python=sys.executable)
-            community_before = community.read_bytes()
-            data = root / "data"
-            store = Store(data / "cc", "vllm-ascend")
-            store.close()
-            database = state_root(data / "cc", "vllm-ascend") / "state-v4.sqlite3"
-            with closing(sqlite3.connect(database)) as db, db:
-                db.execute(
-                    "INSERT INTO material_summary_attempts VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                    ("attempt", "task", "batch", "body", "input", "policy", "[]",
-                     "outcome_unknown", '{"paid_result":"retained"}', "interrupted", 1, 2),
-                )
-                attempts_before = db.execute("SELECT * FROM material_summary_attempts").fetchall()
-            remote = data / "cc" / "adapter-state" / "remote" / "task" / "jobs" / "paid.json"
-            remote.parent.mkdir(parents=True)
-            remote.write_text('{"submission_state":"uncertain","result":"retained"}')
-            remote_before = remote.read_bytes()
-            args = [
-                "--config", config, "--root", data, "--no-schedule",
-                "--no-native-install", "--no-public-feed", *explicit_local_candidate_args(),
-            ]
-
-            failed = run_setup(sys.executable, *args, source=source, real_product=True)
-            self.assertNotEqual(failed.returncode, 0)
-            self.assertIn("publication_fetch: fetch_failed", failed.stderr)
-            self.assertFalse(config.exists())
-            self.assertFalse(config.with_name("cc.engine.json").exists())
-            self.assertFalse((data / "cc" / "adapter-state" / "update" / "current.json").exists())
-            self.assertEqual(community.read_bytes(), community_before)
-            with closing(sqlite3.connect(database)) as db:
-                self.assertEqual(db.execute("SELECT * FROM material_summary_attempts").fetchall(),
-                                 attempts_before)
-            self.assertEqual(remote.read_bytes(), remote_before)
-
-            fail_publication.unlink()
-            retry = run_setup(sys.executable, *args, source=source, real_product=True)
-            self.assertEqual(retry.returncode, 0, retry.stderr[:1500])
-            report = json.loads(retry.stdout)
-            self.assertEqual(report["product_validation"]["status"], "validated")
-            self.assertTrue(config.is_file())
-            generation = Path(report["generation"])
-            self.assertTrue((generation / updater.COMPLETE).is_file())
-            self.assertTrue((data / "cc" / "adapter-state" / "update" / "current.json").is_file())
-            with closing(sqlite3.connect(database)) as db:
-                self.assertEqual(db.execute("SELECT * FROM material_summary_attempts").fetchall(),
-                                 attempts_before)
-            self.assertEqual(remote.read_bytes(), remote_before)
-
-    def test_existing_configuration_update_does_not_reinstall_candidate(self):
-        from support import make_config
-
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            config = make_config(root / "installed")
-            project = root / "project"
-            project.mkdir()
-            before = json.loads(config.read_text(encoding="utf-8"))
-            helper = (
-                "import sys; sys.path.insert(0, sys.argv.pop(1)); "
-                "import setup,updater,capture_config; "
-                "fail=lambda *a,**kw: (_ for _ in ()).throw(AssertionError('must not install')); "
-                "updater.probe_runtime=fail; capture_config.prepare_store=fail; setup.main()"
-            )
-            proc = subprocess.run(
-                [sys.executable, "-c", helper, str(ROOT / "scripts"),
-                 "--knowledge-python", sys.executable, "--config", str(config),
-                 "--root", str(root / "unused"), "--community-repository", "owner/repo",
-                 "--community-project-root", str(project), "--community-visibility", "public",
-                 *explicit_local_candidate_args()],
-                text=True, capture_output=True, timeout=60,
-                env=dict(os.environ, MINDIE_CC_CONFIG=str(config)),
-            )
-            self.assertEqual(proc.returncode, 0, proc.stderr)
-            self.assertEqual(json.loads(proc.stdout)["updated"], "community")
-            after = json.loads(config.read_text(encoding="utf-8"))
-            self.assertEqual(
-                {key: value for key, value in after.items() if key != "community_config"},
-                {key: value for key, value in before.items() if key != "community_config"},
-            )
-            self.assertEqual(after["community_config"],
-                             str(config.with_name("mindie-community.json")))
-            self.assertFalse((root / "unused").exists())
+@pytest.fixture
+def preparing(tmp_path):
+    from contextlib import ExitStack
+    config = tmp_path / "profile" / "cc.json"
+    root = tmp_path / "data"
+    validation = {"schema": "mindie-candidate-check/1", "publication": {"domain": "fixture"}}
+    with ExitStack() as stack:
+        stack.enter_context(patch.dict(os.environ, {"MINDIE_CC_CONFIG": str(config)}))
+        stack.enter_context(patch("bootstrap.runtime_key", return_value="release-a"))
+        stack.enter_context(patch.object(setup, "validate_candidate", return_value=validation))
+        stack.enter_context(patch("candidate_validate.validate", return_value=validation))
+        stack.enter_context(patch.object(setup, "identity", return_value={}))
+        stack.enter_context(patch("capture_config.prepare", return_value={
+            "redactor_executable": str(tmp_path / "redactor"),
+            "summary_command": [sys.executable, str(SCRIPTS / "organizer.py")],
+        }))
+        prepare = stack.enter_context(patch("capture_config.prepare_store"))
+        compatible = stack.enter_context(patch("state_compatibility.check"))
+        stack.enter_context(patch("legacy_update.migrate", return_value={"status": "not-needed"}))
+        stack.enter_context(patch.object(setup, "write_community"))
+        stack.enter_context(patch("consent.migrate_consent", return_value={"state": "missing"}))
+        stack.enter_context(patch.object(setup, "service_launch_context",
+                                        side_effect=lambda path, *args, **kwargs: {
+                                            "paths": {"MINDIE_CC_CONFIG": str(path)},
+                                            "environment": [],
+                                        }))
+        stack.enter_context(patch("mindie_knowledge.loop.cli.config_at", side_effect=setup._read))
+        live = stack.enter_context(patch("mindie_knowledge.loop.client_contract.connect_ready", return_value=None))
+        resolve = stack.enter_context(patch("mindie_knowledge.loop.client_contract.resolve_config",
+                                            side_effect=lambda path: (Path(path), setup._read(path))))
+        retire = stack.enter_context(patch("service_handoff.stop", return_value={"idle": True}))
+        yield dict(config=config, root=root, live=live, resolve=resolve, retire=retire,
+                   prepare=prepare, compatible=compatible, validation=validation)
 
 
-if __name__ == "__main__":
-    unittest.main()
+def install(f, version="0.0.1", **kwargs):
+    f["validation"].update(native_version=version,
+                           source_sha256=hashlib.sha256(version.encode()).hexdigest())
+    return setup.prepare_binding(SCRIPTS.parent, f["config"], root=f["root"],
+                                 domain="fixture", no_public_feed=True, **kwargs)
+
+
+def test_cold_setup_publishes_fixed_binding_and_no_code_selector(preparing):
+    f = preparing
+    result = install(f)
+    base = setup._read(f["config"])
+    bound = setup._read(result["config"])
+    assert base == bound
+    assert base["python"] == sys.executable
+    assert Path(bound["engine_config"]).parent.name == "release-a"
+    assert not (Path(base["state_dir"]) / "update" / "current.json").exists()
+    assert result["status"] == "ready"
+    f["retire"].assert_not_called()
+
+
+def test_native_new_release_uses_authenticated_owner_without_rewriting_anchor(preparing):
+    f = preparing
+    first = install(f)
+    old = setup._read(first["config"])["engine_config"]
+    original = f["config"].read_bytes()
+    f["live"].return_value = {"config_path": old}
+    with patch("bootstrap.runtime_key", return_value="release-b"):
+        new = install(f, "0.0.2")
+    f["retire"].assert_called_once_with(old, successor_config_path=setup._read(new["config"])["engine_config"])
+    assert f["config"].read_bytes() == original
+    f["compatible"].assert_called_once()
+
+
+def test_cold_handoff_follows_only_recorded_anchor_successor(preparing):
+    f = preparing
+    first = install(f)
+    old = Path(setup._read(first["config"])["engine_config"])
+    successor = old.parent.parent / "recorded" / "cc.engine.json"
+    successor.parent.mkdir()
+    successor.write_bytes(old.read_bytes())
+    f["resolve"].side_effect = lambda path: (successor if Path(path) == old else Path(path), {})
+    before = f["config"].read_bytes()
+    with patch("bootstrap.runtime_key", return_value="release-b"):
+        new = install(f, "0.0.2")
+    f["retire"].assert_called_once_with(str(successor), successor_config_path=setup._read(new["config"])["engine_config"])
+    assert f["config"].read_bytes() == before
+
+
+def test_busy_release_can_publish_entry_but_clients_keep_the_anchor(preparing):
+    from knowledge_service import client_engine_path
+    f = preparing
+    first = install(f)
+    old = setup._read(first["config"])["engine_config"]
+    f["live"].return_value = {"config_path": old}
+    before = f["config"].read_bytes()
+    f["retire"].return_value = {"idle": False, "service": "busy"}
+    with patch("bootstrap.runtime_key", return_value="release-b"):
+        result = install(f, "0.0.2")
+    assert f["config"].read_bytes() == before
+    assert result["status"] == "pending"
+    assert client_engine_path(setup._read(result["config"])) == Path(old)
+    entry = f["root"] / "plugin-data/releases/0.0.2/entry.py"
+    setup.publish_entry(entry, result["config"])
+    assert entry.is_file()
+    f["retire"].assert_called_once()
+
+
+def test_old_binding_with_successor_cannot_retire_new_owner_backwards(preparing):
+    f = preparing
+    first = install(f)
+    old = Path(setup._read(first["config"])["engine_config"])
+    successor = old.parent.parent / "new" / "cc.engine.json"
+    successor.parent.mkdir()
+    saved = setup._read(old)
+    saved["product_validation"]["native_version"] = "0.0.2"
+    successor.write_text(json.dumps(saved), encoding="utf-8")
+    f["resolve"].side_effect = lambda path: (successor, {})
+    f["live"].side_effect = AssertionError("retired binding must not select a live owner")
+    result = install(f)
+    assert result["config"] == first["config"]
+    f["retire"].assert_not_called()
+
+
+def test_compatibility_rejection_precedes_retirement_and_keeps_paid_state(preparing):
+    f = preparing
+    install(f)
+    marker = f["root"] / "paid-unknown.json"
+    marker.write_text('{"outcome":"unknown","usage":7}')
+    before = marker.read_bytes(), f["config"].read_bytes()
+    f["compatible"].side_effect = ValueError("state format incompatible")
+    with patch("bootstrap.runtime_key", return_value="release-b"):
+        with pytest.raises(ValueError, match="incompatible"):
+            install(f)
+    assert (marker.read_bytes(), f["config"].read_bytes()) == before
+    f["retire"].assert_not_called()
+
+
+def test_legacy_profile_migration_preserves_original_and_requires_session_reload(preparing):
+    f = preparing
+    first = install(f)
+    oldfile = Path(setup._read(first["config"])["engine_config"])
+    old = setup._read(oldfile)
+    del old["client_contract"]
+    oldfile.write_text(json.dumps(old))
+    before = f["config"].read_bytes(), oldfile.read_bytes()
+    with patch("bootstrap.runtime_key", return_value="release-b"):
+        result = install(f, "0.0.2")
+    assert result["legacy_session_reload_required"] is True
+    f["retire"].assert_called_once_with(str(oldfile))
+    preserved = list(oldfile.parent.parent.glob("legacy-profile-*.json"))
+    assert len(preserved) == 1 and preserved[0].read_bytes() == before[0]
+    assert oldfile.read_bytes() == before[1]
+    assert setup._read(f["config"])["engine_config"] != str(oldfile)
+
+
+def test_pending_v2_cannot_retire_v3_or_cold_start_itself_after_v3_handoff(preparing):
+    from knowledge_service import client_engine_path
+    f = preparing
+    first = install(f)
+    original = f["config"].read_bytes()
+    old = Path(setup._read(first["config"])["engine_config"])
+    f["live"].return_value = {"config_path": str(old)}
+    f["retire"].return_value = {"idle": False, "service": "busy"}
+    with patch("bootstrap.runtime_key", return_value="release-b"):
+        second = install(f, "0.0.2")
+    f["retire"].return_value = {"idle": True}
+    with patch("bootstrap.runtime_key", return_value="release-c"):
+        third = install(f, "0.0.3")
+    current = Path(setup._read(third["config"])["engine_config"])
+    f["resolve"].side_effect = lambda path: (current if Path(path) == old else Path(path), {})
+    f["retire"].reset_mock()
+    f["live"].return_value = None
+    late = setup.advance_handoff(second["config"])
+    assert late == {"status": "superseded", "config": str(current)}
+    assert client_engine_path(setup._read(second["config"])) == current
+    assert client_engine_path(setup._read(first["config"])) == current
+    assert f["config"].read_bytes() == original
+    f["retire"].assert_not_called()
+
+
+def test_uncertain_handoff_blocks_entry_without_replaying_retirement(preparing):
+    f = preparing
+    install(f)
+    before = f["config"].read_bytes()
+    f["retire"].return_value = {"idle": True, "cleanup_failed": True}
+    with patch("bootstrap.runtime_key", return_value="release-b"):
+        with pytest.raises(RuntimeError, match="uncertain"):
+            install(f, "0.0.2")
+    assert f["config"].read_bytes() == before
+    f["retire"].assert_called_once()
+
+
+def test_same_native_version_cannot_handoff_to_different_source_bytes(preparing):
+    f = preparing
+    first = install(f)
+    old = Path(setup._read(first["config"])["engine_config"])
+    engine = setup._read(old)
+    engine["product_validation"]["source_sha256"] = "other-source"
+    old.write_text(json.dumps(engine), encoding="utf-8")
+    with patch("bootstrap.runtime_key", return_value="release-b"):
+        with pytest.raises(ValueError, match="different source bytes"):
+            install(f)
+    f["retire"].assert_not_called()
+
+
+def test_cold_mcp_prepares_runtime_binding_without_advancing_owner(preparing):
+    from knowledge_service import client_engine_path
+    f = preparing
+    first = install(f)
+    old = Path(setup._read(first["config"])["engine_config"])
+    with patch("bootstrap.runtime_key", return_value="release-b"):
+        second = install(f, "0.0.2", advance=False)
+    assert second["status"] == "pending"
+    assert client_engine_path(setup._read(second["config"])) == old
+    f["retire"].assert_not_called()
+    assert setup.advance_handoff(second["config"])["status"] == "ready"
+    f["retire"].assert_called_once()
+
+
+def test_legacy_cold_mcp_refuses_before_any_migration_or_owner_mutation(preparing):
+    f = preparing
+    first = install(f)
+    engine_file = Path(setup._read(first["config"])["engine_config"])
+    engine = setup._read(engine_file)
+    del engine["client_contract"]
+    engine_file.write_text(json.dumps(engine), encoding="utf-8")
+    before = f["config"].read_bytes(), engine_file.read_bytes()
+    with patch("bootstrap.runtime_key", return_value="release-b"), \
+            patch("legacy_update.migrate") as migrate:
+        with pytest.raises(RuntimeError, match="requires native SessionStart"):
+            install(f, "0.0.2", advance=False)
+    migrate.assert_not_called()
+    f["retire"].assert_not_called()
+    assert (f["config"].read_bytes(), engine_file.read_bytes()) == before
+    assert not (engine_file.parent.parent / "release-b").exists()

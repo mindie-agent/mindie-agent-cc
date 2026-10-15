@@ -21,16 +21,13 @@ def test_mcp_dispatch_has_no_total_deadline_and_keeps_caller_cancel(tmp_path):
     scripts = tmp_path / "scripts"
     scripts.mkdir()
     (scripts / "mcp_server.py").touch()
-    current = dict(generation=str(tmp_path), python=sys.executable,
+    current = dict(scripts=str(scripts), python=sys.executable,
                    adapter_config=str(tmp_path / "adapter.json"))
     response = dict(jsonrpc="2.0", id="slow-read", result={"content": []})
     raw = json.dumps(dict(jsonrpc="2.0", id="slow-read", method="tools/call")).encode()
     cancel = threading.Event()
     for surface in ("knowledge", "remote"):
-        with patch.object(mindie_launch, "_state_dir", return_value=tmp_path), \
-                patch.object(mindie_launch, "_shared_lock", return_value=object()), \
-                patch.object(mindie_launch, "_current", return_value=current), \
-                patch.object(mindie_launch, "_release") as release, \
+        with patch.object(mindie_launch, "_runtime", return_value=current), \
                 patch.object(mindie_launch.bounded, "run",
                              return_value=json.dumps(response)) as runner:
             assert mindie_launch._dispatch(surface, raw, "slow-read", cancel) == response
@@ -39,7 +36,6 @@ def test_mcp_dispatch_has_no_total_deadline_and_keeps_caller_cancel(tmp_path):
         assert runner.call_args.args[0][-2:] == [surface, "--once"]
         if surface == "knowledge":
             assert runner.call_args.kwargs["max_output"] == mindie_launch.KNOWLEDGE_MAX_OUTPUT
-        release.assert_called_once()
 
 
 def test_only_knowledge_business_calls_can_transfer_service_ownership(tmp_path):
@@ -49,7 +45,7 @@ def test_only_knowledge_business_calls_can_transfer_service_ownership(tmp_path):
     scripts = tmp_path / "scripts"
     scripts.mkdir()
     (scripts / "mcp_server.py").touch()
-    current = dict(generation=str(tmp_path), python=sys.executable,
+    current = dict(scripts=str(scripts), python=sys.executable,
                    adapter_config=str(tmp_path / "adapter.json"))
     response = dict(jsonrpc="2.0", id="ownership", result={"content": []})
     cases = [
@@ -63,10 +59,7 @@ def test_only_knowledge_business_calls_can_transfer_service_ownership(tmp_path):
     for surface, method, name, expected in cases:
         raw = json.dumps(dict(jsonrpc="2.0", id="ownership", method=method,
                               params=dict(name=name))).encode()
-        with patch.object(mindie_launch, "_state_dir", return_value=tmp_path), \
-                patch.object(mindie_launch, "_shared_lock", return_value=object()), \
-                patch.object(mindie_launch, "_current", return_value=current), \
-                patch.object(mindie_launch, "_release"), \
+        with patch.object(mindie_launch, "_runtime", return_value=current), \
                 patch.object(mindie_launch.bounded, "run",
                              return_value=json.dumps(response)) as runner:
             mindie_launch._dispatch(surface, raw, "ownership")
@@ -122,10 +115,4 @@ def test_existing_bad_community_and_missing_generation_are_recorded(tmp_path):
     (bad / "cc.community.json").write_text("{", encoding="utf-8")
     text = _run(bad, env_for(config))
     assert "configuration" in text
-    assert "forwarded" not in text
-
-    armed = tmp_path / "armed"
-    config = make_config(armed, sharing=True)
-    text = _run(armed, env_for(config))
-    assert "generation-unavailable" in text
     assert "forwarded" not in text

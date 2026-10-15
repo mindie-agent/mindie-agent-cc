@@ -1,4 +1,4 @@
-"""POSIX owner-death guard for one updater subprocess group.
+"""POSIX owner-death guard for one standalone subprocess group.
 
 Uses the same pipe ownership rule as the Codex adapter: only the direct caller
 holds the writer. Its exit, including SIGKILL, closes the operation's group.

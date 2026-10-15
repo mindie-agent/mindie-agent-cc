@@ -76,7 +76,7 @@ def configuration_required() -> dict:
         first_use=first_use(),
         choices=[],
         required=["runtime", "public_repository", "account", "project_scope"],
-        setup="python3 scripts/setup.py --knowledge-python <venv-python>",
+        setup="Start a new Claude session with the MindIE native plugin enabled",
         note=("Supply only missing destination and scope information. Reuse "
               "previously approved values. Installation or task binding alone "
               "does not make the experience loop available. Explicitly disabled "

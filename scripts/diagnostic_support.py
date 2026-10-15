@@ -56,6 +56,9 @@ def build_metadata():
         raw = _read_small(here / "diagnostic-build.json")
         if raw is not None:
             data = json.loads(raw)
+        elif (here / "resources/plugin.json").is_file():
+            manifest = json.loads(_read_small(here / "resources/plugin.json") or "null")
+            data = {"version": manifest.get("version")} if isinstance(manifest, dict) else {}
         else:
             # Old updaters do not emit diagnostic-build.json. Their completed
             # Git generation and stamped host manifest are existing facts.

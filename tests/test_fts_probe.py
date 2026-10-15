@@ -24,8 +24,8 @@ sys.path.insert(0, str(SCRIPTS))
 
 import inspect
 
-import setup
-from support import explicit_local_candidate_args
+import runtime_probe
+import candidate_validate
 
 CURRENT = Path(sys.executable)
 
@@ -83,7 +83,7 @@ class WorkerProbeTests(unittest.TestCase):
     def test_git_layout_preflight_is_required_before_install(self):
         from mindie_knowledge import git_layout
 
-        script = setup.probe_script(str(SCRIPTS / "transcript.py"))
+        script = runtime_probe.build_probe_script(str(SCRIPTS / "transcript.py"))
         with patch.object(git_layout, "validate_config_feed_layout", None), \
                 redirect_stdout(io.StringIO()) as output:
             exec(script, {})
@@ -93,7 +93,7 @@ class WorkerProbeTests(unittest.TestCase):
     def test_summary_scratch_contract_is_required_before_install(self):
         from mindie_knowledge.loop import summary_scratch
 
-        script = setup.probe_script(str(SCRIPTS / "transcript.py"))
+        script = runtime_probe.build_probe_script(str(SCRIPTS / "transcript.py"))
         for name, value, message in (
             ("create_profile", None, "summary scratch profile API is unavailable"),
             ("create_profile", lambda: None, "summary scratch profile API is unavailable"),
@@ -111,9 +111,11 @@ class WorkerProbeTests(unittest.TestCase):
     def test_service_launch_apis_are_required_before_install(self):
         from mindie_knowledge.loop import cli, service_context
 
-        script = setup.probe_script(str(SCRIPTS / "transcript.py"))
+        script = runtime_probe.build_probe_script(str(SCRIPTS / "transcript.py"))
         for module, name, message in (
             (cli, "prepare_service", "service lifecycle is unavailable"),
+            (cli, "ensure_client_service", "service lifecycle is unavailable"),
+            (cli, "prepare_client_service", "service lifecycle is unavailable"),
             (service_context, "validate", "service launch context validation is unavailable"),
         ):
             with self.subTest(name=name), patch.object(module, name, None), \
@@ -123,57 +125,35 @@ class WorkerProbeTests(unittest.TestCase):
             self.assertTrue(output.getvalue().startswith("MISSING:"))
 
     def test_probe_does_not_require_retired_fts_capability(self):
-        script = setup.probe_script(str(SCRIPTS / "transcript.py"))
+        script = runtime_probe.build_probe_script(str(SCRIPTS / "transcript.py"))
         self.assertNotIn("contentless_delete", script)
         self.assertNotIn("fts5", script.lower())
         self.assertIn("usage_totals", script)
         self.assertIn("validate_identity", script)
         self.assertIn("validate_outcome", script)
-        self.assertEqual(setup._FTS_PROBE, "")
 
     def test_current_core_satisfies_worker_probe(self):
-        script = setup.probe_script(str(SCRIPTS / "transcript.py"))
+        script = runtime_probe.build_probe_script(str(SCRIPTS / "transcript.py"))
         completed = _run(CURRENT, script)
         self.assertEqual(completed.returncode, 0, completed.stderr[-500:])
         self.assertEqual(completed.stdout.strip(), "OK")
 
     def test_old_core_is_not_accepted_as_worker_compatible(self):
-        script = setup.probe_script(str(SCRIPTS / "transcript.py"))
+        script = runtime_probe.build_probe_script(str(SCRIPTS / "transcript.py"))
         with tempfile.TemporaryDirectory() as tmp:
-            completed = _run(CURRENT, script, {"PYTHONPATH": str(_missing_contract(tmp))})
+            completed = _run(CURRENT, "import sys;sys.path.insert(0," + repr(str(_missing_contract(tmp))) + ")\n" + script)
         self.assertNotEqual(completed.stdout.strip(), "OK")
         self.assertIn("MISSING:", completed.stdout)
 
     def test_exit1_after_ok_is_rejected_before_writes(self):
         fault = "print('OK', flush=True)\nraise SystemExit(1)\n"
         continued = []
-        real = setup.run
-
-        def wrapped(argv, data="", timeout=15, **kwargs):
-            script = argv[-1] if argv else ""
-            if "commit_id" in script:
-                return "OK\n"
-            return real(argv, data, timeout=timeout, **kwargs)
-
-        with tempfile.TemporaryDirectory() as tmp:
-            direct = subprocess.run(
-                [sys.executable, "-c", fault], cwd=tmp, capture_output=True,
-                text=True, timeout=15, env=_child_env(),
-            )
-            self.assertEqual(direct.returncode, 1)
-            self.assertEqual(direct.stdout, "OK\n")
-            with patch.object(setup, "run", wrapped), patch.object(setup, "PROBE_SCRIPT", fault):
-                with self.assertRaises(SystemExit) as caught:
-                    kwargs = {}
-                    declared = explicit_local_candidate_args()
-                    if declared and "local_candidates" in inspect.signature(setup.probe_runtime).parameters:
-                        kwargs["local_candidates"] = {
-                            "mindie-knowledge": declared[-1].split("=", 1)[1]
-                        }
-                    setup.probe_runtime(sys.executable, **kwargs)
-                    continued.append("write")
+        with patch.object(candidate_validate, "build_probe_script", return_value=fault):
+            with self.assertRaises(SystemExit) as caught:
+                candidate_validate.runtime_check(SCRIPTS)
+                continued.append("write")
+        self.assertEqual(caught.exception.code, 1)
         self.assertEqual(continued, [])
-        self.assertIn("knowledge runtime probe failed", str(caught.exception.code))
 
 
 if __name__ == "__main__":

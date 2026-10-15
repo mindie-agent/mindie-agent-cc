@@ -129,7 +129,7 @@ def test_invalid_previous_context_is_rejected_before_writing(tmp_path):
 @pytest.mark.parametrize("outcome", ["ready", "starting"])
 def test_prepare_delegates_to_core_owner_and_preserves_readiness(outcome, tmp_path):
     engine = tmp_path / "engine.json"
-    with patch("mindie_knowledge.loop.cli.prepare_service", return_value=outcome) as prepare, \
+    with patch("mindie_knowledge.loop.cli.prepare_client_service", return_value=outcome) as prepare, \
             patch("mindie_knowledge.loop.process.spawn_service",
                   side_effect=AssertionError("adapter must not detach a second starter")):
         assert knowledge_service.prepare_service(engine) == outcome
@@ -138,7 +138,7 @@ def test_prepare_delegates_to_core_owner_and_preserves_readiness(outcome, tmp_pa
 
 @pytest.mark.parametrize("error", [OSError("registration failed"), RuntimeError("owner unconfirmed")])
 def test_prepare_delivers_core_failure_without_another_start(error, tmp_path):
-    with patch("mindie_knowledge.loop.cli.prepare_service", side_effect=error) as prepare:
+    with patch("mindie_knowledge.loop.cli.prepare_client_service", side_effect=error) as prepare:
         with pytest.raises(type(error), match=str(error)):
             knowledge_service.prepare_service(tmp_path / "engine.json")
     prepare.assert_called_once()

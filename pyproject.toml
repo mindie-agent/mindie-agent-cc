@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling==1.32.4"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mindie-agent-cc"
+version = "0.0.1"
+description = "Native Claude Code adapter for MindIE Agent"
+requires-python = ">=3.11,<3.15"
+dependencies = [
+  "mindie-knowledge @ git+https://github.com/mindie-agent/knowledge@dbf6d7abbacaf7c7a218f00e327aac990410bf3e",
+  "remote-dev @ git+https://github.com/mindie-agent/remote-dev@dc3f7cecdd9cabbc3cc222f576725d69514cfdf7",
+  "mindie-diagnostics @ git+https://github.com/mindie-agent/diagnostics@10cc3391ed358d7b7e0e1acb99ca5be4d1934b47",
+]
+
+[dependency-groups]
+test = ["pytest==9.1.1", "hatchling==1.32.4"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["scripts"]
+
+[tool.hatch.build.targets.wheel.sources]
+scripts = "mindie_cc"
+
+[tool.hatch.build.targets.wheel.force-include]
+"product-contract.json" = "mindie_cc/resources/product-contract.json"
+"pyproject.toml" = "mindie_cc/resources/pyproject.toml"
+"uv.lock" = "mindie_cc/resources/uv.lock"
+".claude-plugin/plugin.json" = "mindie_cc/resources/plugin.json"
+
+[tool.uv]
+cache-keys = [
+  { file = "pyproject.toml" },
+  { file = "uv.lock" },
+  { file = "scripts/**/*.py" },
+  { file = "product-contract.json" },
+  { file = ".claude-plugin/plugin.json" },
+]

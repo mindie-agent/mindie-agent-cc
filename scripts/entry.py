@@ -14,7 +14,7 @@ from pathlib import Path
 
 from entry_state import consume_prompt, first_use, set_first_use, configuration_required
 from identity import is_subagent, require_absolute, require_session, slash_command
-from paths import config_path, engine_config_path, load_adapter_config
+from paths import config_path, load_adapter_config
 
 
 def _configured() -> bool:
@@ -96,8 +96,9 @@ def _diagnostics(session):
     """One bounded read of existing state; never activate or repair."""
     try:
         from mindie_knowledge.loop.diagnostics import snapshot
+        from knowledge_service import client_engine_path
 
-        return snapshot(str(engine_config_path()), session=session)
+        return snapshot(str(client_engine_path()), session=session)
     except Exception as exc:
         return dict(
             status="unavailable",
@@ -154,135 +155,24 @@ def _number(value):
     return value
 
 
-def _launcher_command(adapter, operation, current):
-    """Absolute retained launcher command from an already-read current tuple."""
+def _installation_view():
+    """Retained legacy facts and maintenance receipts; never recover or select code."""
     try:
-        from genstate import launch_dir
-
-        if not isinstance(current, dict):
-            return None
-        sha = current.get("sha") if isinstance(current.get("sha"), str) and current.get("sha") else "bootstrap"
-        python = current.get("python")
-        if not isinstance(python, str) or not python:
-            return None
-        launcher = launch_dir(adapter) / sha / "mindie_launch.py"
-        if not stat.S_ISREG(launcher.stat().st_mode):
-            return None
-        config_value = adapter.get("base_config") if isinstance(adapter.get("base_config"), str) else str(config_path())
-        config_file = str(Path(config_value).expanduser().resolve())
-        return shlex.join([python, str(launcher.resolve()), "--config", config_file, "updater", operation])
-    except OSError:
-        return None
-    except Exception:
-        return None
-
-
-def _updater_view():
-    """Read updater failure state. Does not check the network or mutate it."""
-    try:
-        from genstate import current_path, failed_path, status_path
-
+        from legacy_update import status
         adapter = load_adapter_config()
-        if not isinstance(adapter, dict):
-            return {"status": "unavailable"}
-        failed_state, failed = _read_regular_json(failed_path(adapter))
-        status_state, status = _read_regular_json(status_path(adapter))
-        current_state, current = _read_regular_json(current_path(adapter))
-    except Exception:
-        return {"status": "unavailable"}
-    if "unavailable" in {failed_state, status_state, current_state}:
-        return {"status": "unavailable"}
-    failed = failed or {}
-    status = status or {}
-    current = current or {}
-    if not isinstance(failed, dict):
-        failed = {}
-    if not isinstance(status, dict):
-        status = {}
-    klass = failed.get("failure_class") if isinstance(failed.get("failure_class"), str) else None
-    if klass is None and isinstance(status.get("resolve_failure_class"), str):
-        klass = status.get("resolve_failure_class")
-    phase = failed.get("phase") if isinstance(failed.get("phase"), str) else None
-    retryable = klass in {"temporary_network", "rate_limited"} and phase != "package-refresh"
-    certificate = klass == "certificate"
-    actionable = klass in {"authentication", "permission", "hook_trust", "certificate"}
-    quarantined = klass in {"resolver", "bad_content"} or failed.get("quarantined") is True
-    unknown = bool(failed.get("error")) and not retryable and not actionable and not quarantined
-    nxt = _number(failed.get("next_retry_at"))
-    if nxt is None:
-        nxt = _number(status.get("next_retry_at"))
-    active = bool(
-        failed.get("error") or klass or failed.get("quarantined") or phase or nxt is not None
-        or status.get("error") or status.get("resolve_wait")
-        or status.get("result") in {
-            "failed", "check-failed", "action-required",
-            "suppressed-known-failed", "retry-waiting",
-        }
-    )
-    if not active:
-        if isinstance(failed.get("sha"), str) or failed.get("history") or failed.get("count"):
-            view = {
-                "status": "recovered",
-                "recovery": "recovered",
-                "active_failure": False,
-                "note": "no active updater failure; history remains in updater status",
-            }
-            if isinstance(status.get("result"), str):
-                view["result"] = status["result"][:80]
-            if isinstance(status.get("current_sha"), str):
-                view["current_sha"] = status["current_sha"][:64]
-            return view
-        if not isinstance(status.get("result"), str):
-            return None
-        view = {"result": status["result"][:80]}
-        if isinstance(status.get("current_sha"), str):
-            view["current_sha"] = status["current_sha"][:64]
-        command = _launcher_command(adapter, "status", current)
-        if command:
-            view["command"] = command
-        return view
-    view = {"active_failure": True}
-    if isinstance(status.get("result"), str):
-        view["result"] = status["result"][:80]
-    if isinstance(status.get("current_sha"), str):
-        view["current_sha"] = status["current_sha"][:64]
-    if isinstance(failed.get("sha"), str):
-        view["failed_sha"] = failed["sha"][:64]
-    error = _bounded_text(failed.get("error"), 200) or _bounded_text(status.get("error"), 200)
-    if error:
-        view["error"] = error
-    if klass:
-        view["failure_class"] = klass[:40]
-    if nxt is not None:
-        view["next_retry_at"] = nxt
-    if isinstance(failed.get("count"), int) and not isinstance(failed.get("count"), bool):
-        view["attempts"] = failed["count"]
-    if isinstance(failed.get("first_failure_at"), (int, float)) and not isinstance(failed.get("first_failure_at"), bool):
-        view["first_failure_at"] = failed["first_failure_at"]
-    if phase:
-        view["phase"] = phase[:40]
-    if retryable:
-        view["recovery"] = "automatic"
-        view["note"] = "scheduled checks retry this temporary failure"
-        operation = "status"
-    elif certificate:
-        view["recovery"] = "action_required"
-        view["note"] = "certificate trust needs repair; scheduled checks retry after backoff"
-        operation = "status"
-    elif actionable:
-        view["recovery"] = "action_required"
-        view["note"] = "credentials or host permission need attention"
-        operation = "status"
-    elif quarantined or unknown or phase == "package-refresh":
-        view["recovery"] = "manual"
-        view["note"] = "manual recovery is required for this revision"
-        operation = "recover"
-    else:
-        operation = "status"
-    command = _launcher_command(adapter, operation, current)
-    if command:
-        view["command"] = command
-    return view
+        legacy = status(adapter)
+        state, maintenance = _read_regular_json(
+            Path(adapter["state_dir"]) / "session-maintenance.json")
+        result = {"code_updates": "native-marketplace"}
+        if legacy is not None:
+            result["legacy"] = legacy
+        if state == "unavailable":
+            result["maintenance"] = {"status": "unavailable"}
+        elif maintenance is not None:
+            result["maintenance"] = maintenance
+        return result
+    except (OSError, ValueError, TypeError, KeyError):
+        return {"status": "unavailable", "code_updates": "native-marketplace"}
 
 
 def _knowledge_status_payload(session=None):
@@ -355,7 +245,7 @@ def _knowledge_status_payload(session=None):
         else:
             payload["experience"] = "configured"
         payload["hint"] = "Configuration and task binding are prerequisites; inspect captures and contributions for actual processing receipts."
-    update = _updater_view()
+    update = _installation_view()
     if update:
         payload["update"] = update
     return payload
@@ -480,7 +370,7 @@ def _apply_contribute(payload, session, event, configured):
             recorded=False,
             note=(
                 "Contribution requires an installed runtime first: "
-                "python3 scripts/setup.py --config ~/.config/mindie-agent/cc.json"
+                "Start a new Claude session with the MindIE native plugin enabled"
             ),
         )
         return payload
@@ -542,7 +432,7 @@ def _apply_reporting_token(payload, token, configured):
         if token == "reporting-enable":
             payload["reporting"] = dict(
                 recorded=False,
-                note="Reporting enable requires an installed runtime first: python3 scripts/setup.py",
+                note="Reporting enable requires a prepared runtime; start a new Claude session with MindIE enabled",
             )
             return payload
         try:
@@ -650,7 +540,7 @@ def op_sharing_enable(session, event):
         payload["already"] = True
         return payload
     if not _configured():
-        raise ValueError("MindIE is not configured; run scripts/setup.py first")
+        raise ValueError("MindIE is not configured; start a new Claude session with the native plugin enabled")
     import sharing as sharing_mod
 
     parsed = _parse_sharing(event.get("command_args") or "")
@@ -695,7 +585,8 @@ def op_recover(session, event):
     consume_slash(session, event, "recover")
     if not _configured():
         raise ValueError("MindIE is not configured")
-    engine = str(engine_config_path())
+    from knowledge_service import client_engine_path
+    engine = str(client_engine_path())
     python = load_adapter_config()["python"]
     argv = shlex.split(event.get("command_args") or "")
     batch = None
@@ -758,7 +649,7 @@ def op_reporting(session, event, command):
         return dict(diagnostic_support.effective_reporting(
             diagnostic_support.reporting_status(), consent_mod.load().get("reporting")), already=True)
     if not _configured():
-        raise ValueError("MindIE is not configured; run scripts/setup.py first")
+        raise ValueError("MindIE is not configured; start a new Claude session with the native plugin enabled")
     return _record_reporting_decision(command == "reporting-enable")
 
 

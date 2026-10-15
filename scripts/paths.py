@@ -7,7 +7,6 @@ import os
 from pathlib import Path
 import shutil
 
-PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ID = "mindie-agent"
 MARKETPLACE = "mindie-agent-cc"
 PLUGIN_QUALIFIED = f"{PLUGIN_ID}@{MARKETPLACE}"
@@ -80,7 +79,7 @@ def load_adapter_config() -> dict:
     if not path.is_file():
         raise FileNotFoundError(
             "MindIE Claude Code adapter configuration is missing. "
-            "Run: python3 scripts/setup.py --config PATH"
+            "Start a new Claude session with the native MindIE plugin enabled."
         )
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
@@ -91,13 +90,9 @@ def load_adapter_config() -> dict:
 def base_config_path() -> Path:
     """The stable base adapter configuration.
 
-    Hook/MCP children of a real install run with ``MINDIE_CC_CONFIG`` pointing
-    at a generation copy under ``state/update/generations/<sha>/config/``; the
-    copy's ``base_config`` key names the stable profile file. Profile-shared
-    authorities (consent, community settings) anchor at the base config's
-    directory, never at a per-generation directory, so an upgrade generation
-    cannot strand them. Falls back to the effective config when no absolute
-    ``base_config`` is recorded (bootstrap or unconfigured layouts).
+    Hook/MCP children use a fixed runtime-specific binding. Its ``base_config``
+    names the shared business profile, which is not a release selector.
+    Consent and community choices always remain beside this shared profile.
     """
     path = config_path()
     try:
@@ -169,13 +164,6 @@ def state_dir(config=None) -> Path:
 
 def first_use_path() -> Path:
     return state_dir() / "cc.first-use.json"
-
-
-def plugin_root_from_env() -> Path:
-    value = os.environ.get("CLAUDE_PLUGIN_ROOT")
-    if isinstance(value, str) and value.strip():
-        return Path(value)
-    return PLUGIN_ROOT
 
 
 def configured_python(config=None) -> str:

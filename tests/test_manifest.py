@@ -37,34 +37,29 @@ class ManifestTests(unittest.TestCase):
         self.assertNotIn("mcpServers", plugin)
 
     def test_runtime_pins(self):
-        from setup import runtime_pins
-
-        pins = runtime_pins()
-        self.assertEqual(set(pins), {"mindie-knowledge", "remote-dev"})
-        self.assertEqual(pins["mindie-knowledge"]["url"], "https://github.com/mindie-agent/knowledge")
-        self.assertEqual(pins["remote-dev"]["url"], "https://github.com/mindie-agent/remote-dev")
+        from product_contract import requirements
+        pins, digest = requirements(ROOT)
+        self.assertEqual(set(pins), {"mindie-knowledge", "remote-dev", "mindie-diagnostics"})
+        self.assertEqual(len(digest), 64)
         for pin in pins.values():
-            self.assertRegex(pin["commit"], r"^[0-9a-f]{40}$")
+            self.assertRegex(pin, r"^[0-9a-f]{40}$")
 
-    def test_runtime_manifest_rejects_floating_foreign_duplicate_or_missing_pins(self):
-        from setup import runtime_pins
+    def test_hot_hooks_cannot_download_python_or_install_a_runtime(self):
+        hooks = json.loads((ROOT / "hooks/hooks.json").read_text(encoding="utf-8"))["hooks"]
+        for name, rows in hooks.items():
+            for row in rows:
+                for hook in row["hooks"]:
+                    self.assertIn("CLAUDE_PLUGIN_DATA", hook["command"])
+                    self.assertIn("0.0.1", hook["command"])
+                    if name != "SessionStart":
+                        self.assertIn("--offline --no-python-downloads", hook["command"])
 
-        pins = runtime_pins()
-        rows = [f"{name} @ git+{pin['url']}@{pin['commit']}" for name, pin in pins.items()]
-        invalid = [
-            "\n".join(rows).replace(pins["mindie-knowledge"]["commit"], "main"),
-            "\n".join(rows).replace("github.com/mindie-agent/knowledge", "github.com/other/knowledge"),
-            "\n".join(rows + [rows[0]]),
-            rows[0],
-        ]
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "runtime-requirements.txt"
-            for text in invalid:
-                with self.subTest(text=text):
-                    path.write_text(text, encoding="utf-8")
-                    with self.assertRaises(ValueError):
-                        runtime_pins(path)
-
-
-if __name__ == "__main__":
-    unittest.main()
+    def test_runtime_lock_rejects_foreign_or_floating_git_sources(self):
+        from product_contract import requirements
+        original = (ROOT / "uv.lock").read_text(encoding="utf-8")
+        for old, new in (("github.com/mindie-agent/knowledge", "github.com/other/knowledge"),
+                         ("?rev=", "?branch=")):
+            with tempfile.TemporaryDirectory() as directory:
+                Path(directory, "uv.lock").write_text(original.replace(old, new), encoding="utf-8")
+                with self.assertRaises(ValueError):
+                    requirements(Path(directory))

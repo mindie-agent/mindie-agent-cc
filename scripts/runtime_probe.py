@@ -1,4 +1,4 @@
-"""Candidate-private runtime checks. The installed updater never imports this API.
+"""Checks for the installed, locked adapter runtime.
 
 Import success is not worker compatibility. The probe checks the current
 block index, result, usage, and identity contract. It does not require the
@@ -30,7 +30,7 @@ if missing_packages:
     missing.append("missing packages: " + ", ".join(missing_packages))
 else:
     try:
-        from mindie_knowledge.loop.cli import ensure_service, prepare_service, load_transcript_adapter
+        from mindie_knowledge.loop.cli import ensure_service, prepare_service, ensure_client_service, prepare_client_service, load_transcript_adapter
         from mindie_knowledge.loop.service_context import validate as validate_service_context
         from mindie_knowledge.git_layout import validate_config_feed_layout
         from mindie_knowledge.loop.summary_scratch import (
@@ -125,8 +125,10 @@ else:
             missing.append("Service does not accept admission")
         if not all(callable(fn) for fn in (retire_service, restore_service, inspect_retirement)):
             missing.append("exact-configuration service retirement is unavailable")
-        if not callable(ensure_service) or not callable(prepare_service):
+        if not all(callable(fn) for fn in (ensure_service, prepare_service, ensure_client_service, prepare_client_service)):
             missing.append("service lifecycle is unavailable")
+        if "successor_config_path" not in inspect.signature(retire_service).parameters:
+            missing.append("service successor handoff is unavailable")
         if not callable(validate_service_context):
             missing.append("service launch context validation is unavailable")
         elif validate_service_context({{}}) != {{"paths": {{}}, "environment": []}}:

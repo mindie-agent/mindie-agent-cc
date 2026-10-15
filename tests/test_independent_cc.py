@@ -90,7 +90,7 @@ def reap_services(root: Path) -> None:
             pass
 
 
-# Explicit local checkout of the mindie-knowledge pin in runtime-requirements.txt.
+# Explicit local checkout of the mindie-knowledge pin in uv.lock.
 # There is no default path and no sibling search.
 KNOWLEDGE_CHECKOUT_ENV = "MINDIE_TEST_KNOWLEDGE_CHECKOUT"
 
@@ -236,74 +236,19 @@ def _capture_rows(case: Path):
         db.close()
 
 
+def _runtime_pins():
+    from product_contract import requirements
+    repositories = {"mindie-knowledge": "knowledge", "remote-dev": "remote-dev",
+                    "mindie-diagnostics": "diagnostics"}
+    return {name: {"url": "https://github.com/mindie-agent/" + repositories[name],
+                   "commit": pin} for name, pin in requirements(ROOT)[0].items()}
+
+
 class SetupIdentityTests(LaneCase):
-    def _pin_rejection(self):
-        import setup
-
-        try:
-            setup.probe_runtime(sys.executable)
-        except SystemExit as exc:
-            return str(exc)
-        return None
-
-    def _run_setup(self, config: Path, root: Path, extra=(), python=None):
-        from test_setup_install import run_setup
-
-        python = str(python or sys.executable)
-        return run_setup(
-            python,
-            "--config",
-            str(config),
-            "--root",
-            str(root),
-            "--no-schedule",
-            "--no-native-install",
-            "--no-public-feed",
-            *extra,
-            env=self._env(config),
-        )
-
-    def test_production_setup_obeys_official_pin(self):
-        reason = self._pin_rejection()
-        config = self.tmp / "prod" / "cc.json"
-        data = self.tmp / "prod" / "data"
-        proc = self._run_setup(config, data)
-        if reason is None:
-            self.assertEqual(proc.returncode, 0, proc.stderr[-1500:])
-            community = json.loads(config.with_name("mindie-community.json").read_text(encoding="utf-8"))
-            self.assertEqual(
-                community.get("consent_config"),
-                str((config.parent / "mindie-consent.json").resolve()),
-            )
-            self.assertIs(community.get("enabled"), False)
-            return
-        self.assertNotEqual(proc.returncode, 0, proc.stdout[-500:])
-        self.assertIn("mindie-knowledge", proc.stderr)
-        self.assertNotIn("remote-dev does not match", proc.stderr)
-        self.assertFalse(config.exists())
-        self.assertFalse(data.exists())
-        self.assertIn("does not match the required official Git commit", reason)
-
-    def test_ok_then_nonzero_probe_is_rejected_when_pin_stage_passes(self):
-        """The exit-1-after-OK runtime probe is a separate gate from the pin check."""
-        import setup
-        from unittest.mock import patch
-
-        fault = "print('OK', flush=True)\nraise SystemExit(1)\n"
-        real = setup.run
-
-        def wrapped(argv, data="", timeout=15, **kwargs):
-            script = argv[-1] if argv else ""
-            if "commit_id" in script:
-                return "OK\n"
-            return real(argv, data, timeout=timeout, **kwargs)
-
-        with patch.object(setup, "run", wrapped), patch.object(setup, "PROBE_SCRIPT", fault):
-            with self.assertRaises(SystemExit) as caught:
-                setup.probe_runtime(sys.executable)
-        message = str(caught.exception)
-        self.assertIn("knowledge runtime probe failed", message)
-        self.assertNotIn("exact required commits", message)
+    def test_production_runtime_obeys_official_lock_pins(self):
+        from candidate_validate import installed_revisions
+        from product_contract import requirements
+        installed_revisions(requirements(ROOT)[0])
 
     def _read_direct(self, python, dist_name):
         code = (
@@ -345,7 +290,7 @@ class SetupIdentityTests(LaneCase):
                 detail = lines[-1] if lines else "no output"
                 raise IdentityPrecondition(
                     f"{python} cannot read {name} metadata ({detail[:300]}). "
-                    "Install runtime-requirements.txt in this interpreter. "
+                    "Install uv.lock in this interpreter. "
                     "This test does not download runtime dependencies."
                 )
             url = str(info.get("url") or "").rstrip("/")
@@ -433,7 +378,7 @@ class SetupIdentityTests(LaneCase):
         import setup
 
         checkout = knowledge_checkout(commit)
-        self._require_reused_runtime(setup.runtime_pins())
+        self._require_reused_runtime(_runtime_pins())
         parent_knowledge = self._direct_url(sys.executable, "mindie-knowledge")["raw"]
         parent_remote = self._direct_url(sys.executable, "remote-dev")["raw"]
         work = self.tmp / "local-git-runtime"
@@ -532,7 +477,7 @@ class SetupIdentityTests(LaneCase):
         """Missing or inexact checkouts stop before git clone or pip."""
         import setup
 
-        commit = setup.runtime_pins()["mindie-knowledge"]["commit"]
+        commit = _runtime_pins()["mindie-knowledge"]["commit"]
         saved = os.environ.pop(KNOWLEDGE_CHECKOUT_ENV, None)
         try:
             with self.assertRaises(IdentityPrecondition) as missing:
@@ -602,78 +547,22 @@ class SetupIdentityTests(LaneCase):
             else:
                 os.environ[KNOWLEDGE_CHECKOUT_ENV] = saved
 
-    def test_explicit_local_candidate_accepts_only_recorded_vcs_commit(self):
-        """A separate git+file install may be named explicitly.
-
-        Wrong SHAs are rejected. The recorded commit is accepted. The
-        official https runtime is not rewritten and is not this fixture.
-        """
-        import setup
-
-        pins = setup.runtime_pins()
+    def test_local_git_source_is_rejected_even_when_commit_matches(self):
+        pins = _runtime_pins()
         commit = pins["mindie-knowledge"]["commit"]
         try:
-            python, before = self._genuine_local_git_python(
-                commit, pins["remote-dev"]["commit"]
-            )
+            python, before = self._genuine_local_git_python(commit, pins["remote-dev"]["commit"])
         except IdentityPrecondition as exc:
             raise self.failureException(str(exc)) from None
-        bare = self.tmp / "bare"
-        proc = self._run_setup(bare / "cc.json", bare / "data", python=python)
-        self.assertNotEqual(proc.returncode, 0, proc.stdout[-400:])
-        self.assertIn("does not match the required official Git commit", proc.stderr)
-        self.assertNotIn("remote-dev does not match", proc.stderr)
-        self.assertFalse((bare / "cc.json").exists())
-        self.assertFalse((bare / "data").exists())
+        code = ("import sys;sys.path.insert(0,sys.argv[1]);"
+                "from candidate_validate import installed_revisions;"
+                "from product_contract import requirements;"
+                "installed_revisions(requirements(sys.argv[2])[0])")
+        result = subprocess.run([str(python), "-c", code, str(SCRIPTS), str(ROOT)],
+                                capture_output=True, text=True, env=self._env(self.tmp / "unset.json"))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("revision_mismatch", result.stderr)
         self.assertEqual(self._direct_url(python, "mindie-knowledge")["raw"], before)
-        wrong = "0" * 40
-        other = "b34851a5df99f05787fd3c63ed6f68190a050f14"
-        self.assertNotEqual(other, commit)
-        for label, declared in (("zeros", wrong), ("other-commit", other)):
-            with self.subTest(declared=label):
-                config = self.tmp / label / "cc.json"
-                data = self.tmp / label / "data"
-                proc = self._run_setup(
-                    config,
-                    data,
-                    extra=("--allow-local-candidate", f"mindie-knowledge={declared}"),
-                    python=python,
-                )
-                self.assertEqual(self._direct_url(python, "mindie-knowledge")["raw"], before)
-                self.assertNotEqual(proc.returncode, 0, proc.stdout[-400:])
-                self.assertIn(
-                    "matches neither the official Git commit nor the declared local candidate",
-                    proc.stderr,
-                )
-                self.assertFalse(config.exists())
-                self.assertFalse(data.exists())
-        config = self.tmp / "exact" / "cc.json"
-        data = self.tmp / "exact" / "data"
-        proc = self._run_setup(
-            config,
-            data,
-            extra=("--allow-local-candidate", f"mindie-knowledge={commit}"),
-            python=python,
-        )
-        self.assertEqual(
-            self._direct_url(python, "mindie-knowledge")["raw"],
-            before,
-            "candidate setup rewrote direct_url.json",
-        )
-        self.assertEqual(
-            proc.returncode,
-            0,
-            textwrap.shorten(proc.stderr, width=1500, placeholder=" ..."),
-        )
-        report = json.loads(proc.stdout)
-        self.assertEqual(report.get("local_candidates", {}).get("mindie-knowledge"), commit)
-        community = json.loads(config.with_name("mindie-community.json").read_text(encoding="utf-8"))
-        self.assertEqual(
-            Path(community["consent_config"]).resolve(),
-            (config.parent / "mindie-consent.json").resolve(),
-        )
-        self.assertIs(community.get("enabled"), False)
-        self.assertFalse((data / "cc" / "bootstrap-venv").exists())
 
 
 class ConsentFileTests(LaneCase):
@@ -1921,7 +1810,6 @@ class BootstrapCommunityWriterTests(LaneCase):
 class HookManifestTests(LaneCase):
     def test_expansion_matchers_cover_every_accepted_command(self):
         import identity
-        from native_claude import render_hooks
 
         accepted = set(identity.COMMANDS)
         committed = json.loads((ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
@@ -1930,20 +1818,8 @@ class HookManifestTests(LaneCase):
             for item in committed["hooks"]["UserPromptExpansion"]
             if isinstance(item, dict)
         }
-        rendered = render_hooks(
-            sys.executable,
-            str(SCRIPTS / "mindie_launch.py"),
-            str(self.tmp / "cc.json"),
-        )
-        rendered_matchers = {
-            item.get("matcher")
-            for item in rendered["hooks"]["UserPromptExpansion"]
-            if isinstance(item, dict)
-        }
         with self.subTest("committed hooks.json"):
             self.assertEqual(sorted(accepted - committed_matchers), [])
-        with self.subTest("render_hooks"):
-            self.assertEqual(sorted(accepted - rendered_matchers), [])
 
 
 if __name__ == "__main__":

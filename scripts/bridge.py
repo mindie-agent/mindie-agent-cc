@@ -60,7 +60,7 @@ def handle_expansion():
     except FileNotFoundError as exc:
         text = (
             f"{exc}. This hook does not install packages. "
-            "Run python3 scripts/setup.py from the plugin checkout."
+            "Start a new Claude session with the MindIE native plugin enabled."
         )
         _print(
             {
@@ -162,7 +162,7 @@ def handle_stop():
             _print({})
             return 0
         import sharing as sharing_mod
-        from paths import engine_config_path as engine_path
+        from knowledge_service import client_engine_path as engine_path
 
         session = require_session(event.get("session_id"))
         try:

@@ -1,3 +1,31 @@
+# Fixed-runtime service continuity
+
+Current 0.0.1 candidates use native Git marketplace selection and immutable uv
+runtimes. Each release has its own fixed adapter/engine binding. The shared base
+profile remains the first-install anchor; it is not rewritten to select code.
+
+Before a new entry is published, setup holds the profile installation lock and
+checks durable state compatibility. An authenticated Core connection identifies
+the active owner. Without a live owner, only an explicit Core successor chain
+may identify the previous binding. Retirement requires idle ownership; busy or
+uncertain state stays visible. A prepared entry may reuse the compatible busy
+owner. Only SessionStart attempts an idle handoff; ordinary MCP and Stop recover
+from the fixed anchor's explicit successor chain without advancing it. Version
+and source checks also protect an unretired intermediate release: if v2 was
+prepared while v1 was busy and v3 later completed handoff, a late v2 cannot retire
+v3. The shared Core authenticates the compatible live owner, and Stop admits its
+work into the same durable queue.
+
+Pre-contract installations are different: their original config and receipts are
+preserved, their exact code-update task is unregistered, and their idle service
+is retired without claiming client compatibility. The base anchor moves once to
+the modern binding. Existing legacy sessions must reload.
+
+The following notes describe earlier updater implementations and their historical
+acceptance. They do not claim that the replacement has passed native acceptance.
+
+## Historical implementation
+
 # Service continuity during plugin updates
 
 An updater used to stop an idle knowledge service and install the next plugin

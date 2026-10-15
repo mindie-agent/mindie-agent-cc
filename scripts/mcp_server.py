@@ -187,7 +187,6 @@ def clamp_remote_args(args):
 def knowledge_call(name, args, session):
     from knowledge_service import ensure_service
     from mindie_knowledge.loop.cli import rpc
-    from paths import engine_config_path
 
     if name == "knowledge_query":
         # Keep the native schema a plain object; enforce the shared argument
@@ -201,7 +200,7 @@ def knowledge_call(name, args, session):
     method = name.removeprefix("knowledge_")
     # Core's ready fast path verifies exact configuration, retirement and
     # worker health before reusing the authenticated connection.
-    connection = ensure_service(engine_config_path())
+    connection = ensure_service()
     return rpc(
         connection,
         method,

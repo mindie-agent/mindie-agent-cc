@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import selectors
 import signal
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -34,16 +35,13 @@ class FrontControlTests(unittest.TestCase):
         (generation / "scripts/mcp_server.py").write_text(CHILD, encoding="utf-8")
         config = self.root / "adapter.json"
         config.write_text(json.dumps({"state_dir": str(self.root / "state")}), encoding="utf-8")
-        update = self.root / "state/update"
-        update.mkdir(parents=True)
-        (update / "current.json").write_text(json.dumps({
-            "generation": str(generation), "python": sys.executable,
-            "adapter_config": str(config), "sha": "controlled-front-probe",
-        }), encoding="utf-8")
+        for path in SCRIPTS.glob("*.py"):
+            if path.name != "mcp_server.py":
+                shutil.copyfile(path, generation / "scripts" / path.name)
         env = {key: value for key, value in os.environ.items()
                if not key.startswith(("MINDIE_", "PYTHONPATH", "REMOTE_DEV_"))}
         self.proc = subprocess.Popen(
-            [sys.executable, str(SCRIPTS / "mindie_launch.py"), "--config",
+            [sys.executable, str(generation / "scripts" / "mindie_launch.py"), "--config",
              str(config), "mcp", "remote"], stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
             start_new_session=True)

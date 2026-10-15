@@ -26,7 +26,7 @@ checks are the source of online CI status; local counts are not CI claims.
 
 From the repository root, use a Python interpreter satisfying the README's
 SQLite requirement. Install `pip install -e '.[test]'` for core, or
-`pip install -r runtime-requirements.txt` for an adapter, then run:
+`uv sync --locked --no-editable --group test` for an adapter, then run:
 
 ```sh
 MINDIE_TEST_KIMI_SCRIPTS="$PWD/tests/fixtures/kimi-86de2c3/scripts" \
@@ -36,10 +36,10 @@ python -m unittest discover -s tests
 
 `MINDIE_TEST_KNOWLEDGE_CHECKOUT` is required for the local-candidate identity
 test. It must be an absolute git checkout whose HEAD is the `mindie-knowledge`
-commit in `runtime-requirements.txt`. The test checks that commit with local
+commit in `uv.lock`. The test checks that commit with local
 git only. It does not fetch GitHub and it does not look for a nearby checkout.
 The same interpreter must already have both official pins from
-`runtime-requirements.txt` and must be able to import `hatchling` (the pinned
+`uv.lock` and must be able to import `hatchling` (the pinned
 tree's build backend, not a runtime pin: `python -m pip install hatchling==1.32.4`).
 The test then makes a separate venv, reuses those installed distributions, and
 runs one real `pip install --no-deps --no-build-isolation` of

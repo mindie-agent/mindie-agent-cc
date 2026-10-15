@@ -7,8 +7,8 @@ from mindie_knowledge.loop.activation import Admission
 from mindie_knowledge.loop.lifecycle import retire_service, restore_service, inspect_retirement
 
 
-def stop(engine):
-    return retire_service(engine)
+def stop(engine, *, successor_config_path=None):
+    return retire_service(engine, successor_config_path=successor_config_path)
 
 
 def restore(engine, retirement=None):

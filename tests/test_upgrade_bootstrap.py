@@ -1,97 +1,74 @@
-"""Old two-file launch packaging, exercised through real Python processes."""
+"""Stable release entries survive native cache removal without a version selector."""
 import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
-import tempfile
-import unittest
+from unittest.mock import patch
 
-SCRIPTS = Path(__file__).resolve().parents[1] / 'scripts'
-SHA = 'a' * 40
+import pytest
+from support import SCRIPTS
+sys.path.insert(0, str(SCRIPTS))
+import bootstrap
+import setup
 
 
-class UpgradeBootstrapTests(unittest.TestCase):
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.root = Path(self.tmp.name).resolve()
-        self.generation = self.root / 'generations' / SHA
-        self.scripts = self.generation / 'scripts'
-        self.scripts.mkdir(parents=True)
-        self.launch = self.root / 'launch' / SHA
-        self.launch.mkdir(parents=True)
-        for name in ('mindie_launch.py', 'bounded.py'):
-            shutil.copy2(SCRIPTS / name, self.launch / name)
-        for name in ('diagnostic_support.py', 'diagnostic_fallback.py'):
-            shutil.copy2(SCRIPTS / name, self.scripts / name)
-        (self.generation / '.mindie-generation-complete').write_text(SHA + '\n', encoding="utf-8")
-        manifest = self.generation / 'host-package/.claude-plugin/plugin.json'
-        manifest.parent.mkdir(parents=True)
-        manifest.write_text(json.dumps({'name': 'mindie-agent', 'version': '0.1.0+mindie.aaaaaaaaaaaa'}), encoding="utf-8")
-        self.trap = self.root / 'ambient'
-        self.trap.mkdir()
-        (self.trap / 'diagnostic_support.py').write_text("raise AssertionError('ambient module loaded')\n", encoding="utf-8")
-        self.env = dict(os.environ, PYTHONPATH=str(self.trap))
+def test_release_entry_survives_cache_removal_and_ignores_ambient_modules(tmp_path):
+    installed = tmp_path / "installed"
+    installed.mkdir()
+    (installed / "mindie_launch.py").write_text(
+        "import json,os,sys;print(json.dumps({'config':os.environ['MINDIE_CC_CONFIG'],"
+        "'args':sys.argv[1:],'pythonpath':os.environ.get('PYTHONPATH')}))")
+    entry = tmp_path / "plugin-data/releases/0.0.1/entry.py"
+    config = tmp_path / "immutable-adapter.json"
+    with patch.object(setup, "HERE", installed):
+        setup.publish_entry(entry, config)
+    cache = tmp_path / "native-cache"
+    cache.mkdir()
+    shutil.rmtree(cache)
+    env = dict(os.environ, CLAUDE_PLUGIN_ROOT=str(cache), PYTHONPATH=str(tmp_path / "unrelated"))
+    for role in (("hook", "session-start"), ("hook", "stop"), ("mcp", "knowledge")):
+        result = subprocess.run([sys.executable, str(entry), *role], env=env,
+                                capture_output=True, text=True, check=True)
+        value = json.loads(result.stdout)
+        assert value == {"config": str(config), "args": list(role), "pythonpath": None}
 
-    def tearDown(self):
-        self.tmp.cleanup()
 
-    def metadata(self):
-        code = "import json,runpy,sys;sys.path.insert(0,sys.argv[1]);m=runpy.run_path(sys.argv[1]+'/mindie_launch.py');print(json.dumps(m['diagnostic_support'].build_metadata()))"
-        return subprocess.run([sys.executable, '-c', code, str(self.launch)],
-                              capture_output=True, text=True, timeout=3, env=self.env)
+def test_entry_publication_is_complete_and_same_version_cannot_change_binding(tmp_path):
+    entry = tmp_path / "entry.py"
+    setup.publish_entry(entry, tmp_path / "first.json")
+    before = entry.read_bytes()
+    setup.publish_entry(entry, tmp_path / "first.json")
+    with pytest.raises(ValueError, match="different bytes"):
+        setup.publish_entry(entry, tmp_path / "second.json")
+    assert entry.read_bytes() == before
+    assert not list(tmp_path.glob(".entry-*"))
 
-    def test_old_package_uses_own_complete_generation_not_current_or_environment(self):
-        (self.root / 'current.json').write_text(json.dumps({'sha': 'b' * 40}), encoding="utf-8")
-        result = self.metadata()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(result.stdout), {'revision': SHA, 'version': '0.1.0+mindie.aaaaaaaaaaaa'})
-        self.assertEqual(sorted(p.name for p in self.launch.iterdir() if p.is_file()), ['bounded.py', 'mindie_launch.py'])
-        self.assertFalse((self.scripts / 'diagnostic-build.json').exists())
 
-    def test_missing_or_mismatched_marker_does_not_import_ambient_module(self):
-        marker = self.generation / '.mindie-generation-complete'
-        for value in (None, 'b' * 40):
-            if value is None:
-                marker.unlink()
-            else:
-                marker.write_text(value, encoding="utf-8")
-            result = self.metadata()
-            self.assertNotEqual(result.returncode, 0)
-            self.assertNotIn('ambient module loaded', result.stderr)
+def test_stop_cannot_prepare_runtime_even_if_dependency_environment_exists():
+    with patch.object(bootstrap, "ensure_runtime") as prepare:
+        with pytest.raises(RuntimeError, match="start a new Claude session"):
+            bootstrap.main(["hook", "stop"])
+    prepare.assert_not_called()
 
-    def test_metadata_does_not_invent_version_without_manifest(self):
-        (self.generation / 'host-package/.claude-plugin/plugin.json').unlink()
-        result = self.metadata()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(result.stdout), {'revision': SHA})
 
-    def test_metadata_rejects_symlink(self):
-        other = self.root / 'unrelated-build.json'
-        other.write_text(json.dumps({'revision': 'b' * 40, 'version': 'unrelated'}), encoding="utf-8")
-        try:
-            (self.scripts / 'diagnostic-build.json').symlink_to(other)
-        except OSError:
-            self.skipTest('platform does not permit creating a symlink')
-        result = self.metadata()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(result.stdout), {'revision': SHA, 'version': '0.1.0+mindie.aaaaaaaaaaaa'})
-
-    def test_sharing_off_stop_needs_no_input_or_current_generation(self):
-        config = self.root / 'cc.json'
-        config.write_text('{}', encoding="utf-8")
-        process = subprocess.Popen([sys.executable, str(self.launch / 'mindie_launch.py'),
-                                    '--config', str(config), 'hook', 'stop'],
-                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                   stderr=subprocess.PIPE, env=self.env)
-        try:
-            process.wait(timeout=2)
-            self.assertEqual(process.returncode, 0, process.stderr.read().decode())
-            self.assertEqual(json.loads(process.stdout.read()), {})
-        finally:
-            if process.poll() is None:
-                process.kill()
-                process.wait(timeout=2)
-            for stream in (process.stdin, process.stdout, process.stderr):
-                stream.close()
+def test_completed_runtime_corruption_never_invokes_uv_to_repair(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "uv.lock").write_text("version=1\n")
+    runtimes = tmp_path / "runtimes"
+    runtime = runtimes / "fixed"
+    with patch.object(bootstrap, "runtime_root", return_value=runtimes), \
+            patch.object(bootstrap, "runtime_key", return_value="fixed"), \
+            patch.object(bootstrap, "source_identity", return_value="source"), \
+            patch.object(bootstrap, "readback", return_value=tmp_path) as readback, \
+            patch.object(bootstrap.shutil, "which", return_value="uv"), \
+            patch.object(bootstrap.subprocess, "run") as run:
+        bootstrap.ensure_runtime(source)
+        run.assert_called_once()
+        assert runtime.with_suffix(".ready.json").is_file()
+        readback.side_effect = ValueError("installed bytes differ")
+        with pytest.raises(ValueError, match="installed bytes differ"):
+            bootstrap.ensure_runtime(source)
+        run.assert_called_once()

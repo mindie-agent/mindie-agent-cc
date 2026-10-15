@@ -238,9 +238,8 @@ def resolve_community_path() -> Path:
 
 def _repoint_community_keys(effective: Path, result: dict) -> None:
     """Point every config copy's ``community_config`` key at the one
-    authority: base adapter and engine configs plus the committed current
-    generation's adapter and engine configs (the worker reads the
-    generation engine copy). Data-only; each document independently
+    authority: base adapter/engine and this fixed runtime's adapter/engine.
+    No mutable generation registry participates. Each document independently
     atomic; failures are recorded, never hidden."""
     from paths import engine_config_path
 
@@ -254,10 +253,8 @@ def _repoint_community_keys(effective: Path, result: dict) -> None:
     except (OSError, ValueError) as exc:
         result["errors"].append(f"base config unreadable: {type(exc).__name__}")
     try:
-        import genstate
-
-        current = genstate.read_current()
-        generation_adapter = Path(current["adapter_config"])
+        from paths import config_path
+        generation_adapter = config_path()
         if generation_adapter != base and generation_adapter.is_file():
             targets.append(generation_adapter)
             try:
@@ -271,7 +268,7 @@ def _repoint_community_keys(effective: Path, result: dict) -> None:
                     f"generation config unreadable: {type(exc).__name__}"
                 )
     except Exception as exc:
-        result["errors"].append(f"current generation unknown: {type(exc).__name__}")
+        result["errors"].append(f"selected runtime config unavailable: {type(exc).__name__}")
     seen = set()
     for target in targets:
         target = Path(target)

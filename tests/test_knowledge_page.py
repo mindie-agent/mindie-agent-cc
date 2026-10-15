@@ -375,15 +375,12 @@ class KnowledgePageTests(unittest.TestCase):
         scripts = generation / "scripts"
         scripts.mkdir(parents=True)
         (scripts / "mcp_server.py").write_text(STUB, encoding="utf-8")
-        state = Path(json.loads(self.config.read_text(encoding="utf-8"))["state_dir"])
-        current = state / "update" / "current.json"
-        current.parent.mkdir(parents=True, exist_ok=True)
-        current.write_text(json.dumps({
-            "generation": str(generation),
-            "python": sys.executable,
-            "adapter_config": str(self.config),
-            "sha": "b" * 40,
-        }), encoding="utf-8")
+        from unittest.mock import patch
+        selected = dict(scripts=str(scripts), python=sys.executable,
+                        adapter_config=str(self.config))
+        fixed = patch.object(mindie_launch, "_runtime", return_value=selected)
+        fixed.start()
+        self.addCleanup(fixed.stop)
         raw = json.dumps({"jsonrpc": "2.0", "id": "cap-1", "method": "tools/list"}).encode()
         response = mindie_launch._dispatch("knowledge", raw, "cap-1")
         text = response["result"]["content"][0]["text"]

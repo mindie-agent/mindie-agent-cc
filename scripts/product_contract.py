@@ -1,9 +1,4 @@
-"""Stdlib-only candidate envelope. Requirements remain the runtime pin authority.
-
-The installed updater never imports the candidate runtime probe. It binds
-source identity, runs the candidate validator, and matches the exact receipt.
-The candidate checks its own runtime and publication contract.
-"""
+"""Stdlib product identity and validation receipts; uv.lock owns dependency pins."""
 
 from __future__ import annotations
 
@@ -11,6 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import tomllib
 
 PRODUCT_SCHEMA = "mindie-product/1"
 RECEIPT_SCHEMA = "mindie-candidate-check/1"
@@ -33,7 +29,7 @@ FAILURE_CODES = {
     "validation": {"internal_error"},
     "process": {"nonzero_exit"},
 }
-FAILURE_COMPONENTS = {"mindie-knowledge", "remote-dev"}
+FAILURE_COMPONENTS = {"mindie-knowledge", "remote-dev", "mindie-diagnostics"}
 PUBLICATION_PROCESS_CODES = {"init_failed", "fetch_failed", "revision_read_failed"}
 
 
@@ -137,26 +133,28 @@ def read_json(path):
 
 
 def requirements(source):
-    """The existing requirements file is the only runtime revision authority."""
-    path = Path(source) / "runtime-requirements.txt"
+    """The complete uv lock is the dependency authority, including Git sources."""
+    path = Path(source) / "uv.lock"
     if path.is_symlink() or not path.is_file():
-        raise ValueError("runtime requirements must be a regular file")
-    with path.open("rb") as stream:
-        raw = stream.read(65537)
-    if len(raw) > 65536:
-        raise ValueError("runtime requirements exceed the metadata byte bound")
+        raise ValueError("uv.lock must be a regular file")
+    raw = path.read_bytes()
+    if len(raw) > 4 * 1024 * 1024:
+        raise ValueError("uv.lock exceeds the metadata byte bound")
     pins = {}
-    pattern = re.compile(
-        r"([a-z-]+) @ git\+https://github.com/mindie-agent/(knowledge|remote-dev)@([0-9a-f]{40})\Z"
-    )
-    expected = {"mindie-knowledge": "knowledge", "remote-dev": "remote-dev"}
-    for line in raw.decode("utf-8").splitlines():
-        if not line.strip() or line.startswith("#"):
+    expected = {"mindie-knowledge": "knowledge", "remote-dev": "remote-dev",
+                "mindie-diagnostics": "diagnostics"}
+    for package in tomllib.loads(raw.decode("utf-8")).get("package", []):
+        name = package.get("name")
+        if name not in expected:
             continue
-        match = pattern.fullmatch(line)
-        if not match or expected.get(match[1]) != match[2] or match[1] in pins:
+        source_url = package.get("source", {}).get("git", "")
+        match = re.fullmatch(
+            r"https://github\.com/mindie-agent/" + re.escape(expected[name])
+            + r"\?rev=([0-9a-f]{40})#\1", source_url,
+        )
+        if match is None or name in pins:
             raise ValueError("runtime dependencies require exact official commit pins")
-        pins[match[1]] = match[3]
+        pins[name] = match[1]
     if set(pins) != set(expected):
         raise ValueError("invalid runtime package combination")
     return pins, hashlib.sha256(raw).hexdigest()
@@ -205,7 +203,7 @@ def package_files(source):
     plugin = _plugin_root(source)
     result = set()
     for name in (".claude-plugin", ".mcp.json", "hooks", "scripts", "skills",
-                 "product-contract.json", "runtime-requirements.txt"):
+                 "product-contract.json", "pyproject.toml", "uv.lock"):
         path = plugin / name
         entries = [path]
         if path.is_dir() and not path.is_symlink():
@@ -227,7 +225,7 @@ def source_identity(source):
     source = Path(source)
     plugin = _plugin_root(source)
     files = []
-    for name in ("product-contract.json", "runtime-requirements.txt"):
+    for name in ("product-contract.json", "pyproject.toml", "uv.lock"):
         path = source / name
         if path.is_file() or path.is_symlink():
             files.append(path)
@@ -256,10 +254,22 @@ def identity(source, revision=None):
         raise ValueError("candidate revision must be an immutable commit")
     return dict(
         schema=RECEIPT_SCHEMA, candidate_revision=revision,
+        native_version=native_version(source),
         source_sha256=source_digest, product_sha256=product_digest,
         requirements_sha256=requirement_digest, runtime=pins,
         publication=declaration["publication"],
     )
+
+
+def native_version(source):
+    plugin = _plugin_root(source)
+    version = read_json(plugin / ".claude-plugin" / "plugin.json")[0]["version"]
+    if not isinstance(version, str) or not re.fullmatch(r"\d+\.\d+\.\d+", version):
+        raise ValueError("native plugin version must be a release version")
+    project = tomllib.loads((plugin / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    if project.get("name") != "mindie-agent-cc" or project.get("version") != version:
+        raise ValueError("native plugin and Python project versions differ")
+    return version
 
 
 def validate_receipt(output, expected):

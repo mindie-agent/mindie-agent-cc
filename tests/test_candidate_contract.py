@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -38,9 +39,11 @@ def _source(root, version="0.0.1"):
     (root / "product-contract.json").write_text(
         (ROOT / "product-contract.json").read_text(encoding="utf-8"), encoding="utf-8",
     )
-    (root / "runtime-requirements.txt").write_text(
-        (ROOT / "runtime-requirements.txt").read_text(encoding="utf-8"), encoding="utf-8",
-    )
+    for name in ("pyproject.toml", "uv.lock"):
+        (root / name).write_bytes((ROOT / name).read_bytes())
+    project = root / "pyproject.toml"
+    project.write_text(project.read_text(encoding="utf-8").replace(
+        'version = "0.0.1"', f'version = "{version}"', 1), encoding="utf-8")
     scripts = root / "scripts"
     scripts.mkdir()
     (scripts / "marker.py").write_text("value = 1\n", encoding="utf-8")
@@ -49,12 +52,15 @@ def _source(root, version="0.0.1"):
 
 class ProductContractTests(unittest.TestCase):
     def test_candidate_requires_owner_death_guard_before_install(self):
-        import updater
+        import shutil
 
         validator = _load_validator()
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "candidate"
-            updater.snapshot_source(ROOT, source)
+            for path in product_contract.package_files(ROOT):
+                target = source / path.relative_to(ROOT)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(path, target)
             validator.adapter_check(source)
             (source / "scripts" / "owned_process.py").unlink()
             with self.assertRaisesRegex(ValueError, "missing bounded runtime entry: owned_process.py"):
@@ -68,7 +74,7 @@ class ProductContractTests(unittest.TestCase):
             self.assertEqual(first["candidate_revision"], "a" * 40)
             self.assertEqual(first["publication"]["contract_sha256"],
                              "5bdb5d9e6846c21fb3f980132ea5c70a4c67018867b4b0acd371769451f85414")
-            self.assertEqual(set(first["runtime"]), {"mindie-knowledge", "remote-dev"})
+            self.assertEqual(set(first["runtime"]), {"mindie-knowledge", "remote-dev", "mindie-diagnostics"})
             (source / "scripts" / "marker.py").write_text("value = 2\n", encoding="utf-8")
             second = product_contract.identity(source, "a" * 40)
             self.assertNotEqual(second["source_sha256"], first["source_sha256"])
@@ -77,8 +83,44 @@ class ProductContractTests(unittest.TestCase):
     def test_non_release_suffix_is_rejected_by_manifest_contract(self):
         with tempfile.TemporaryDirectory() as tmp:
             source = _source(Path(tmp), version="0.0.1-beta.1")
-            with self.assertRaises(updater_version_error()):
-                manifest_base(source)
+            with self.assertRaises(ValueError):
+                _load_validator().release_check(source)
+
+    def test_later_native_release_keeps_existing_state_format_protection(self):
+        import mindie_knowledge.state_layout as layout
+        with tempfile.TemporaryDirectory() as tmp:
+            source = _source(Path(tmp), version="0.0.2")
+            with patch.object(layout, "RELEASE_VERSION", "0.0.1"):
+                _load_validator().release_check(source)
+            self.assertEqual(product_contract.identity(source)["native_version"], "0.0.2")
+
+    def test_future_or_invalid_state_protection_boundary_is_rejected(self):
+        import mindie_knowledge.state_layout as layout
+        validator = _load_validator()
+        with tempfile.TemporaryDirectory() as tmp:
+            source = _source(Path(tmp))
+            for boundary in ("0.0.2", "invalid", "0.0.1rc1", None):
+                with self.subTest(boundary=boundary), \
+                        patch.object(layout, "RELEASE_VERSION", boundary):
+                    with self.assertRaises(validator.CheckFailure):
+                        validator.release_check(source)
+
+    def test_native_project_and_installed_distribution_must_match(self):
+        validator = _load_validator()
+        with tempfile.TemporaryDirectory() as tmp:
+            source = _source(Path(tmp))
+            expected = product_contract.identity(source)
+            with patch.object(validator, "installed_revisions"), \
+                    patch.object(validator, "adapter_check"), \
+                    patch.object(validator.importlib.metadata, "version", return_value="0.0.2"):
+                with self.assertRaises(validator.CheckFailure) as caught:
+                    validator.validate(source, expected)
+                self.assertEqual(caught.exception.failure["code"], "release_version_mismatch")
+            project = source / "pyproject.toml"
+            project.write_text(project.read_text(encoding="utf-8").replace(
+                'version = "0.0.1"', 'version = "0.0.2"', 1), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "versions differ"):
+                product_contract.identity(source)
 
     def test_failure_receipt_rejects_success_text_from_failing_process(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -131,16 +173,6 @@ class ProductContractTests(unittest.TestCase):
             self.assertEqual(caught.exception.stage, "runtime_api")
             self.assertEqual(caught.exception.code, "api_incompatible")
             self.assertNotIn(str(source), str(caught.exception))
-
-
-def updater_version_error():
-    import updater
-    return updater.CheckFailed
-
-
-def manifest_base(source):
-    import updater
-    return updater.manifest_version(source)
 
 
 class DigestStabilityTests(unittest.TestCase):
