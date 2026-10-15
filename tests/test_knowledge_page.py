@@ -136,6 +136,48 @@ class KnowledgePageTests(unittest.TestCase):
                 start.assert_not_called()
                 rpc.assert_not_called()
 
+    def test_query_does_not_time_out_a_cold_native_read(self):
+        import mcp_server
+        import threading
+        import time
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+        from unittest.mock import patch
+
+        result = {"results": [{"ref": "synthetic-result"}]}
+        calls = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *_args):
+                pass
+
+            def do_POST(self):
+                calls.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+                time.sleep(5.25)
+                body = json.dumps({"ok": True, "result": result}).encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                try:
+                    self.wfile.write(body)
+                except BrokenPipeError:
+                    pass
+
+        with HTTPServer(("127.0.0.1", 0), Handler) as server:
+            server.timeout = 10
+            worker = threading.Thread(target=server.handle_request)
+            worker.start()
+            connection = {"url": f"http://127.0.0.1:{server.server_port}", "token": "synthetic"}
+            try:
+                with patch("knowledge_service.existing_service", return_value=connection):
+                    self.assertEqual(
+                        mcp_server.knowledge_call("knowledge_query", {"query": "synthetic"}, SESSION),
+                        result,
+                    )
+            finally:
+                worker.join(timeout=10)
+            self.assertFalse(worker.is_alive())
+        self.assertEqual(len(calls), 1)
+
     def test_explain_without_host_bind_fails_closed(self):
         message = {
             "jsonrpc": "2.0",

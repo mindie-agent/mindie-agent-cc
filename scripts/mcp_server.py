@@ -207,7 +207,7 @@ def knowledge_call(name, args, session):
         connection,
         method,
         dict(args, _session_id=session, _session_verified=True),
-        timeout=5,
+        timeout=None,
     )
 
 
