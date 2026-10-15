@@ -368,17 +368,17 @@ class WorkerEnvelopeTests(unittest.TestCase):
     def test_native_structured_correction_preserves_accumulated_usage_in_one_invocation(self):
         payload = make_payload()
         captured = []
-        usage = dict(input_tokens=20, cache_creation_input_tokens=6,
-                     cache_read_input_tokens=4, output_tokens=10)
+        usage = dict(input_tokens=40, cache_creation_input_tokens=6,
+                     cache_read_input_tokens=4, output_tokens=40)
         value = self.execute(
-            payload, native_envelope(metadata_for(payload), num_turns=3, usage=usage),
+            payload, native_envelope(metadata_for(payload), num_turns=5, usage=usage),
             captured=captured,
         )
         self.assertEqual(len(captured), 1)
         self.assertEqual(value["status"], "returned")
         self.assertEqual(value["model_calls"], 1)
         self.assertEqual(value["usage"],
-                         dict(input_tokens=26, cached_input_tokens=4, output_tokens=10))
+                         dict(input_tokens=46, cached_input_tokens=4, output_tokens=40))
         self.assertTrue(value["usage_known"])
         self.assertEqual(value["billing_status"], "reported")
         summarizer.validate_outcome(value, payload)
@@ -479,7 +479,7 @@ class WorkerEnvelopeTests(unittest.TestCase):
         self.assertIn("--print", argv)
         self.assertEqual(json.loads(argv[argv.index("--json-schema") + 1]),
                          summarizer.output_schema([block["block_id"] for block in payload["blocks"]]))
-        self.assertEqual(argv[argv.index("--max-turns") + 1], "2")
+        self.assertNotIn("--max-turns", argv)
         self.assertIn("--model", argv)
         self.assertEqual(argv[argv.index("--model") + 1], "fixture-model")
         self.assertEqual(argv[argv.index("--effort") + 1], "low")
@@ -492,6 +492,7 @@ class WorkerEnvelopeTests(unittest.TestCase):
         self.assertEqual(child_env.get("ANTHROPIC_AUTH_TOKEN"), secret)
         self.assertEqual(child_env.get("CLAUDE_CODE_EFFORT_LEVEL"), "low")
         self.assertEqual(child_env.get("MAX_THINKING_TOKENS"), "0")
+        self.assertNotIn("MAX_STRUCTURED_OUTPUT_RETRIES", child_env)
         self.assertNotIn("MINDIE_MAINTENANCE_GROUP", child_env)
         self.assertNotIn("MINDIE_MAINTENANCE_OWNER", child_env)
         self.assertNotIn(organizer.SUMMARY_SCRATCH_ENV, child_env)

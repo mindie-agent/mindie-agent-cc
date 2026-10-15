@@ -12,9 +12,10 @@ retries an uncertain/billed model request.
 
 The single native invocation is the local ``claude`` CLI in an isolated workdir with
 no business tools, hooks, plugins or MCP. The native structured-output
-submission tool remains available for delivering the result, including one
-native correction turn when the first response is ordinary text. Usage is the
-native invocation's accumulated usage; one invocation is not one HTTP request.
+submission tool remains available. Claude owns its schema-validation retries
+and termination; this adapter does not impose a separate agentic-turn cap.
+Usage is the native invocation's accumulated usage; one invocation is not one
+HTTP request.
 Provider and model come from the selected
 native profile's settings (never a shipped host-specific default or
 credential). A missing native model is a configuration failure, not a silent
@@ -231,8 +232,8 @@ def _parse_native_result(output, receipt):
     usage = _usage_counters(data.get("usage"))
     if usage is not None:
         receipt["usage"] = usage
-    # Native num_turns includes tool-result user events, including the local
-    # StructuredOutput result. The CLI --max-turns bound limits model turns.
+    # Native num_turns includes local tool-result events and schema corrections;
+    # it is neither an invocation count nor an HTTP-request count.
     if data.get("is_error") is True:
         receipt["turn_failed"] = True
         receipt["failure_diagnostic"] = _native_failure_diagnostic(data)
@@ -294,8 +295,6 @@ def _invoke_native(prompt, schema, env, model, receipt):
             "json",
             "--json-schema",
             summarizer.canonical(schema),
-            "--max-turns",
-            "2",
             "--setting-sources",
             "",
             "--tools",
