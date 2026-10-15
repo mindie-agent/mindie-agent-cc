@@ -80,6 +80,16 @@ def _missing_contract(directory):
 
 
 class WorkerProbeTests(unittest.TestCase):
+    def test_git_layout_preflight_is_required_before_install(self):
+        from mindie_knowledge import git_layout
+
+        script = setup.probe_script(str(SCRIPTS / "transcript.py"))
+        with patch.object(git_layout, "validate_config_feed_layout", None), \
+                redirect_stdout(io.StringIO()) as output:
+            exec(script, {})
+        self.assertIn("knowledge Git layout preflight is unavailable", output.getvalue())
+        self.assertTrue(output.getvalue().startswith("MISSING:"))
+
     def test_summary_scratch_contract_is_required_before_install(self):
         from mindie_knowledge.loop import summary_scratch
 

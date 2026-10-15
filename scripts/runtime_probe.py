@@ -32,6 +32,7 @@ else:
     try:
         from mindie_knowledge.loop.cli import ensure_service, prepare_service, load_transcript_adapter
         from mindie_knowledge.loop.service_context import validate as validate_service_context
+        from mindie_knowledge.git_layout import validate_config_feed_layout
         from mindie_knowledge.loop.summary_scratch import (
             ENVIRONMENT_KEY as SUMMARY_SCRATCH_ENV, ScratchOwnershipError, create_profile,
         )
@@ -59,6 +60,8 @@ else:
     else:
         if not callable(state_root):
             missing.append("knowledge state compatibility API is incomplete")
+        if not callable(validate_config_feed_layout):
+            missing.append("knowledge Git layout preflight is unavailable")
         if RELEASE_VERSION is not None and (
                 not isinstance(RELEASE_VERSION, str) or RELEASE_VERSION.count(".") != 2):
             missing.append("knowledge release state declaration is invalid")
