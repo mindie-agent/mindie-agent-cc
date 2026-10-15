@@ -196,6 +196,7 @@
       ],
       "code_paths": [
         "scripts/organizer.py:_invoke_native",
+        "scripts/organizer.py:_parse_native_stream",
         "scripts/organizer.py:_parse_native_result"
       ],
       "test_ids": [
@@ -204,6 +205,9 @@
         "tests/test_organizer.py::WorkerEnvelopeTests.test_native_structured_correction_preserves_accumulated_usage_in_one_invocation",
         "tests/test_organizer.py::WorkerEnvelopeTests.test_terminal_limits_keep_distinct_safe_diagnostics_and_one_call",
         "tests/test_organizer.py::WorkerEnvelopeTests.test_missing_structured_output_does_not_repair_fenced_prose",
+        "tests/test_organizer.py::WorkerEnvelopeTests.test_native_validation_stream_retains_only_schema_owned_error_labels",
+        "tests/test_organizer.py::WorkerEnvelopeTests.test_duplicate_or_trailing_native_terminal_is_rejected",
+        "tests/test_organizer.py::WorkerEnvelopeTests.test_stream_transport_budget_is_separate_from_final_metadata_budget",
         "tests/test_organizer.py::WorkerEnvelopeTests.test_one_batch_one_call_and_prompt_carries_only_public_blocks"
       ],
       "evidence_refs": [

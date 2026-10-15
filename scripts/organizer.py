@@ -29,6 +29,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -51,9 +52,10 @@ from mindie_knowledge.materials import summarizer
 
 MAX_REQUEST_BYTES = 128 * 1024
 SUMMARY_EFFORT = "low"
-# The native JSON envelope wraps the bounded result text with usage/timing
-# metadata; the result text itself is checked against MAX_RESPONSE_BYTES.
-MAX_ENVELOPE_BYTES = summarizer.MAX_RESPONSE_BYTES + 16 * 1024
+# Native corrections include multiple submission/result events. This bounds
+# transport, independently of the final metadata's MAX_RESPONSE_BYTES limit.
+# The observed five-attempt native stream fits well below this envelope.
+MAX_NATIVE_STREAM_BYTES = 1024 * 1024
 
 # Native 2.1.269 result/terminal enums. Unknown values never become log text.
 NATIVE_FAILURE_REASONS = {
@@ -193,7 +195,7 @@ def _usage_counters(raw):
     }
 
 
-def _native_failure_diagnostic(data):
+def _native_failure_diagnostic(data, validation=None):
     """Keep terminal cause and shape without storing model/provider free text."""
     def label(key, allowed):
         value = data.get(key)
@@ -218,11 +220,12 @@ def _native_failure_diagnostic(data):
         api_error_status=number("api_error_status", 100, 599),
         errors=shape("errors"), result=shape("result"),
         structured_output_present=data.get("structured_output") is not None,
+        validation=validation,
     ))
 
 
 def _parse_native_result(output, receipt):
-    """One `claude --print --output-format json` envelope; never retain text."""
+    """The stream's sole terminal envelope; never retain native free text."""
     try:
         data = json.loads(output.strip())
     except (ValueError, UnicodeError):
@@ -236,7 +239,9 @@ def _parse_native_result(output, receipt):
     # it is neither an invocation count nor an HTTP-request count.
     if data.get("is_error") is True:
         receipt["turn_failed"] = True
-        receipt["failure_diagnostic"] = _native_failure_diagnostic(data)
+        receipt["failure_diagnostic"] = _native_failure_diagnostic(
+            data, receipt.get("native_validation")
+        )
         subtype = data.get("subtype")
         reason = NATIVE_FAILURE_REASONS.get(subtype, "native_turn_failed") if isinstance(subtype, str) else "native_turn_failed"
         raise NativeFailure("native invocation reported an error result", reason=reason)
@@ -250,16 +255,89 @@ def _parse_native_result(output, receipt):
 
 
 def _terminal_result(raw):
-    """True once accumulated stdout holds one complete native result object.
-
-    Partial input is not yet terminal; anything malformed stays for the strict
-    envelope parse after the run. Never retains or reports the text.
-    """
+    """Recognize the native stream's final complete result line."""
     try:
-        data = json.loads(raw.decode("utf-8", "replace").strip())
+        data = json.loads(raw.rstrip().rsplit(b"\n", 1)[-1])
     except (ValueError, UnicodeError):
         return False
     return isinstance(data, dict) and data.get("type") == "result"
+
+
+def _validation_location(content):
+    """Project native validation text onto schema-owned labels, never values."""
+    unknown = ("unknown", "unknown")
+    prefix = "Output does not match required schema: "
+    if not isinstance(content, str) or not content.startswith(prefix):
+        return unknown
+    location, separator, detail = content[len(prefix):].partition(": ")
+    allowed_paths = {"root", "/blocks", "/navigation"}
+    allowed_paths.update("/navigation/" + name for name in ("title", "summary"))
+    for index in range(summarizer.MAX_BLOCKS):
+        path = "/blocks/" + str(index)
+        allowed_paths.add(path)
+        allowed_paths.update(path + "/" + name for name in ("block_id", "title", "summary"))
+    if not separator or location not in allowed_paths:
+        return unknown
+    patterns = (
+        (r"must have required property '[^']*'", "required"),
+        (r"must be equal to one of the allowed values: .+", "enum"),
+        (r"must NOT have more than [0-9]+ characters \(got [0-9]+\)", "maxLength"),
+    )
+    keyword = next((name for pattern, name in patterns if re.fullmatch(pattern, detail)), "unknown")
+    return location, keyword
+
+
+def _parse_native_stream(output, receipt):
+    """Read one native event stream, keeping only terminal output and safe facts."""
+    terminal = None
+    submissions, results = set(), set()
+    failures = {}
+    rejected = 0
+    try:
+        for line in output.splitlines():
+            if not line.strip():
+                continue
+            event = json.loads(line)
+            if not isinstance(event, dict) or terminal is not None:
+                raise ValueError("unexpected event after terminal")
+            if event.get("type") == "result":
+                terminal = event
+                usage = _usage_counters(event.get("usage"))
+                if usage is not None:
+                    # A later protocol violation does not erase billed usage.
+                    receipt["usage"] = usage
+                continue
+            message = event.get("message")
+            content = message.get("content") if isinstance(message, dict) else None
+            if not isinstance(content, list):
+                continue
+            for item in content:
+                if not isinstance(item, dict):
+                    continue
+                if (event.get("type") == "assistant" and item.get("type") == "tool_use"
+                        and item.get("name") == "StructuredOutput" and isinstance(item.get("id"), str)):
+                    submissions.add(item["id"])
+                if (event.get("type") != "user" or item.get("type") != "tool_result"
+                        or not isinstance(item.get("tool_use_id"), str)
+                        or item["tool_use_id"] not in submissions
+                        or item["tool_use_id"] in results):
+                    continue
+                results.add(item["tool_use_id"])
+                if item.get("is_error") is True:
+                    rejected += 1
+                    key = _validation_location(item.get("content"))
+                    failures[key] = failures.get(key, 0) + 1
+    except (ValueError, UnicodeError):
+        raise InvalidResultError("native output is not one complete event stream") from None
+    if terminal is None:
+        raise InvalidResultError("native stream has no terminal result")
+    receipt["native_validation"] = {
+        "submissions": len(submissions),
+        "rejected": rejected,
+        "errors": [{"path": path, "keyword": keyword, "count": count}
+                   for (path, keyword), count in sorted(failures.items())],
+    }
+    _parse_native_result(summarizer.canonical(terminal), receipt)
 
 
 def _invoke_native(prompt, schema, env, model, receipt):
@@ -292,7 +370,8 @@ def _invoke_native(prompt, schema, env, model, receipt):
             claude_bin(),
             "--print",
             "--output-format",
-            "json",
+            "stream-json",
+            "--verbose",
             "--json-schema",
             summarizer.canonical(schema),
             "--setting-sources",
@@ -320,7 +399,7 @@ def _invoke_native(prompt, schema, env, model, receipt):
                 timeout=None,
                 env=child_env,
                 cwd=str(isolated),
-                max_output=MAX_ENVELOPE_BYTES,
+                max_output=MAX_NATIVE_STREAM_BYTES,
                 receipt=run_receipt,
                 terminal=_terminal_result,
                 core_managed=managed,
@@ -341,7 +420,7 @@ def _invoke_native(prompt, schema, env, model, receipt):
             receipt["native_started"] = bool(run_receipt.get("started"))
             if run_receipt.get("cleanup_failed"):
                 receipt["cleanup_failed"] = True
-        _parse_native_result(output, receipt)
+        _parse_native_stream(output, receipt)
     finally:
         # The shared owner must stop all descendants before removing its scratch.
         if not managed:
@@ -453,8 +532,7 @@ def run(payload):
                   and not model.receipt.get("turn_failed") else "failed")
     receipt = model.receipt if model else {}
     usage = receipt.get("usage")
-    known = bool((receipt.get("turn_completed") or receipt.get("turn_failed"))
-                 and isinstance(usage, dict)
+    known = bool(isinstance(usage, dict)
                  and all(type(usage.get(key)) is int and usage[key] >= 0 for key in summarizer.COUNTERS))
     return summarizer.outcome(payload, status=status, result=result,
                               raw_result=(receipt.get("failure_diagnostic")

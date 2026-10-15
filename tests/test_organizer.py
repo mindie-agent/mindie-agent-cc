@@ -48,7 +48,7 @@ def native_envelope(metadata, *, is_error=False, num_turns=1,
                     usage=dict(input_tokens=10, cache_creation_input_tokens=3,
                                cache_read_input_tokens=2, output_tokens=5),
                     result_text=None):
-    """One `claude --print --output-format json` object."""
+    """One native terminal result object, also a one-line event stream."""
     return json.dumps(dict(
         type="result", subtype="error_during_execution" if is_error else "success",
         is_error=is_error, num_turns=num_turns,
@@ -56,6 +56,23 @@ def native_envelope(metadata, *, is_error=False, num_turns=1,
         structured_output=metadata,
         usage=usage, session_id="native-session",
     ))
+
+
+def validation_events(identifier, message, submission=None):
+    return [
+        {"type": "assistant", "message": {"content": [{
+            "type": "tool_use", "id": identifier, "name": "StructuredOutput",
+            "input": submission,
+        }]}},
+        {"type": "user", "message": {"content": [{
+            "type": "tool_result", "tool_use_id": identifier,
+            "is_error": True, "content": message,
+        }]}},
+    ]
+
+
+def event_stream(events, terminal):
+    return "\n".join([*(json.dumps(event) for event in events), terminal]) + "\n"
 
 
 def fake_run(output=None, exc=None, started=True, captured=None):
@@ -447,6 +464,117 @@ class WorkerEnvelopeTests(unittest.TestCase):
                 self.assertLess(len(value["raw_result"]), 1024)
                 summarizer.validate_outcome(value, payload)
 
+    def test_native_validation_stream_retains_only_schema_owned_error_labels(self):
+        payload = make_payload()
+        prefix = "Output does not match required schema: "
+        samples = [
+            ("root: must have required property 'blocks'", "root", "required"),
+            ('/blocks/0/block_id: must be equal to one of the allowed values: ["PRIVATE_ID"]',
+             "/blocks/0/block_id", "enum"),
+            ("/blocks/0/summary: must NOT have more than 1000 characters (got 2000)",
+             "/blocks/0/summary", "maxLength"),
+        ]
+        events = []
+        for index, (message, _, _) in enumerate(samples):
+            events.extend(validation_events("PRIVATE_ID_" + str(index), prefix + message,
+                                            {"PRIVATE_FIELD": "PRIVATE_VALUE"}))
+        native = json.loads(native_envelope(None, is_error=True, num_turns=6))
+        native.update(subtype="error_max_structured_output_retries",
+                      terminal_reason="structured_output_retry_exhausted")
+        value = self.execute(payload, event_stream(events, json.dumps(native)))
+        self.assertEqual(value["error_reason"], "native_structured_output_exhausted")
+        self.assertTrue(value["usage_known"])
+        self.assertEqual(value["model_calls"], 1)
+        detail = json.loads(value["raw_result"])["validation"]
+        self.assertEqual(detail["submissions"], 3)
+        self.assertEqual(detail["rejected"], 3)
+        self.assertEqual(
+            {(item["path"], item["keyword"], item["count"]) for item in detail["errors"]},
+            {(path, keyword, 1) for _, path, keyword in samples},
+        )
+        self.assertNotIn("PRIVATE", json.dumps(value))
+        summarizer.validate_outcome(value, payload)
+
+    def test_unknown_validation_text_and_paths_are_not_diagnostic_values(self):
+        payload = make_payload()
+        samples = [
+            "Output does not match required schema: /PRIVATE_FIELD: must be string",
+            "Output does not match required schema: /blocks/0/summary: PRIVATE_VALUE",
+            "PRIVATE_VALUE",
+        ]
+        events = []
+        for index, message in enumerate(samples):
+            events.extend(validation_events(str(index), message, "PRIVATE_BODY"))
+        value = self.execute(payload, event_stream(events, native_envelope(None, is_error=True)))
+        errors = json.loads(value["raw_result"])["validation"]["errors"]
+        self.assertEqual(errors, [
+            {"path": "/blocks/0/summary", "keyword": "unknown", "count": 1},
+            {"path": "unknown", "keyword": "unknown", "count": 2},
+        ])
+        self.assertNotIn("PRIVATE", json.dumps(value))
+
+    def test_stream_transport_budget_is_separate_from_final_metadata_budget(self):
+        payload = make_payload()
+        events = []
+        for index in range(5):
+            events.extend(validation_events(
+                str(index), "Output does not match required schema: root: must have required property 'blocks'",
+                {"private_value": "PRIVATE_CANARY" * 1000},
+            ))
+        output = event_stream(events, native_envelope(metadata_for(payload), num_turns=6))
+        self.assertGreater(len(output.encode()), summarizer.MAX_RESPONSE_BYTES + 16 * 1024)
+        self.assertLess(len(output.encode()), organizer.MAX_NATIVE_STREAM_BYTES)
+        calls = []
+        value = self.execute(payload, output, captured=calls)
+        self.assertEqual(value["status"], "returned")
+        self.assertEqual(value["model_calls"], 1)
+        self.assertTrue(value["usage_known"])
+        self.assertEqual(calls[0]["max_output"], 1024 * 1024)
+        self.assertNotIn("PRIVATE_CANARY", json.dumps(value))
+
+    def test_duplicate_or_trailing_native_terminal_is_rejected(self):
+        payload = make_payload()
+        terminal = native_envelope(metadata_for(payload))
+        for suffix in (terminal, '{"type":"assistant","message":{}}', "not-json"):
+            with self.subTest(suffix_type=suffix[:20]):
+                value = self.execute(payload, terminal + "\n" + suffix + "\n")
+                self.assertEqual(value["status"], "outcome_unknown")
+                self.assertEqual(value["error_reason"], "result_contract_invalid")
+                self.assertIsNone(value["result"])
+                self.assertTrue(value["usage_known"])
+                self.assertEqual(value["billing_status"], "reported")
+                self.assertEqual(value["usage"],
+                                 dict(input_tokens=13, cached_input_tokens=2, output_tokens=5))
+                summarizer.validate_outcome(value, payload)
+
+    def test_protocol_failure_keeps_first_terminal_usage_without_inventing_counters(self):
+        payload = make_payload()
+        terminal = native_envelope(metadata_for(payload))
+        later = native_envelope(None, usage=dict(input_tokens=999, cache_creation_input_tokens=0,
+                                               cache_read_input_tokens=0, output_tokens=999))
+        value = self.execute(payload, terminal + "\n" + later + "\n")
+        self.assertEqual(value["usage"]["input_tokens"], 13)
+        self.assertEqual(value["usage"]["output_tokens"], 5)
+        incomplete = native_envelope(metadata_for(payload), usage={"input_tokens": 10})
+        value = self.execute(payload, incomplete + "\n" + later + "\n")
+        self.assertFalse(value["usage_known"])
+        self.assertEqual(value["billing_status"], "unknown")
+        self.assertIsNone(value["result"])
+
+    def test_only_matching_structured_output_tool_results_enter_diagnostics(self):
+        payload = make_payload()
+        events = validation_events("same", "PRIVATE_UNMATCHED")
+        events[0]["message"]["content"][0]["name"] = "SomeOtherTool"
+        value = self.execute(payload, event_stream(events, native_envelope(None, is_error=True)))
+        validation = json.loads(value["raw_result"])["validation"]
+        self.assertEqual(validation, {"submissions": 0, "rejected": 0, "errors": []})
+        self.assertNotIn("PRIVATE", json.dumps(value))
+
+    def test_terminal_predicate_requires_a_complete_result_line(self):
+        self.assertFalse(organizer._terminal_result(b'{"type":"result"'))
+        self.assertFalse(organizer._terminal_result(b'{"type":"assistant"}\n'))
+        self.assertTrue(organizer._terminal_result(b'{"type":"assistant"}\n{"type":"result"}\n'))
+
     def test_policy_mismatch_never_calls_the_model(self):
         payload = make_payload()
         captured = []
@@ -474,9 +602,11 @@ class WorkerEnvelopeTests(unittest.TestCase):
         self.assertEqual(len(captured), 1)
         call = captured[0]
         self.assertIsNone(call["timeout"])
-        self.assertEqual(call["max_output"], organizer.MAX_ENVELOPE_BYTES)
+        self.assertEqual(call["max_output"], organizer.MAX_NATIVE_STREAM_BYTES)
         argv = call["argv"]
         self.assertIn("--print", argv)
+        self.assertEqual(argv[argv.index("--output-format") + 1], "stream-json")
+        self.assertIn("--verbose", argv)
         self.assertEqual(json.loads(argv[argv.index("--json-schema") + 1]),
                          summarizer.output_schema([block["block_id"] for block in payload["blocks"]]))
         self.assertNotIn("--max-turns", argv)

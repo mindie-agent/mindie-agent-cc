@@ -32,6 +32,28 @@ The native result supplies accumulated usage across its internal turns. The
 four-submission correction control reported `num_turns: 5` because native
 tool-result events also contribute to that count.
 
+The worker uses `stream-json --verbose` to observe schema rejection events
+inside that same invocation. Full streams from native 2.1.269 and 2.1.299
+ended with exactly one terminal event, with no later warning or event. The
+terminal `structured_output` remains the only source of accepted metadata.
+A duplicate terminal or trailing event is rejected while retaining valid
+usage already reported by the first terminal.
+
+The failure diagnostic retains only submission/rejection counts and
+schema-owned paths paired with the observed validator keywords `required`,
+`enum` and `maxLength`. Other paths or error forms become `unknown`. Tool
+identifiers, submitted values, model prose and raw validator messages are
+not retained. Native localhost fixtures exercise three rejected submissions
+followed by success and five rejected submissions followed by exhaustion.
+They verify the production parser and the absence of private-value canaries
+in the diagnostic. The event transport has a separate 1 MiB bound; accepted
+metadata still has the shared 32 KiB limit. These limits do not add a retry.
+
+The historical macOS summary that exhausted native validation remains a
+known failed invocation. Its old JSON-only receipt did not retain individual
+schema rejections, so neither these localhost fixtures nor a later successful
+synthetic Flash request establishes the cause of that historical failure.
+
 The official CLI and environment-variable references were retrieved on
 2026-10-16. They document no default agentic-turn limit and a native
 `MAX_STRUCTURED_OUTPUT_RETRIES` default of five attempts. The adapter sets
