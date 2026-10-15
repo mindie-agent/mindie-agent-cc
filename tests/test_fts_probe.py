@@ -80,6 +80,24 @@ def _missing_contract(directory):
 
 
 class WorkerProbeTests(unittest.TestCase):
+    def test_summary_scratch_contract_is_required_before_install(self):
+        from mindie_knowledge.loop import summary_scratch
+
+        script = setup.probe_script(str(SCRIPTS / "transcript.py"))
+        for name, value, message in (
+            ("create_profile", None, "summary scratch profile API is unavailable"),
+            ("create_profile", lambda: None, "summary scratch profile API is unavailable"),
+            ("ENVIRONMENT_KEY", "", "summary scratch profile API is unavailable"),
+            ("ScratchOwnershipError", ValueError,
+             "summary scratch ownership failure contract is unavailable"),
+        ):
+            with self.subTest(name=name, value=value), \
+                    patch.object(summary_scratch, name, value), \
+                    redirect_stdout(io.StringIO()) as output:
+                exec(script, {})
+            self.assertIn(message, output.getvalue())
+            self.assertTrue(output.getvalue().startswith("MISSING:"))
+
     def test_service_launch_apis_are_required_before_install(self):
         from mindie_knowledge.loop import cli, service_context
 

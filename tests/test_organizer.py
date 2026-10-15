@@ -248,6 +248,49 @@ class WorkerEnvelopeTests(unittest.TestCase):
             for call in captured:
                 organizer.shutil.rmtree(call["cwd"], ignore_errors=True)
 
+    def test_direct_worker_removes_its_profile_after_known_result(self):
+        payload = make_payload()
+        captured = []
+        value = self.execute(payload, native_envelope(metadata_for(payload)), captured=captured)
+        self.assertEqual(value["status"], "returned")
+        self.assertTrue(value["usage_known"])
+        self.assertFalse(value["cleanup_failed"])
+        self.assertFalse(Path(captured[0]["cwd"]).exists())
+
+    def test_managed_worker_leaves_profile_for_its_tree_owner(self):
+        payload = make_payload()
+        captured = []
+        with tempfile.TemporaryDirectory() as tmp:
+            profile = Path(tmp) / "profile"
+            profile.mkdir()
+            with patch.object(organizer, "create_profile", return_value=(str(profile), True)), \
+                    patch.object(organizer.shutil, "rmtree") as remove:
+                value = self.execute(payload, native_envelope(metadata_for(payload)), captured=captured)
+            remove.assert_not_called()
+            self.assertEqual(Path(captured[0]["cwd"]), profile)
+            self.assertTrue((profile / "claude-config").is_dir())
+            self.assertTrue((profile / "empty-mcp.json").is_file())
+        self.assertEqual(value["status"], "returned")
+        self.assertEqual(value["result"], metadata_for(payload))
+        self.assertTrue(value["usage_known"])
+        self.assertEqual(value["model_calls"], 1)
+        self.assertFalse(value["cleanup_failed"])
+        summarizer.validate_outcome(value, payload)
+
+    def test_invalid_scratch_ownership_fails_before_native_start(self):
+        payload = make_payload()
+        captured = []
+        with patch.object(organizer, "create_profile",
+                          side_effect=organizer.ScratchOwnershipError("fixture ownership")):
+            value = self.execute(payload, native_envelope(metadata_for(payload)), captured=captured)
+        self.assertEqual(captured, [])
+        self.assertEqual(value["status"], "failed")
+        self.assertEqual(value["error"], "configuration")
+        self.assertEqual(value["error_reason"], "configuration_invalid")
+        self.assertEqual(value["model_calls"], 0)
+        self.assertEqual(value["billing_status"], "not_called")
+        summarizer.validate_outcome(value, payload)
+
     def test_nonzero_native_exit_is_uncertain_and_not_retried(self):
         payload = make_payload()
         value = self.execute(payload, exc=RuntimeError("command failed (7)"))
@@ -351,6 +394,7 @@ class WorkerEnvelopeTests(unittest.TestCase):
         secret = "fixture-secret-value"
         env = dict(MODEL_ENV, ANTHROPIC_AUTH_TOKEN=secret,
                    MINDIE_MAINTENANCE_GROUP="1", MINDIE_MAINTENANCE_OWNER="424242")
+        env[organizer.SUMMARY_SCRATCH_ENV] = "internal-owner-declaration"
         value = self.execute(payload, native_envelope(metadata_for(payload)),
                              env=env, captured=captured)
         self.assertEqual(value["status"], "returned")
@@ -377,6 +421,7 @@ class WorkerEnvelopeTests(unittest.TestCase):
         self.assertEqual(child_env.get("MAX_THINKING_TOKENS"), "0")
         self.assertNotIn("MINDIE_MAINTENANCE_GROUP", child_env)
         self.assertNotIn("MINDIE_MAINTENANCE_OWNER", child_env)
+        self.assertNotIn(organizer.SUMMARY_SCRATCH_ENV, child_env)
         self.assertNotEqual(child_env.get("CLAUDE_CONFIG_DIR"), "")
 
     def test_second_model_call_is_rejected(self):
@@ -406,7 +451,7 @@ class WorkerProcessTests(unittest.TestCase):
 
     def test_identity_requires_a_configured_profile(self):
         with tempfile.TemporaryDirectory() as tmp:
-            env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
+            env = dict(os.environ)
             env["MINDIE_CC_CONFIG"] = str(Path(tmp) / "missing.json")
             proc = self.run_worker(env=env, args=["--identity"])
             self.assertEqual(proc.returncode, AGENT_ERROR_EXIT_CODES["configuration"])
@@ -441,7 +486,7 @@ class WorkerNativeProcessTests(unittest.TestCase):
         Path(config).write_text(json.dumps(adapter, indent=2) + "\n", encoding="utf-8")
         return config
 
-    def _fake_claude(self, root, tail=""):
+    def _fake_claude(self, root, tail="", before_result=""):
         fake = Path(root) / "fake-claude"
         fake.write_text(
             "#!" + sys.executable + "\n"
@@ -450,7 +495,8 @@ class WorkerNativeProcessTests(unittest.TestCase):
             "ids = list(dict.fromkeys(re.findall(r'[0-9a-f]{64}', prompt)))\n"
             "metadata = dict(blocks=[dict(block_id=i, title='T', summary='S') for i in ids],\n"
             "                navigation=dict(title='N', summary='NS'))\n"
-            "print(json.dumps(dict(type='result', subtype='success', is_error=False, num_turns=1,\n"
+            + before_result
+            + "print(json.dumps(dict(type='result', subtype='success', is_error=False, num_turns=1,\n"
             "      result='', structured_output=metadata,\n"
             "      usage=dict(input_tokens=10, cache_creation_input_tokens=3,\n"
             "                 cache_read_input_tokens=2, output_tokens=5))), flush=True)\n"
@@ -460,27 +506,57 @@ class WorkerNativeProcessTests(unittest.TestCase):
         fake.chmod(0o700)
         return fake
 
-    def test_envelope_delivery_and_descendant_reaping(self):
+    def test_managed_profile_outlives_result_until_descendant_cleanup(self):
         with tempfile.TemporaryDirectory() as tmp:
             config = self._profile(tmp)
-            late = Path(tmp) / "descendant-survived"
-            inner = "import time;time.sleep(3);open(" + repr(str(late)) + ", 'w').write('late')"
-            tail = (
-                "import subprocess\n"
-                "subprocess.Popen([sys.executable, '-c', " + repr(inner) + "])\n"
-                "time.sleep(30)\n"
+            info = Path(tmp) / "writer-info.json"
+            inner = (
+                "import os, pathlib, time\n"
+                "profile = pathlib.Path.cwd()\n"
+                "(profile / 'writer-ready').write_text(str(os.getpid()))\n"
+                "while True:\n"
+                "    (profile / 'writer-active').write_text(str(time.monotonic()))\n"
+                "    if (profile / 'result-saved').exists():\n"
+                "        (profile / 'writer-ack').write_text('observed saved result')\n"
+                "    time.sleep(0.01)\n"
             )
-            fake = self._fake_claude(tmp, tail)
+            before_result = (
+                "import os, pathlib, subprocess\n"
+                "writer = subprocess.Popen([sys.executable, '-c', " + repr(inner) + "])\n"
+                "profile = pathlib.Path.cwd()\n"
+                "deadline = time.monotonic() + 5\n"
+                "while not (profile / 'writer-ready').exists():\n"
+                "    if writer.poll() is not None or time.monotonic() > deadline:\n"
+                "        raise RuntimeError('fixture writer did not become ready')\n"
+                "    time.sleep(0.01)\n"
+                "pathlib.Path(" + repr(str(info)) + ").write_text(json.dumps(dict(\n"
+                "    pid=writer.pid, profile=str(profile), group=os.getpgrp())))\n"
+            )
+            fake = self._fake_claude(tmp, "time.sleep(30)\n", before_result)
             env = dict(MINDIE_CC_CONFIG=str(config), MINDIE_CC_BIN=str(fake))
             with patch.dict(os.environ, env):
                 payload = make_payload()
             saved = []
             cleanup = {}
+
+            def save(line):
+                saved.append(json.loads(line))
+                writer = json.loads(info.read_text(encoding="utf-8"))
+                profile = Path(writer["profile"])
+                self.assertTrue((profile / "claude-config").is_dir())
+                self.assertEqual(os.getpgid(writer["pid"]), writer["group"])
+                (profile / "result-saved").touch()
+                deadline = time.monotonic() + 3
+                while not (profile / "writer-ack").exists() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertTrue((profile / "writer-ack").exists(),
+                                "descendant must still write when the result is saved")
+
             started = time.monotonic()
             with patch.dict(os.environ, env):
                 raw = bounded_run([sys.executable, str(ORGANIZER)], json.dumps(payload),
                                   timeout=None, max_output=summarizer.MAX_RESPONSE_BYTES * 3,
-                                  on_result=lambda line: saved.append(json.loads(line)),
+                                  on_result=save,
                                   cleanup_receipt=cleanup)
             value = json.loads(raw)
             self.assertLess(time.monotonic() - started, 10)
@@ -492,10 +568,16 @@ class WorkerNativeProcessTests(unittest.TestCase):
             self.assertFalse(value["cleanup_failed"])
             self.assertFalse(cleanup.get("cleanup_failed", False))
             summarizer.validate_outcome(value, payload)
-            time.sleep(3.5)
-            self.assertFalse(late.exists())
+            writer = json.loads(info.read_text(encoding="utf-8"))
+            self.assertFalse(Path(writer["profile"]).exists())
+            self.assertFalse(Path(writer["profile"]).parent.exists())
+            state = subprocess.run(
+                ["ps", "-o", "stat=", "-p", str(writer["pid"])],
+                capture_output=True, text=True, check=False,
+            ).stdout.strip()
+            self.assertTrue(not state or state.startswith("Z"), state)
 
-    def test_owner_death_prevents_the_native_call(self):
+    def test_incomplete_managed_ownership_prevents_the_native_call(self):
         with tempfile.TemporaryDirectory() as tmp:
             config = self._profile(tmp)
             marker = Path(tmp) / "native-started"
@@ -503,8 +585,8 @@ class WorkerNativeProcessTests(unittest.TestCase):
             env = dict(
                 MINDIE_CC_CONFIG=str(config),
                 MINDIE_CC_BIN=str(fake),
-                # A surviving owner pid different from the worker's parent: the
-                # worker must refuse to start the native call.
+                # A maintenance declaration alone cannot transfer profile
+                # cleanup to an owner without the complete shared protocol.
                 MINDIE_MAINTENANCE_GROUP="1",
                 MINDIE_MAINTENANCE_OWNER="1",
             )
@@ -514,7 +596,8 @@ class WorkerNativeProcessTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stderr.decode()[:400])
             value = json.loads(proc.stdout.decode())
             self.assertEqual(value["status"], "failed")
-            self.assertEqual(value["error_reason"], "native_owner_exited")
+            self.assertEqual(value["error"], "configuration")
+            self.assertEqual(value["error_reason"], "configuration_invalid")
             self.assertEqual(value["model_calls"], 0)
             self.assertFalse(marker.exists())
             summarizer.validate_outcome(value, payload)

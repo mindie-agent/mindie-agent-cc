@@ -12,6 +12,7 @@ PROBE_MODULES = (
     "mindie_knowledge.loop.cli",
     "mindie_knowledge.loop.documents",
     "mindie_knowledge.loop.activation",
+    "mindie_knowledge.loop.summary_scratch",
     "mindie_knowledge.materials.reme_index",
     "langmem.short_term",
     "remote_dev.mcp.server",
@@ -31,6 +32,9 @@ else:
     try:
         from mindie_knowledge.loop.cli import ensure_service, prepare_service, load_transcript_adapter
         from mindie_knowledge.loop.service_context import validate as validate_service_context
+        from mindie_knowledge.loop.summary_scratch import (
+            ENVIRONMENT_KEY as SUMMARY_SCRATCH_ENV, ScratchOwnershipError, create_profile,
+        )
         from mindie_knowledge.loop.activation import Admission
         from mindie_knowledge.loop.lifecycle import retire_service, restore_service, inspect_retirement
         from mindie_knowledge.materials.summarizer import (
@@ -76,6 +80,14 @@ else:
                            for _, value in positive_bounds)
         if inspect.signature(bounded_run).parameters["timeout"].default is not None:
             missing.append("summary invocation has an implicit execution deadline")
+        if (not callable(create_profile)
+                or "prefix" not in inspect.signature(create_profile).parameters
+                or not isinstance(SUMMARY_SCRATCH_ENV, str) or not SUMMARY_SCRATCH_ENV):
+            missing.append("summary scratch profile API is unavailable")
+        if (not isinstance(ScratchOwnershipError, type)
+                or not issubclass(ScratchOwnershipError, ValueError)
+                or getattr(ScratchOwnershipError, "mindie_category", None) != "configuration"):
+            missing.append("summary scratch ownership failure contract is unavailable")
         if not callable(ReMeIndex) or not callable(summarize_messages):
             missing.append("material indexing dependencies are unavailable")
         if importlib.metadata.version("langmem") != LANGMEM_VERSION:

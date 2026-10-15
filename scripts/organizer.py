@@ -27,7 +27,6 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 
 HERE = Path(__file__).resolve().parent
@@ -38,6 +37,11 @@ import bounded
 from bounded import OutputLimitExceeded, OwnerExited
 import paths
 from mindie_knowledge.loop.process import AGENT_ERROR_EXIT_CODES
+from mindie_knowledge.loop.summary_scratch import (
+    ENVIRONMENT_KEY as SUMMARY_SCRATCH_ENV,
+    ScratchOwnershipError,
+    create_profile,
+)
 from mindie_knowledge.materials import summarizer
 
 MAX_REQUEST_BYTES = 128 * 1024
@@ -208,7 +212,8 @@ def _terminal_result(raw):
 
 def _invoke_native(prompt, schema, env, model, receipt):
     """One bounded native call in an isolated workdir; no retry, no deadline."""
-    isolated = Path(tempfile.mkdtemp(prefix="mindie-cc-summary-"))
+    directory, managed = create_profile(prefix="mindie-cc-summary-")
+    isolated = Path(directory)
     try:
         empty_mcp = isolated / "empty-mcp.json"
         empty_mcp.write_text('{"mcpServers": {}}\n', encoding="utf-8")
@@ -224,6 +229,7 @@ def _invoke_native(prompt, schema, env, model, receipt):
             # not to the native child.
             "MINDIE_MAINTENANCE_GROUP",
             "MINDIE_MAINTENANCE_OWNER",
+            SUMMARY_SCRATCH_ENV,
         ):
             child_env.pop(nested, None)
         child_env["MAX_THINKING_TOKENS"] = "0"
@@ -286,10 +292,12 @@ def _invoke_native(prompt, schema, env, model, receipt):
                 receipt["cleanup_failed"] = True
         _parse_native_result(output, receipt)
     finally:
-        try:
-            shutil.rmtree(isolated)
-        except OSError:
-            receipt["cleanup_failed"] = True
+        # The shared owner must stop all descendants before removing its scratch.
+        if not managed:
+            try:
+                shutil.rmtree(isolated)
+            except OSError:
+                receipt["cleanup_failed"] = True
 
 
 class NativeClaudeModel:
@@ -327,7 +335,7 @@ class NativeClaudeModel:
 
 
 def _category(error):
-    if isinstance(error, (ConfigurationError, NativeStartError, ImportError)):
+    if isinstance(error, (ConfigurationError, ScratchOwnershipError, NativeStartError, ImportError)):
         return "configuration"
     if isinstance(error, (TimeoutError, subprocess.TimeoutExpired)):
         return "deadline"
@@ -346,7 +354,7 @@ def _reason(error, receipt):
         return error.reason
     if type(error) is ConfigurationError:
         return "worker_policy_changed"
-    if isinstance(error, ConfigurationError):
+    if isinstance(error, (ConfigurationError, ScratchOwnershipError)):
         return "configuration_invalid"
     if isinstance(error, NativeStartError):
         return "native_start_failed"
