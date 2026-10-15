@@ -49,13 +49,21 @@ class SetupTests(unittest.TestCase):
     def test_setup_reports_actual_feed_failure_and_keeps_completed_install(self):
         import genstate
 
-        for status, expected in (("synced", 0), ("unavailable", 1),
-                                 ("deferred", 1)):
-            with self.subTest(status=status), tempfile.TemporaryDirectory() as directory:
+        cases = [
+            ("synced", {}, 0, "ok"),
+            ("unavailable", {}, 1, "sync_failed"),
+            ("deferred", {}, 1, "deferred"),
+            ("synced", {"receipt_status": "failed", "commit": "installed"}, 1, "degraded"),
+            ("synced", {"cleanup_status": "failed", "commit": "installed"}, 1, "degraded"),
+            ("partial", {"metadata_committed": True, "commit": "metadata",
+                         "failed_stage": "material-promotion"}, 1, "degraded"),
+        ]
+        for status, extra, expected, aggregate in cases:
+            with self.subTest(status=status, extra=extra), tempfile.TemporaryDirectory() as directory:
                 tmp = Path(directory)
                 config = tmp / "cc.json"
                 rows = [dict(repository="owner/feed", status=status,
-                             detail="fixture sync outcome")]
+                             detail="fixture sync outcome", **extra)]
                 proc = run_setup(
                     sys.executable, "--config", config, "--root", tmp / "data",
                     "--no-schedule", "--no-native-install",
@@ -64,10 +72,7 @@ class SetupTests(unittest.TestCase):
                 self.assertEqual(proc.returncode, expected, proc.stderr + proc.stdout)
                 report = json.loads(proc.stdout)
                 self.assertEqual(report["feed_sync"]["results"], rows)
-                self.assertEqual(report["feed_sync"]["result"], {
-                    "synced": "ok", "unavailable": "sync_failed",
-                    "deferred": "deferred",
-                }[status])
+                self.assertEqual(report["feed_sync"]["result"], aggregate)
                 adapter = json.loads(config.read_text(encoding="utf-8"))
                 self.assertTrue(Path(report["engine_config"]).is_file())
                 self.assertTrue(Path(report["community_config"]).is_file())

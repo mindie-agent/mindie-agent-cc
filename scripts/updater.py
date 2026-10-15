@@ -96,7 +96,7 @@ PIP_ENV = dict(
 
 _FEED_OK = frozenset({"synced", "unchanged"})
 _FEED_PENDING = frozenset({"busy", "deferred"})
-_FEED_ERROR = frozenset({"unavailable", "invalid", "exhausted"})
+_FEED_ERROR = frozenset({"unavailable", "invalid", "exhausted", "partial"})
 _FEED_KNOWN = _FEED_OK | _FEED_PENDING | _FEED_ERROR
 
 
@@ -105,9 +105,10 @@ def fold_feed_results(output):
 
     Empty list is ok. busy/deferred means not completed now, not a failed
     attempt: all-pending folds to deferred. Mix of completed (synced/unchanged)
-    with pending or failed folds to degraded. No completed rows plus at least
-    one unavailable/invalid/exhausted folds to sync_failed. Every original
-    row is preserved. Unknown status or malformed stdout raises.
+    with pending or failed folds to degraded. A committed snapshot whose
+    cleanup/receipt failed, or partially promoted metadata, also stays degraded:
+    its known effect must not be confused with an unstarted operation.
+    Every original row is preserved. Unknown status or malformed stdout raises.
     """
     text = (output or "").strip()
     if not text:
@@ -130,14 +131,20 @@ def fold_feed_results(output):
             raise ValueError("knowledge sync row missing repository")
         if status not in _FEED_KNOWN:
             raise ValueError("knowledge sync unknown status: " + status)
+        for field in ("cleanup_status", "receipt_status"):
+            if field in item and item[field] != "failed":
+                raise ValueError("knowledge sync unknown " + field)
+        if status == "partial" and item.get("metadata_committed") is not True:
+            raise ValueError("partial knowledge sync lacks its committed metadata outcome")
         rows.append(item)
-    good = sum(1 for row in rows if row["status"] in _FEED_OK)
+    good = sum(1 for row in rows if row["status"] in _FEED_OK and not _feed_late_failures(row))
+    committed = any(row["status"] in _FEED_OK or row["status"] == "partial" for row in rows)
     pending = sum(1 for row in rows if row["status"] in _FEED_PENDING)
-    failed = sum(1 for row in rows if row["status"] in _FEED_ERROR)
+    failed = sum(1 for row in rows if row["status"] in _FEED_ERROR or _feed_late_failures(row))
     if not rows or good == len(rows):
         aggregate = "ok"
         summary = None
-    elif good and (pending or failed):
+    elif committed and (pending or failed):
         aggregate = "degraded"
         summary = _feed_error_summary(rows)
     elif failed:
@@ -152,13 +159,19 @@ def fold_feed_results(output):
     return aggregate, rows, summary
 
 
+def _feed_late_failures(row):
+    return [field for field in ("cleanup_status", "receipt_status") if row.get(field) == "failed"]
+
+
 def _feed_error_summary(rows):
     parts = []
     for row in rows:
-        if row["status"] in _FEED_OK:
+        late = _feed_late_failures(row)
+        if row["status"] in _FEED_OK and not late:
             continue
         detail = row.get("detail") or row.get("cause") or ""
-        parts.append(f"{row['repository']}:{row['status']}:{str(detail)[:80]}")
+        observed = row["status"] + ("+" + "+".join(late) + "=failed" if late else "")
+        parts.append(f"{row['repository']}:{observed}:{str(detail)[:80]}")
     return "; ".join(parts)[:240]
 
 

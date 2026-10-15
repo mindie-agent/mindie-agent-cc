@@ -74,8 +74,57 @@ class FoldTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 updater.fold_feed_results(raw)
 
+    def test_committed_snapshot_cleanup_or_receipt_failure_is_not_success(self):
+        for field in ("cleanup_status", "receipt_status"):
+            with self.subTest(field=field):
+                payload = [_row("a", "synced", commit="known-installed", **{field: "failed"})]
+                aggregate, rows, summary = updater.fold_feed_results(json.dumps(payload))
+                self.assertEqual(aggregate, "degraded")
+                self.assertEqual(rows, payload)
+                self.assertIn(field, summary)
+                self.assertIn("failed", summary)
+
+    def test_partial_promotion_preserves_committed_effect_and_failed_stage(self):
+        partial = _row("a", "partial", commit="known-metadata",
+                       metadata_committed=True, failed_stage="material-promotion",
+                       detail="metadata committed; file promotion failed")
+        for payload in ([partial], [_row("b", "synced"), partial],
+                        [partial, _row("c", "unavailable")]):
+            with self.subTest(payload=payload):
+                aggregate, rows, summary = updater.fold_feed_results(json.dumps(payload))
+                self.assertEqual(aggregate, "degraded")
+                self.assertEqual(rows, payload)
+                self.assertIn("a:partial", summary)
+
+    def test_unknown_late_status_and_incomplete_partial_are_rejected(self):
+        for row in (
+            _row("a", "synced", receipt_status="mystery"),
+            _row("a", "synced", cleanup_status=False),
+            _row("a", "partial", metadata_committed=False),
+            _row("a", "partial"),
+        ):
+            with self.subTest(row=row), self.assertRaises(ValueError):
+                updater.fold_feed_results(json.dumps([row]))
+
 
 class SetupFeedSyncTests(unittest.TestCase):
+    def test_committed_failures_preserve_rows_and_do_not_replay(self):
+        import setup
+
+        for row in (
+            _row("a", "synced", commit="known-installed", cleanup_status="failed"),
+            _row("a", "synced", commit="known-installed", receipt_status="failed"),
+            _row("a", "partial", commit="known-metadata", metadata_committed=True,
+                 failed_stage="material-promotion"),
+        ):
+            with self.subTest(row=row), patch.object(setup, "run",
+                                                     return_value=json.dumps([row])) as runner:
+                result = setup.sync_public_feed("python", Path("engine.json"))
+            self.assertEqual(result["result"], "degraded")
+            self.assertEqual(result["results"], [row])
+            self.assertTrue(result["error"])
+            runner.assert_called_once()
+
     def test_sync_has_no_outer_deadline_and_preserves_business_results(self):
         import setup
 
