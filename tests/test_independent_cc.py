@@ -43,6 +43,23 @@ _ENV_KEYS = (
 
 def _service_pids(root: Path) -> list[int]:
     needle = str(root)
+    own = {os.getpid(), os.getppid()}
+    if os.name == "nt":
+        command = (
+            "$ErrorActionPreference='Stop'; "
+            "Get-CimInstance Win32_Process -Filter \"Name LIKE 'python%'\" | "
+            "Where-Object { $_.CommandLine -and "
+            "$_.CommandLine.Contains($env:MINDIE_TEST_SERVICE_ROOT) -and "
+            "$_.CommandLine.Contains('mindie_knowledge.loop.cli') } | "
+            "ForEach-Object { $_.ProcessId }"
+        )
+        listing = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
+            capture_output=True, text=True, timeout=15, check=True,
+            env=dict(os.environ, MINDIE_TEST_SERVICE_ROOT=needle),
+        )
+        return [int(line) for line in listing.stdout.splitlines()
+                if line.strip().isdigit() and int(line) not in own]
     found = []
     listing = subprocess.run(
         ["ps", "-ax", "-o", "pid=,command="],
@@ -51,7 +68,6 @@ def _service_pids(root: Path) -> list[int]:
         timeout=5,
         check=False,
     )
-    own = {os.getpid(), os.getppid()}
     for raw in listing.stdout.splitlines():
         line = raw.strip()
         if needle not in line or "mindie_knowledge.loop.cli" not in line:
@@ -181,13 +197,15 @@ class LaneCase(unittest.TestCase):
             sys.path.insert(0, tests)
 
     def tearDown(self):
-        reap_services(self.tmp)
-        shutil.rmtree(self.tmp, ignore_errors=True)
-        for key, value in self._saved_env.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
+        try:
+            reap_services(self.tmp)
+        finally:
+            shutil.rmtree(self.tmp, ignore_errors=True)
+            for key, value in self._saved_env.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
 
     def _env(self, config: Path) -> dict:
         env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
@@ -358,7 +376,8 @@ class SetupIdentityTests(LaneCase):
         """Make the isolated venv import the interpreter's already-installed deps.
 
         A venv created from this interpreter does not see that interpreter's
-        site-packages. A path file points at them without copying metadata.
+        site-packages. Process its .pth files as well as adding the directory:
+        Windows pywin32 needs its bootstrap and extension-module paths.
         """
         code = (
             "import sysconfig\n"
@@ -400,7 +419,9 @@ class SetupIdentityTests(LaneCase):
                 sources.append(candidate)
         destination = Path(child.stdout.splitlines()[0].strip())
         destination.mkdir(parents=True, exist_ok=True)
-        payload = "".join(str(path) + "\n" for path in sources)
+        payload = "import site; " + "; ".join(
+            f"site.addsitedir({str(path)!r})" for path in sources
+        ) + "\n"
         (destination / "official-runtime.pth").write_text(payload, encoding="utf-8")
 
     def _genuine_local_git_python(self, commit, remote_commit):

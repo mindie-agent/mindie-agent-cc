@@ -22,6 +22,7 @@ import sys
 import tempfile
 import time
 import unittest
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
@@ -160,7 +161,7 @@ class StateCompatibilityTests(unittest.TestCase):
             store = Store(root / "data", "vllm-ascend")
             store.close()
             database = state_root(root / "data", "vllm-ascend") / "state-v4.sqlite3"
-            with sqlite3.connect(database) as db:
+            with closing(sqlite3.connect(database)) as db, db:
                 db.execute(
                     "INSERT INTO material_summary_attempts VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                     ("attempt", "task", "batch", "body", "input", "policy", "[]",
@@ -195,7 +196,7 @@ class StateCompatibilityTests(unittest.TestCase):
                                "b" * 40, time.monotonic() + 180,
                                idle, install, lock_timeout=1)
             self.assertEqual(order, ["idle", "prepare", "install"])
-            with sqlite3.connect(database) as db:
+            with closing(sqlite3.connect(database)) as db:
                 self.assertEqual(db.execute("SELECT * FROM material_summary_attempts").fetchall(), before)
             self.assertEqual(job.read_bytes(), before_job)
             self.assertEqual(genstate.read_current(adapter)["sha"], "b" * 40)

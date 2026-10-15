@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 
 from support import explicit_local_candidate_args
@@ -199,7 +200,7 @@ class SetupTests(unittest.TestCase):
             store = Store(data / "cc", "vllm-ascend")
             store.close()
             database = state_root(data / "cc", "vllm-ascend") / "state-v4.sqlite3"
-            with sqlite3.connect(database) as db:
+            with closing(sqlite3.connect(database)) as db, db:
                 db.execute(
                     "INSERT INTO material_summary_attempts VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                     ("attempt", "task", "batch", "body", "input", "policy", "[]",
@@ -222,7 +223,7 @@ class SetupTests(unittest.TestCase):
             self.assertFalse(config.with_name("cc.engine.json").exists())
             self.assertFalse((data / "cc" / "adapter-state" / "update" / "current.json").exists())
             self.assertEqual(community.read_bytes(), community_before)
-            with sqlite3.connect(database) as db:
+            with closing(sqlite3.connect(database)) as db:
                 self.assertEqual(db.execute("SELECT * FROM material_summary_attempts").fetchall(),
                                  attempts_before)
             self.assertEqual(remote.read_bytes(), remote_before)
@@ -236,7 +237,7 @@ class SetupTests(unittest.TestCase):
             generation = Path(report["generation"])
             self.assertTrue((generation / updater.COMPLETE).is_file())
             self.assertTrue((data / "cc" / "adapter-state" / "update" / "current.json").is_file())
-            with sqlite3.connect(database) as db:
+            with closing(sqlite3.connect(database)) as db:
                 self.assertEqual(db.execute("SELECT * FROM material_summary_attempts").fetchall(),
                                  attempts_before)
             self.assertEqual(remote.read_bytes(), remote_before)

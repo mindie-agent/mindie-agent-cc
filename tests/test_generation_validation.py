@@ -73,6 +73,7 @@ class PreparedGenerationTests(unittest.TestCase):
         })
         environment.start()
         self.addCleanup(environment.stop)
+        self.addCleanup(self._close_diagnostics)
         self.source = self.root / "source"
         updater.snapshot_source(ROOT, self.source)
         scripts = self.source / "scripts"
@@ -97,6 +98,17 @@ class PreparedGenerationTests(unittest.TestCase):
         venv_python = patch.object(updater, "_venv_python", return_value=CURRENT)
         venv_python.start()
         self.addCleanup(venv_python.stop)
+
+    def _close_diagnostics(self):
+        from mindie_diagnostics import logging
+
+        # Negative checks use the real process-cached writer. Release only
+        # this fixture's file handle before TemporaryDirectory removes it.
+        key = ("mindie-agent-cc", str((self.root / "diagnostics").absolute()))
+        with logging._LOCK:
+            recorder = logging._FAILURE_RECORDERS.pop(key, None)
+        if recorder is not None:
+            recorder.close()
 
     def _stage(self):
         def local_git(args, **kwargs):

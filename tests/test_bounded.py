@@ -61,7 +61,7 @@ class BoundedTests(unittest.TestCase):
         with patch.object(bounded, "_kill_tree", side_effect=PermissionError("fixture")):
             with self.assertRaises(bounded.CommandCleanupError) as caught:
                 bounded.run([sys.executable, "-c", "print('completed')"], timeout=3)
-        self.assertEqual(caught.exception.stdout, "completed\n")
+        self.assertEqual(caught.exception.stdout, "completed" + os.linesep)
         self.assertTrue(caught.exception.operation_completed)
         self.assertEqual(caught.exception.cleanup,
                          [dict(stage="terminate_owned_tree", error_type="PermissionError")])
@@ -72,7 +72,7 @@ class BoundedTests(unittest.TestCase):
         with patch.object(bounded, "_kill_tree", side_effect=PermissionError("fixture")):
             output = bounded.run([sys.executable, "-c", "print('completed')"],
                                  timeout=3, receipt=receipt)
-        self.assertEqual(output, "completed\n")
+        self.assertEqual(output, "completed" + os.linesep)
         self.assertTrue(receipt["cleanup_failed"])
         self.assertEqual(receipt["cleanup"][0]["stage"], "terminate_owned_tree")
 

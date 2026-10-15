@@ -132,6 +132,11 @@ class WorkerIdentityTests(unittest.TestCase):
 
 
 class WorkerEnvelopeTests(unittest.TestCase):
+    def setUp(self):
+        native = patch.object(organizer, "claude_bin", return_value="fixture-claude")
+        native.start()
+        self.addCleanup(native.stop)
+
     def execute(self, payload, output=None, exc=None, started=True, env=None, captured=None):
         with patch.object(organizer, "native_environment",
                           return_value=dict(env or MODEL_ENV)), \
