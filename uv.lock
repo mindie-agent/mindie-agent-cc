@@ -1800,7 +1800,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "mindie-diagnostics", git = "https://github.com/mindie-agent/diagnostics?rev=10cc3391ed358d7b7e0e1acb99ca5be4d1934b47" },
-    { name = "mindie-knowledge", git = "https://github.com/mindie-agent/knowledge?rev=d2b2f1e539ede70a0aef372871953c95296cdaaf" },
+    { name = "mindie-knowledge", git = "https://github.com/mindie-agent/knowledge?rev=81fb4e222f0cba5cffe50824ffd55b33d312283d" },
     { name = "remote-dev", git = "https://github.com/mindie-agent/remote-dev?rev=077f2b55618aabd264bf7cfc89a0280abf753ef7" },
 ]
 
@@ -1818,7 +1818,7 @@ source = { git = "https://github.com/mindie-agent/diagnostics?rev=10cc3391ed358d
 [[package]]
 name = "mindie-knowledge"
 version = "0.11.0"
-source = { git = "https://github.com/mindie-agent/knowledge?rev=d2b2f1e539ede70a0aef372871953c95296cdaaf#d2b2f1e539ede70a0aef372871953c95296cdaaf" }
+source = { git = "https://github.com/mindie-agent/knowledge?rev=81fb4e222f0cba5cffe50824ffd55b33d312283d#81fb4e222f0cba5cffe50824ffd55b33d312283d" }
 dependencies = [
     { name = "langmem" },
     { name = "mindie-diagnostics" },
