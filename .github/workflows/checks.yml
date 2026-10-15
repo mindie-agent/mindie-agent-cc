@@ -33,6 +33,10 @@ jobs:
         env:
           PIP_RETRIES: '0'
         run: python -m pip install hatchling==1.32.4
+      - name: Install the component test runner
+        env:
+          PIP_RETRIES: '0'
+        run: python -m pip install pytest==9.1.1
       - name: Read the declared knowledge commit
         id: pins
         shell: python
@@ -59,4 +63,4 @@ jobs:
           # Frozen peer scripts vendored at tests/fixtures/kimi-86de2c3.
           # PROVENANCE.json records the source revision and file hashes.
           MINDIE_TEST_KIMI_SCRIPTS: ${{ github.workspace }}/tests/fixtures/kimi-86de2c3/scripts
-        run: python -m unittest discover -s tests
+        run: python -m pytest -q
