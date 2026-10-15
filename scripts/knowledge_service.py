@@ -20,16 +20,6 @@ def load_transcript(engine_file=None):
     return load_transcript_adapter(engine_config(engine_file))
 
 
-def existing_service(engine_file=None):
-    """Probe a live connection. Never spawn."""
-    from mindie_knowledge.loop.cli import connect, rpc
-
-    config = engine_config(engine_file)
-    connection = connect(config)
-    rpc(connection, "status", timeout=0.4)
-    return connection
-
-
 def ensure_service(engine_file=None):
     from mindie_knowledge.loop.cli import ensure_service as core_ensure
 

@@ -185,7 +185,7 @@ def clamp_remote_args(args):
 
 
 def knowledge_call(name, args, session):
-    from knowledge_service import ensure_service, existing_service
+    from knowledge_service import ensure_service
     from mindie_knowledge.loop.cli import rpc
     from paths import engine_config_path
 
@@ -199,10 +199,9 @@ def knowledge_call(name, args, session):
     # Identity comes from the consumed native toolUseId bind. Public reads
     # use the native tool binding and do not require a capture lease.
     method = name.removeprefix("knowledge_")
-    try:
-        connection = existing_service(engine_config_path())
-    except (OSError, ValueError, RuntimeError):
-        connection = ensure_service(engine_config_path())
+    # Core's ready fast path verifies exact configuration, retirement and
+    # worker health before reusing the authenticated connection.
+    connection = ensure_service(engine_config_path())
     return rpc(
         connection,
         method,

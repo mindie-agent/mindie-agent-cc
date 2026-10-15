@@ -35,6 +35,15 @@ Code imports only supported provider/model/effort values from that profile's
 user settings into its isolated organizer; it does not import hooks, tools,
 MCP configuration or project settings. Secret values never enter updater status.
 
+Knowledge MCP requests use the shared core's ready-service path. Reuse requires
+the selected engine's exact configuration fingerprint, an active configuration
+and a healthy worker. A reachable endpoint in the same data domain is
+insufficient: it may belong to another generation or a retired configuration.
+The adapter does not substitute that endpoint or start a second owner when the
+core reports an unknown or failed owner. A matching healthy service is reused
+without another startup. These checks do not impose a deadline on the subsequent
+knowledge query or body read.
+
 ## Validation boundary
 
 Real local-daemon acceptance covers live, absent, revoked and rollback paths

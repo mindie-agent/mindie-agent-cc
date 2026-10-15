@@ -127,12 +127,10 @@ class KnowledgePageTests(unittest.TestCase):
         for invalid in ({}, {"query": "x", "continuation": "opaque-next-page"},
                         {"continuation": "malformed"}, {"query": "x", "limit": True}):
             with self.subTest(invalid=invalid), \
-                    patch("knowledge_service.existing_service") as existing, \
                     patch("knowledge_service.ensure_service") as start, \
                     patch("mindie_knowledge.loop.cli.rpc") as rpc:
                 with self.assertRaises(ValueError):
                     mcp_server.knowledge_call("knowledge_query", invalid, SESSION)
-                existing.assert_not_called()
                 start.assert_not_called()
                 rpc.assert_not_called()
 
@@ -168,7 +166,7 @@ class KnowledgePageTests(unittest.TestCase):
             worker.start()
             connection = {"url": f"http://127.0.0.1:{server.server_port}", "token": "synthetic"}
             try:
-                with patch("knowledge_service.existing_service", return_value=connection):
+                with patch("knowledge_service.ensure_service", return_value=connection):
                     self.assertEqual(
                         mcp_server.knowledge_call("knowledge_query", {"query": "synthetic"}, SESSION),
                         result,
@@ -177,6 +175,69 @@ class KnowledgePageTests(unittest.TestCase):
                 worker.join(timeout=10)
             self.assertFalse(worker.is_alive())
         self.assertEqual(len(calls), 1)
+
+    def test_mcp_reuse_keeps_core_configuration_retirement_and_health_gates(self):
+        import mcp_server
+        from unittest.mock import patch
+        from mindie_knowledge.loop import cli, lifecycle
+        from mindie_knowledge.loop.locks import StartLock
+
+        engine_path = self.tmp / "cc.engine.json"
+        config = cli.config_at(engine_path)
+        fingerprint = lifecycle.config_fingerprint(engine_path, config)
+        connection_path = cli.connection_path(config)
+        lock = StartLock(connection_path.with_name("consumer.lock"))
+        lock.acquire()
+        try:
+            for case in ("foreign-config", "retired", "worker-dead", "ready"):
+                with self.subTest(case=case):
+                    connection = dict(
+                        domain=config["domain"], url="http://127.0.0.1:1",
+                        token="synthetic-unused",
+                        config_fingerprint="0" * 64 if case == "foreign-config" else fingerprint,
+                    )
+                    connection_path.write_text(json.dumps(connection), encoding="utf-8")
+                    marker = engine_path.with_name(engine_path.name + ".retired")
+                    if case == "retired":
+                        marker.write_text(json.dumps(dict(
+                            schema=lifecycle.SCHEMA, status="retired",
+                            operation_id="1" * 32, config_fingerprint=fingerprint,
+                        )), encoding="utf-8")
+                    result = {"results": [{"ref": "synthetic"}]}
+                    calls = []
+
+                    def rpc(selected, method, *args, **kwargs):
+                        calls.append(method)
+                        self.assertEqual(selected, connection)
+                        if method == "status":
+                            return dict(worker_alive=case != "worker-dead",
+                                        worker_failed=case == "worker-dead",
+                                        admission_frozen=False)
+                        self.assertEqual(method, "query")
+                        return result
+
+                    try:
+                        with patch("mindie_knowledge.loop.transport.rpc", side_effect=rpc), \
+                                patch("mindie_knowledge.loop.cli.rpc", side_effect=rpc), \
+                                patch("mindie_knowledge.loop.process.spawn_service") as spawn, \
+                                patch("mindie_knowledge.loop.windows_service.request_start") as start:
+                            if case == "ready":
+                                self.assertEqual(mcp_server.knowledge_call(
+                                    "knowledge_query", {"query": "synthetic"}, SESSION), result)
+                                self.assertEqual(calls, ["status", "query"])
+                            else:
+                                expected = lifecycle.ServiceRetired if case == "retired" else RuntimeError
+                                with self.assertRaises(expected):
+                                    mcp_server.knowledge_call(
+                                        "knowledge_query", {"query": "synthetic"}, SESSION)
+                                self.assertEqual(calls, ["status"] if case == "worker-dead" else [])
+                            spawn.assert_not_called()
+                            start.assert_not_called()
+                    finally:
+                        if marker.exists():
+                            marker.unlink()
+        finally:
+            lock.release()
 
     def test_explain_without_host_bind_fails_closed(self):
         message = {
