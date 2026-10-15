@@ -436,10 +436,11 @@ def probe_runtime(python: Path, deadline: float, generation: Path, *, revision=N
     import product_contract
 
     def command(argv, timeout=None, max_output=65536, on_failure=None):
+        remaining = _remaining(deadline, RESERVE)
         try:
             return bounded_run(
                 [str(item) for item in argv], "",
-                timeout=None if timeout is None else min(timeout, _remaining(deadline, RESERVE)),
+                timeout=remaining if timeout is None else min(timeout, remaining),
                 max_output=max_output,
             )
         except Exception as exc:

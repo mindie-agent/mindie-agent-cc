@@ -86,6 +86,28 @@ class UpdaterTests(unittest.TestCase):
                 self.updater.probe_runtime(Path(sys.executable), time.monotonic() + 180, SCRIPTS.parent)
         self.assertEqual(seen, dict(output=failure.mindie_output, code=1))
 
+    def test_candidate_validator_uses_remaining_check_budget(self):
+        import product_contract
+
+        expected = dict(product_contract.identity(SCRIPTS.parent), status="validated")
+        deadline = 100 + self.updater.RESERVE + 37
+        with patch.object(self.updater.time, "monotonic", return_value=100), \
+                patch.object(self.updater, "bounded_run",
+                             return_value=json.dumps(expected)) as run:
+            actual = self.updater.probe_runtime(Path(sys.executable), deadline, SCRIPTS.parent)
+        self.assertEqual(actual, expected)
+        run.assert_called_once()
+        self.assertEqual(run.call_args.kwargs["timeout"], 37)
+        self.assertEqual(run.call_args.kwargs["max_output"], 65536)
+
+    def test_candidate_validator_does_not_start_after_check_budget_is_exhausted(self):
+        deadline = 100 + self.updater.RESERVE + 4
+        with patch.object(self.updater.time, "monotonic", return_value=100), \
+                patch.object(self.updater, "bounded_run") as run:
+            with self.assertRaisesRegex(self.updater.CheckFailed, "whole-check deadline exhausted"):
+                self.updater.probe_runtime(Path(sys.executable), deadline, SCRIPTS.parent)
+        run.assert_not_called()
+
     def test_host_package_stamps_unique_version(self):
         adapter = json.loads(self.config.read_text(encoding="utf-8"))
         source = Path(__file__).resolve().parents[1]
