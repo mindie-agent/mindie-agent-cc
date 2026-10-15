@@ -125,13 +125,23 @@ def sync_public_feed(python, engine_config):
     return feed
 
 
-def session_start():
+def session_start(event=None):
     """Run session-triggered maintenance, with no plugin-version scheduler."""
     from diagnostic_support import reporting_config_path
     from install_state import atomic_write
     from paths import state_dir
     from paths import engine_config_path
 
+    capture = {"status": "inert"}
+    if event is not None:
+        try:
+            from bridge import associate_fork
+            capture = associate_fork(event)
+        except Exception as exc:
+            from diagnostic_support import failure
+            failure("capture.session_start", stage="association", category="unavailable",
+                    exception=exc, reportable=False)
+            capture = {"status": "unavailable", "error_type": type(exc).__name__}
     feed = sync_public_feed(sys.executable, engine_config_path())
     process = {}
     try:
@@ -149,8 +159,10 @@ def session_start():
         reporting = dict(status="unavailable", error_type=type(exc).__name__, process=process)
     ready = (feed["result"] == "ok" and not feed.get("error")
              and reporting.get("status") == "ok"
-             and not reporting.get("operation_failed"))
-    result = dict(status="ready" if ready else "incomplete", feed=feed, diagnostics=reporting)
+             and not reporting.get("operation_failed")
+             and capture["status"] != "unavailable")
+    result = dict(status="ready" if ready else "incomplete", feed=feed,
+                  diagnostics=reporting, capture=capture)
     try:
         atomic_write(state_dir() / "session-maintenance.json", result)
     except OSError as exc:
@@ -159,4 +171,6 @@ def session_start():
 
 
 if __name__ == "__main__":
-    print(json.dumps(session_start()))
+    from identity import parse_hook
+    raw = sys.stdin.buffer.read()
+    print(json.dumps(session_start(parse_hook(raw) if raw else None)))

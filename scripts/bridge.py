@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -165,6 +166,52 @@ def _stop_failure(stage, category, exc=None):
     return _stop_output(failed=True)
 
 
+def associate_fork(event):
+    """Bind a native fork before it copies parent history into its own file.
+
+    This is the host's SessionStart event, not model-provided tool arguments.
+    The existing Admission stores scope and the pre-prompt boundary; no
+    lineage table or parent transcript lookup is needed.
+    """
+    if event.get("source") != "fork":
+        return {"status": "inert"}
+    if event.get("hook_event_name") != "SessionStart":
+        raise ValueError("fork association requires native SessionStart")
+    if is_subagent(event):
+        return {"status": "inert"}
+    import sharing
+    from admission import gate
+    from transcript import capture_path
+
+    settings = sharing.load()
+    if not settings.allows_capture():
+        if settings.capture_block_kind() == "fault":
+            raise ValueError("capture authority is unavailable")
+        return {"status": "inert"}
+    session = require_session(event.get("session_id"))
+    capture_path(event.get("transcript_path"), session, must_exist=False)
+    scope = event.get("cwd")
+    if not isinstance(scope, str) or not os.path.isabs(scope):
+        raise ValueError("native fork project scope is missing")
+    scope = str(Path(scope).resolve())
+    if not settings.in_scope(scope):
+        return {"status": "inert"}
+    admission = gate()
+    inspected = admission.inspect(session)
+    if inspected["status"] == "unavailable":
+        raise ValueError("capture admission is unavailable")
+    if inspected["status"] == "inactive":
+        return {"status": "inert"}
+    if inspected["status"] == "active":
+        lease = admission.check(session)
+        if lease["project_root"] != scope:
+            raise ValueError("native fork identity already has another scope")
+    else:
+        admission.associate(session, project_root=scope,
+                            not_before=max(settings.enabled_at or 0, time.time()))
+    return {"status": "associated"}
+
+
 def handle_stop():
     attempted = False
     failed = False
@@ -201,17 +248,6 @@ def handle_stop():
         transcript = event.get("transcript_path")
         if not isinstance(transcript, str) or not os.path.isabs(transcript):
             return _stop_failure("material", "no_capturable_material")
-        # Scope and the capture boundary come from the task's own transcript
-        # artifact, never from the hook arguments.
-        from transcript import capture_source
-
-        try:
-            source = capture_source(transcript, session)
-        except (OSError, ValueError) as exc:
-            return _stop_failure("material", "source_unavailable", exc)
-        if not settings.in_scope(source["project_root"]):
-            _print({})
-            return 0
         from admission import associate, gate
 
         admission = gate()
@@ -223,13 +259,22 @@ def handle_stop():
             # reactivates the task.
             _print({})
             return 0
+        lease = admission.check(session) if inspected["status"] == "active" else None
+        from transcript import capture_source
+
+        try:
+            source = capture_source(transcript, session, binding=lease)
+        except (OSError, ValueError) as exc:
+            return _stop_failure("material", "source_unavailable", exc)
+        if not settings.in_scope(source["project_root"]):
+            _print({})
+            return 0
         attempted = True
-        boundary = max(settings.enabled_at or 0, source["created_at"])
-        lease = associate(
-            session,
-            project_root=source["project_root"],
-            not_before=boundary,
-        )
+        if lease is None:
+            lease = associate(
+                session, project_root=source["project_root"],
+                not_before=max(settings.enabled_at or 0, source["created_at"]),
+            )
         forwarded = dict(
             hook_event_name="Stop",
             identity_kind="turn",

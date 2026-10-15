@@ -196,6 +196,8 @@ def test_initialize_reports_cached_installed_distribution_version():
 def test_incomplete_first_start_does_not_claim_an_available_old_owner(capsys):
     import mindie_launch
     with patch("harness.require_binding_support", return_value="2.1.269"), \
+            patch.object(mindie_launch, "_read_hook_stdin",
+                         return_value=b'{"hook_event_name":"SessionStart","source":"startup"}'), \
             patch.object(mindie_launch, "installed_binding", return_value=nullcontext({
             "python": sys.executable, "runtime_scripts": str(SCRIPTS),
             "adapter_config": "fixture",
@@ -204,6 +206,32 @@ def test_incomplete_first_start_does_not_claim_an_available_old_owner(capsys):
         assert mindie_launch.main(["hook", "session-start"]) == 0
     message = json.loads(capsys.readouterr().out)["systemMessage"]
     assert message == "MindIE startup maintenance is incomplete."
+
+
+def test_session_start_forwards_native_fork_payload_to_selected_maintenance(capsys):
+    import mindie_launch
+    payload = b'{"hook_event_name":"SessionStart","source":"fork","session_id":"native-child"}'
+    with patch("harness.require_binding_support", return_value="2.1.299"), \
+            patch.object(mindie_launch, "_read_hook_stdin", return_value=payload), \
+            patch.object(mindie_launch, "installed_binding", return_value=nullcontext({
+                "python": sys.executable, "runtime_scripts": str(SCRIPTS),
+                "adapter_config": "fixture",
+            })), patch.object(mindie_launch.bounded, "run",
+                              return_value='{"status":"ready"}') as runner:
+        assert mindie_launch.main(["hook", "session-start"]) == 0
+    assert runner.call_args.args[1] == payload
+    assert Path(runner.call_args.args[0][-1]).name == "maintenance.py"
+    assert json.loads(capsys.readouterr().out) == {}
+
+
+def test_missing_session_start_payload_warns_without_reporting_ready(capsys):
+    import mindie_launch
+    with patch.object(mindie_launch, "_read_hook_stdin", return_value=b""), \
+            patch.object(mindie_launch, "_record_hook"), \
+            patch.object(mindie_launch.bounded, "run") as runner:
+        assert mindie_launch.main(["hook", "session-start"]) == 0
+    assert set(json.loads(capsys.readouterr().out)) == {"systemMessage"}
+    runner.assert_not_called()
 
 
 def test_each_mcp_request_selects_current_complete_helper_without_old_entry_reselecting(tmp_path):

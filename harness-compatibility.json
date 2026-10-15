@@ -20,6 +20,7 @@
     "plugin.installation-record",
     "session.init-only",
     "hooks.command-payload",
+    "hooks.fork-attribution",
     "hooks.user-warning",
     "mcp.stdio",
     "summary.structured-output",
@@ -236,6 +237,35 @@
       "test_ids": [
         "tests/test_release_update.py::test_native_first_install_policy_preserves_exact_source_and_other_choices",
         "tests/test_release_update.py::test_native_source_declaration_preserves_other_settings_and_explicit_off"
+      ],
+      "evidence_refs": [
+        "docs/harness-interface-evidence.md"
+      ]
+    },
+    "hooks.fork-attribution": {
+      "supported": [
+        {
+          "minimum": "2.1.269",
+          "maximum": "2.1.269",
+          "maximum_inclusive": true,
+          "include_prerelease": false
+        },
+        {
+          "minimum": "2.1.299",
+          "maximum": "2.1.299",
+          "maximum_inclusive": true,
+          "include_prerelease": false
+        }
+      ],
+      "code_paths": [
+        "scripts/bridge.py:associate_fork",
+        "scripts/transcript.py:capture_source",
+        "scripts/maintenance.py:session_start"
+      ],
+      "test_ids": [
+        "tests/test_fork_capture.py::test_fork_start_excludes_large_inherited_history_and_preserves_resume",
+        "tests/test_fork_capture.py::test_active_fork_binding_still_requires_its_native_queue_and_profile",
+        "tests/test_launch_entry.py::test_session_start_forwards_native_fork_payload_to_selected_maintenance"
       ],
       "evidence_refs": [
         "docs/harness-interface-evidence.md"

@@ -46,6 +46,9 @@ def capture_fixture(root):
     transcript = root / "claude" / "projects" / "synthetic" / (session + ".jsonl")
     transcript.parent.mkdir(parents=True)
     transcript.write_text(json.dumps({
+        "type": "queue-operation", "operation": "enqueue",
+        "sessionId": session, "timestamp": "2026-10-15T12:00:00Z",
+    }) + "\n" + json.dumps({
         "type": "system", "sessionId": session, "cwd": str(root / "project"),
         "timestamp": "2026-10-15T12:00:00Z",
     }) + "\n", encoding="utf-8")
@@ -205,9 +208,9 @@ def test_stop_capture_failure_is_a_native_nonblocking_warning(tmp_path, failure)
 def test_stop_outside_scope_and_explicit_off_remain_quiet_during_cutover(tmp_path):
     _, binding, event, env, _, _ = capture_fixture(tmp_path)
     transcript = Path(event["transcript_path"])
-    row = json.loads(transcript.read_text(encoding="utf-8"))
-    row["cwd"] = str(tmp_path / "outside-approved-scope")
-    transcript.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    rows = [json.loads(raw) for raw in transcript.read_text(encoding="utf-8").splitlines()]
+    rows[-1]["cwd"] = str(tmp_path / "outside-approved-scope")
+    transcript.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
     with OperationLock(binding).exclusive():
         raw_stop(event, env)
         community = Path(binding["community_config"])

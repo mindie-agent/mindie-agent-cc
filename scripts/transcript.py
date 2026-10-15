@@ -6,15 +6,17 @@ attachments, system, queue-operation, atis-latch and last-prompt are
 excluded. The caller names exactly one file supplied by a trusted hook.
 
 ``capture_source`` is the Stop path's attribution read: it verifies the named
-file is this native profile's artifact for this task and returns the task's
-scope (record ``cwd``) and creation boundary (its first dated record). Scope
-never comes from a hook argument or a guessed latest session.
+file is this native profile's artifact for this task. Its first native queue
+record supplies the creation boundary. A previously verified Admission supplies
+scope; otherwise only a record at or after that boundary may supply scope.
+Forks rewrite inherited sessionId values, so those alone cannot prove ownership.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import stat as statmod
@@ -45,8 +47,8 @@ SESSION_FILE = re.compile(
     r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\.jsonl\Z"
 )
 
-# Attribution reads only the head of the named file; a task's first public
-# records carry cwd and ISO timestamps within this bound.
+# The native queue header is small even when a fork inherits a large history.
+# Fork scope is established by SessionStart in the existing Admission store.
 SOURCE_HEAD_BYTES = 1024 * 1024
 SOURCE_HEAD_LINES = 64
 
@@ -62,19 +64,15 @@ def native_config_dir():
     return Path(selected or env or Path.home() / ".claude")
 
 
-def capture_source(path, session_id):
-    """Verify the event's native transcript artifact and read its attribution.
-
-    The file must live under the selected profile's ``projects`` directory and
-    name this task. The first record carrying this task's session id supplies
-    the authorized project root (``cwd``) and the task creation boundary
-    (``timestamp``). Anything else fails closed: capture never guesses scope
-    from the hook event, a newest file or a foreign task.
-    """
-    if not isinstance(session_id, str) or not session_id:
+def capture_path(path, session_id, *, must_exist=True):
+    """Validate one exact native artifact, including a not-yet-written fork."""
+    if (not isinstance(session_id, str)
+            or not SESSION_FILE.fullmatch(session_id + ".jsonl")):
         raise ValueError("native session identity is missing")
+    if not isinstance(path, (str, Path)) or not Path(path).is_absolute():
+        raise ValueError("capture transcript must be absolute")
     try:
-        selected = Path(path).resolve(strict=True)
+        selected = Path(path).resolve(strict=must_exist)
     except (OSError, RuntimeError) as exc:
         raise ValueError("capture transcript is unavailable") from exc
     projects = (native_config_dir() / "projects").resolve()
@@ -82,6 +80,19 @@ def capture_source(path, session_id):
         raise ValueError("capture transcript is outside the active native profile")
     if selected.name != session_id + ".jsonl":
         raise ValueError("capture transcript does not name this task")
+    return selected
+
+
+def capture_source(path, session_id, *, binding=None):
+    """Read bounded native attribution, never inherited fork scope.
+
+    The first enqueue is retained across ordinary resume and compaction.
+    Existing Admission bindings retain their original scope and boundary as
+    the transcript grows; the named artifact and queue identity are still
+    verified on every Stop. Without a binding, missing own metadata is an
+    explicit failure rather than permission to adopt inherited parent cwd.
+    """
+    selected = capture_path(path, session_id)
     descriptor = os.open(selected, os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NONBLOCK", 0))
     try:
         info = os.fstat(descriptor)
@@ -94,6 +105,7 @@ def capture_source(path, session_id):
         if descriptor is not None:
             os.close(descriptor)
     lines = head.split(b"\n")[:SOURCE_HEAD_LINES]
+    created = None
     for raw in lines:
         if not raw.strip():
             continue
@@ -108,9 +120,33 @@ def capture_source(path, session_id):
             continue
         if record_session != session_id:
             raise ValueError("capture transcript belongs to another task")
+        if created is None:
+            if record.get("type") != "queue-operation":
+                if to_seconds(record.get("timestamp")) is not None:
+                    raise ValueError("native creation queue must precede dated history")
+                continue
+            if record.get("operation") != "enqueue":
+                raise ValueError("native task creation queue is invalid")
+            created = to_seconds(record.get("timestamp"))
+            if created is None or not math.isfinite(created):
+                raise ValueError("native task creation boundary is unavailable")
+            if binding is not None:
+                scope = binding.get("project_root")
+                boundary = binding.get("activated_at")
+                if (binding.get("session") != session_id
+                        or type(binding.get("enabled")) not in (bool, int)
+                        or binding["enabled"] != 1
+                        or not isinstance(scope, str) or not os.path.isabs(scope)
+                        or type(boundary) not in (int, float)
+                        or not math.isfinite(boundary) or boundary < 0):
+                    raise ValueError("native task binding is invalid")
+                return dict(session_id=session_id, project_root=scope,
+                            created_at=created, transcript_path=str(selected))
+            continue
         cwd = record.get("cwd")
-        created = to_seconds(record.get("timestamp"))
-        if isinstance(cwd, str) and os.path.isabs(cwd) and created is not None:
+        stamp = to_seconds(record.get("timestamp"))
+        if (isinstance(cwd, str) and os.path.isabs(cwd)
+                and stamp is not None and math.isfinite(stamp) and stamp >= created):
             return dict(
                 session_id=session_id,
                 project_root=str(Path(cwd).resolve()),

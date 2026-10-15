@@ -69,3 +69,31 @@ The release review retains the exact native binaries, source hashes, complete
 native events and experiment receipts outside the product tree. The registry
 references this source-controlled summary rather than treating an unavailable
 documentation URL as verified support evidence.
+
+## Fork attribution
+
+Actual native 2.1.269 and 2.1.299 `--resume ID --fork-session` experiments
+reported `SessionStart` with `source: "fork"`, a new `session_id`, its exact
+`transcript_path`, and the native `cwd`. At that event the child artifact did
+not yet exist. The adapter uses this pre-prompt event to establish the
+existing Admission scope and capture boundary. No parent-history scan or
+separate lineage store is involved.
+
+The native child transcript rewrites inherited records' `sessionId` to the
+child identity while preserving their original timestamps and `cwd`. Neither
+the filename nor the first dated `cwd` alone distinguishes inherited content.
+Each tested native child starts with its own queue `enqueue` timestamp before
+the copied dated records. That first queue remained unchanged through two
+ordinary resumes, actual `/compact`, and a subsequent resume on both native
+versions. The parent included a single synthetic assistant record larger than
+1 MiB; the child's first own public record was beyond the attribution head.
+Only localhost fixture responses were used, with no external model requests.
+
+Stop validates the selected profile, named child artifact and first native
+queue on every event, then reuses an already verified Admission without
+moving its boundary or changing its scope. Without an existing binding it
+may use only own dated metadata at or after the first queue. Missing queue
+metadata or unavailable own scope fails visibly; it never falls back to
+inherited parent scope. Attribution reads remain bounded to the first 64
+lines and 1 MiB. Ordinary resume and compaction preserve an established
+binding even when the body grows beyond that read window.

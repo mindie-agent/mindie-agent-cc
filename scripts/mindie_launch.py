@@ -628,13 +628,17 @@ def main(argv=None) -> int:
     kind = argv[0] if argv else ""
     name = argv[1] if len(argv) > 1 else ""
     if kind == "hook" and name == "session-start":
+        event = _read_hook_stdin(time.monotonic() + HOOK_TOTAL)
+        if not event:
+            _record_hook("input", "missing_identity", op="session-start")
+            return _hook_warning()
         try:
             with installed_binding() as binding:
                 from harness import require_binding_support
                 require_binding_support(binding)
                 selected = _runtime(binding)
                 script = Path(selected["scripts"]) / "maintenance.py"
-                raw = bounded.run([selected["python"], str(script)],
+                raw = bounded.run([selected["python"], str(script)], event,
                                   env=_child_env(selected), cwd=str(script.parent))
             result = json.loads(raw)
         except (InstallationUnavailable, LockTimeout):

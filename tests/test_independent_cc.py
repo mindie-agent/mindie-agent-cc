@@ -820,9 +820,12 @@ class StopGateTests(LaneCase):
         transcript = Path(os.environ["CLAUDE_CONFIG_DIR"]) / "projects" / "fixture" / f"{session}.jsonl"
         transcript.parent.mkdir(parents=True, exist_ok=True)
         if not transcript.exists():
-            transcript.write_text(json.dumps(dict(
+            stamp = datetime.now(timezone.utc).isoformat()
+            queue = dict(type="queue-operation", operation="enqueue",
+                         sessionId=session, timestamp=stamp)
+            transcript.write_text(json.dumps(queue) + "\n" + json.dumps(dict(
                 type="assistant", sessionId=session, cwd=str(project),
-                timestamp=datetime.now(timezone.utc).isoformat(),
+                timestamp=stamp,
                 message=dict(role="assistant", content=sentinel),
             )) + "\n", encoding="utf-8")
         payload = {
