@@ -159,6 +159,43 @@ def write_private(path, value, *, replace=False):
         stream.write("\n")
 
 
+def sync_public_feed(python, engine_config):
+    """Preserve core sync outcomes independently of process/cleanup failure."""
+    from updater import fold_feed_results
+
+    receipt = {}
+    try:
+        output = run(
+            [python, "-m", "mindie_knowledge.loop.cli", "sync",
+             "--config", str(engine_config)],
+            "",
+            receipt=receipt,
+        )
+        aggregate, rows, summary = fold_feed_results(output)
+        feed = dict(result=aggregate, results=rows)
+        if summary:
+            feed["error"] = summary
+    except Exception as exc:
+        feed = dict(result="sync_failed",
+                    error=f"{type(exc).__name__}: {str(exc)[:200]}")
+        output = getattr(exc, "mindie_output", getattr(exc, "stdout", ""))
+        if output:
+            try:
+                _, rows, _ = fold_feed_results(output)
+                feed["results"] = rows
+            except ValueError:
+                pass
+    if receipt.get("cleanup_failed"):
+        feed["cleanup_failed"] = True
+        feed["cleanup"] = receipt["cleanup"]
+        feed.setdefault(
+            "error",
+            "sync command completed but owned-process cleanup failed; "
+            "inspect the completed feed results before repeating",
+        )
+    return feed
+
+
 def community_settings(args, parser):
     selected = any(
         getattr(args, key)
@@ -461,15 +498,7 @@ def main():
             native = f"failed ({native_error})"
     feed = dict(result="skipped")
     if not args.no_public_feed:
-        try:
-            output = run(
-                [python, "-m", "mindie_knowledge.loop.cli", "sync", "--config", str(engine_config)],
-                "",
-                timeout=60,
-            )
-            feed = dict(result="ok", detail=output.strip()[:400])
-        except Exception as exc:
-            feed = dict(result="stale", error=f"{type(exc).__name__}: {str(exc)[:200]}")
+        feed = sync_public_feed(python, engine_config)
     scheduled = "skipped"
     if not args.no_schedule:
         try:
@@ -510,7 +539,7 @@ def main():
             if legacy.get(key)
         }
     print(json.dumps(report, indent=2, default=str))
-    if native_error:
+    if native_error or feed["result"] not in {"ok", "skipped"} or feed.get("error"):
         raise SystemExit(1)
 
 

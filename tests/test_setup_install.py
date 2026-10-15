@@ -15,7 +15,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 
-def run_setup(python, *args, source=ROOT, real_product=False, env=None):
+def run_setup(python, *args, source=ROOT, real_product=False, env=None,
+              sync_output=None):
     """Config cases isolate publication fetches only in this test process."""
     scripts = source / "scripts"
     command = [str(python), str(scripts / "setup.py")]
@@ -25,8 +26,18 @@ def run_setup(python, *args, source=ROOT, real_product=False, env=None):
             "import setup,updater,product_contract; "
             "updater.probe_runtime=lambda python,deadline,generation,**kw: "
             "dict(product_contract.identity(generation,kw.get('revision')),status='validated'); "
-            "setup.main()"
         )
+        if sync_output is not None:
+            helper += (
+                "\nreal_run=setup.run\n"
+                "def run(argv, stdin='', **kwargs):\n"
+                "    if argv[1:4] == ['-m','mindie_knowledge.loop.cli','sync']:\n"
+                "        assert kwargs.get('timeout') is None\n"
+                f"        return {sync_output!r}\n"
+                "    return real_run(argv, stdin, **kwargs)\n"
+                "setup.run=run\n"
+            )
+        helper += "setup.main()"
         command = [str(python), "-c", helper, str(scripts)]
     return subprocess.run(
         [*command, "--knowledge-python", str(python), *map(str, args)],
@@ -35,6 +46,36 @@ def run_setup(python, *args, source=ROOT, real_product=False, env=None):
 
 
 class SetupTests(unittest.TestCase):
+    def test_setup_reports_actual_feed_failure_and_keeps_completed_install(self):
+        import genstate
+
+        for status, expected in (("synced", 0), ("unavailable", 1),
+                                 ("deferred", 1)):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as directory:
+                tmp = Path(directory)
+                config = tmp / "cc.json"
+                rows = [dict(repository="owner/feed", status=status,
+                             detail="fixture sync outcome")]
+                proc = run_setup(
+                    sys.executable, "--config", config, "--root", tmp / "data",
+                    "--no-schedule", "--no-native-install",
+                    *explicit_local_candidate_args(), sync_output=json.dumps(rows),
+                )
+                self.assertEqual(proc.returncode, expected, proc.stderr + proc.stdout)
+                report = json.loads(proc.stdout)
+                self.assertEqual(report["feed_sync"]["results"], rows)
+                self.assertEqual(report["feed_sync"]["result"], {
+                    "synced": "ok", "unavailable": "sync_failed",
+                    "deferred": "deferred",
+                }[status])
+                adapter = json.loads(config.read_text(encoding="utf-8"))
+                self.assertTrue(Path(report["engine_config"]).is_file())
+                self.assertTrue(Path(report["community_config"]).is_file())
+                self.assertEqual(genstate.read_current(adapter)["sha"], report["sha"])
+                self.assertTrue(
+                    (Path(report["generation"]) / ".mindie-generation-complete").is_file()
+                )
+
     def test_setup_no_native_no_schedule(self):
         tmp = Path(tempfile.mkdtemp())
         config = tmp / "cc.json"

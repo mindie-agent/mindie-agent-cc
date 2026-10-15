@@ -89,7 +89,6 @@ if getattr(diagnostic_support, "__file__", None) != str(_diagnostic_path):
 HOOK_TOTAL = 1.5
 HOOK_LOCK_BUDGET = 0.3
 CALL_LOCK_BUDGET = 5.0
-CALL_CHILD_BUDGET = 60.0
 # Knowledge stdout only. A legal maximum page measured 817407 bytes.
 KNOWLEDGE_MAX_OUTPUT = 1024 * 1024
 MAX_RPC_ID = 256
@@ -600,7 +599,6 @@ def _dispatch(surface: str, raw: bytes, ident, cancel=None):
             out = bounded.run(
                 [current["python"], str(script), surface, "--once"],
                 payload,
-                timeout=CALL_CHILD_BUDGET,
                 env=_child_env(current),
                 cwd=str(Path(current["generation"])),
                 cancel=cancel,

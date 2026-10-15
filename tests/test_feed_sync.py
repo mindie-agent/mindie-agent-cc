@@ -75,6 +75,65 @@ class FoldTests(unittest.TestCase):
                 updater.fold_feed_results(raw)
 
 
+class SetupFeedSyncTests(unittest.TestCase):
+    def test_sync_has_no_outer_deadline_and_preserves_business_results(self):
+        import setup
+
+        rows = [_row("a", "synced", commit="new"),
+                _row("b", "unavailable", retained_commit="old", detail="gone")]
+        with patch.object(setup, "run", return_value=json.dumps(rows)) as runner:
+            result = setup.sync_public_feed("python", Path("engine.json"))
+        self.assertNotIn("timeout", runner.call_args.kwargs)
+        self.assertEqual(runner.call_args.args[0][1:4],
+                         ["-m", "mindie_knowledge.loop.cli", "sync"])
+        self.assertEqual(result["result"], "degraded")
+        self.assertEqual(result["results"], rows)
+        self.assertIn("b:unavailable", result["error"])
+        runner.assert_called_once()
+
+    def test_malformed_output_and_unknown_status_fail(self):
+        import setup
+
+        for output in ("", "{}", "not JSON", json.dumps([_row("a", "mystery")])):
+            with self.subTest(output=output), patch.object(setup, "run", return_value=output):
+                result = setup.sync_public_feed("python", Path("engine.json"))
+            self.assertEqual(result["result"], "sync_failed")
+            self.assertIn("ValueError", result["error"])
+            self.assertNotIn("results", result)
+
+    def test_process_failure_preserves_completed_rows(self):
+        import setup
+
+        rows = [_row("a", "synced", commit="completed")]
+        failure = RuntimeError("sync process exited with status 1")
+        failure.mindie_output = json.dumps(rows)
+        with patch.object(setup, "run", side_effect=failure) as runner:
+            result = setup.sync_public_feed("python", Path("engine.json"))
+        self.assertEqual(result["result"], "sync_failed")
+        self.assertEqual(result["results"], rows)
+        self.assertIn("exited with status 1", result["error"])
+        runner.assert_called_once()
+
+    def test_cleanup_failure_does_not_erase_successful_sync(self):
+        import setup
+
+        rows = [_row("a", "synced", commit="completed")]
+        cleanup = [dict(stage="group_cleanup", type="OSError")]
+
+        def completed(argv, stdin, *, receipt):
+            receipt.update(cleanup_failed=True, cleanup=cleanup)
+            return json.dumps(rows)
+
+        with patch.object(setup, "run", side_effect=completed) as runner:
+            result = setup.sync_public_feed("python", Path("engine.json"))
+        self.assertEqual(result["result"], "ok")
+        self.assertEqual(result["results"], rows)
+        self.assertTrue(result["cleanup_failed"])
+        self.assertEqual(result["cleanup"], cleanup)
+        self.assertIn("completed", result["error"])
+        runner.assert_called_once()
+
+
 class FeedSyncTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
