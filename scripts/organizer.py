@@ -86,7 +86,7 @@ def claude_bin():
 
 
 def native_environment():
-    """Read only provider/model settings from the selected native user profile.
+    """Read provider/model and native runtime settings from the selected profile.
 
     An OS-started service has no interactive Claude process to materialize
     these settings. Never import hooks, tools, MCP, project settings or the
@@ -107,7 +107,7 @@ def native_environment():
             raise ValueError("native provider settings are not an object")
     except (OSError, ValueError, TypeError) as exc:
         raise ProfileUnavailableError("native provider settings are unavailable") from exc
-    for key in paths.NATIVE_PROVIDER_ENV:
+    for key in (*paths.NATIVE_PROVIDER_ENV, *paths.NATIVE_RUNTIME_ENV):
         if key in provider:
             if not isinstance(provider[key], str):
                 raise ProfileUnavailableError("native provider setting must be text")

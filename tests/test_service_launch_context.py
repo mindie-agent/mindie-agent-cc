@@ -23,6 +23,7 @@ def test_context_declares_names_without_loading_provider_or_requiring_claude(tmp
         "HTTPS_PROXY": "https://fixture-proxy-secret",
         "PYTHONPATH": "must-not-transfer",
         "CLAUDE_CONFIG_DIR": str(profile),
+        "CLAUDE_CODE_GIT_BASH_PATH": str(tmp_path / "selected-bash"),
     }
     with patch.dict(os.environ, values, clear=True), \
             patch.object(paths.Path, "home", return_value=tmp_path / "home"), \
@@ -34,6 +35,7 @@ def test_context_declares_names_without_loading_provider_or_requiring_claude(tmp
     assert "HTTPS_PROXY" in declaration["environment"]
     assert "https_proxy" in declaration["environment"]
     assert "NODE_EXTRA_CA_CERTS" in declaration["environment"]
+    assert "CLAUDE_CODE_GIT_BASH_PATH" in declaration["environment"]
     assert "PYTHONPATH" not in declaration["environment"]
     assert not set(declaration["paths"]) & set(declaration["environment"])
     serialized = json.dumps(declaration)
@@ -58,7 +60,9 @@ def test_new_generation_rebinds_adapter_and_preserves_selected_service_paths(tmp
             patch.object(paths.shutil, "which", side_effect=AssertionError("existing selection lost")):
         declaration = paths.service_launch_context(new_adapter, {}, previous)
     assert declaration["paths"] == dict(previous["paths"], MINDIE_CC_CONFIG=str(new_adapter))
-    assert declaration["environment"] == [*paths.NATIVE_PROVIDER_ENV, *paths.TRANSPORT_ENV]
+    assert declaration["environment"] == [
+        *paths.NATIVE_PROVIDER_ENV, *paths.NATIVE_RUNTIME_ENV, *paths.TRANSPORT_ENV,
+    ]
 
 
 def test_generation_does_not_reselect_paths_from_ambient_environment(tmp_path):

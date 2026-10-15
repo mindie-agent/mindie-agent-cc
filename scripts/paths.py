@@ -18,6 +18,7 @@ NATIVE_PROVIDER_ENV = (
     "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL",
     "CLAUDE_CODE_EFFORT_LEVEL", "MAX_THINKING_TOKENS",
 )
+NATIVE_RUNTIME_ENV = ("CLAUDE_CODE_GIT_BASH_PATH",)
 TRANSPORT_ENV = (
     "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
     "http_proxy", "https_proxy", "all_proxy", "no_proxy",
@@ -36,7 +37,8 @@ def service_launch_context(adapter_file: Path, adapter: dict, previous=None) -> 
         selected_paths = validate({"service_launch_context": previous})["paths"]
         selected_paths[CONFIG_ENV] = str(adapter_file.expanduser().absolute())
         return validate({"service_launch_context": {
-            "paths": selected_paths, "environment": [*NATIVE_PROVIDER_ENV, *TRANSPORT_ENV],
+            "paths": selected_paths,
+            "environment": [*NATIVE_PROVIDER_ENV, *NATIVE_RUNTIME_ENV, *TRANSPORT_ENV],
         }})
     selected = adapter.get("claude_config_dir")
     profile = Path(selected or os.environ.get("CLAUDE_CONFIG_DIR")
@@ -57,7 +59,8 @@ def service_launch_context(adapter_file: Path, adapter: dict, previous=None) -> 
     if native:
         paths["MINDIE_CC_BIN"] = str(Path(native).expanduser().absolute())
     return validate({"service_launch_context": {
-        "paths": paths, "environment": [*NATIVE_PROVIDER_ENV, *TRANSPORT_ENV],
+        "paths": paths,
+        "environment": [*NATIVE_PROVIDER_ENV, *NATIVE_RUNTIME_ENV, *TRANSPORT_ENV],
     }})
 
 

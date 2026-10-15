@@ -105,13 +105,14 @@ class WorkerIdentityTests(unittest.TestCase):
         self.assertNotIn("dsv4-flash", source)
         self.assertNotIn("DEFAULT_MODEL", source)
 
-    def test_selected_profile_only_materializes_provider_fields(self):
+    def test_selected_profile_only_materializes_provider_and_native_runtime_fields(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
             (home / "settings.json").write_text(json.dumps({
                 "env": {"ANTHROPIC_AUTH_TOKEN": "fixture-secret",
                         "ANTHROPIC_MODEL": "selected-model",
                         "CLAUDE_CODE_EFFORT_LEVEL": "high",
+                        "CLAUDE_CODE_GIT_BASH_PATH": str(home / "selected-bash"),
                         "UNRELATED_SETTING": "must-not-import"},
                 "model": "settings-model-fallback",
                 "effortLevel": "settings-effort-fallback",
@@ -121,6 +122,7 @@ class WorkerIdentityTests(unittest.TestCase):
                 "ANTHROPIC_AUTH_TOKEN": "caller-secret",
                 "ANTHROPIC_MODEL": "caller-model",
                 "CLAUDE_CODE_EFFORT_LEVEL": "caller-effort",
+                "CLAUDE_CODE_GIT_BASH_PATH": str(home / "caller-bash"),
             }, clear=True), patch(
                 "paths.load_adapter_config", return_value={"claude_config_dir": tmp}
             ):
@@ -128,9 +130,21 @@ class WorkerIdentityTests(unittest.TestCase):
             self.assertEqual(env["ANTHROPIC_AUTH_TOKEN"], "fixture-secret")
             self.assertEqual(organizer.native_model(env), "selected-model")
             self.assertEqual(env["CLAUDE_CODE_EFFORT_LEVEL"], "high")
+            self.assertEqual(env["CLAUDE_CODE_GIT_BASH_PATH"], str(home / "selected-bash"))
             self.assertEqual(organizer.SUMMARY_EFFORT, "low")
             self.assertNotIn("UNRELATED_SETTING", env)
             self.assertNotIn("hooks", env)
+
+    def test_absent_native_runtime_setting_does_not_require_or_invent_git_bash(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            (home / "settings.json").write_text('{"env":{}}', encoding="utf-8")
+            with patch.dict(organizer.os.environ, {}, clear=True), \
+                    patch("paths.load_adapter_config", return_value={"claude_config_dir": tmp}), \
+                    patch.object(organizer.shutil, "which",
+                                 side_effect=AssertionError("runtime configuration must not find or install Git")):
+                env = organizer.native_environment()
+            self.assertNotIn("CLAUDE_CODE_GIT_BASH_PATH", env)
 
     def test_unreadable_profile_is_configuration_not_unknown(self):
         with patch.dict(organizer.os.environ, {}, clear=True), patch(
