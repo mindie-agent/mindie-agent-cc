@@ -376,7 +376,6 @@ def main():
         from product_contract import publication_feed
         value["feeds"] = [publication_feed(product_validation)]
     __import__("capture_config").prepare_store(python, organizer.parent, value)
-    write_private(engine_config, value)
     adapter_value = dict(
         python=python,
         engine_config=str(engine_config),
@@ -390,8 +389,6 @@ def main():
     if args.update_remote:
         adapter_value["update_remote"] = args.update_remote
     adapter_value["update_channel"] = args.channel
-    write_private(config, adapter_value)
-    sharing = write_community(community_config, community, python=python)
     import genstate
     os.environ["MINDIE_CC_CONFIG"] = str(config)
     identity = updater.source_identity(PLUGIN_ROOT)
@@ -406,10 +403,6 @@ def main():
             Path(python), time.monotonic() + updater.CHECK_BUDGET, generation,
             revision=identity if re.fullmatch(updater.SHA, identity) else None,
         )
-        gen_adapter = updater.write_generation_configs(
-            generation, Path(python), adapter_value, product_validation,
-        )
-        (generation / updater.COMPLETE).write_text(identity + "\n", encoding="utf-8")
     else:
         gen_adapter = generation / "config" / "cc.adapter.json"
         host_package = generation / "host-package"
@@ -419,8 +412,19 @@ def main():
         )
     value["product_validation"] = product_validation
     adapter_value["product_validation"] = product_validation
-    write_private(engine_config, value, replace=True)
-    write_private(config, adapter_value, replace=True)
+    # Prepare generation config without publishing an installed base config.
+    # A final candidate failure must leave ordinary setup retry available.
+    prepared_engine = generation / "config" / "cc.engine.json"
+    genstate.atomic_write(prepared_engine, value)
+    gen_adapter = updater.write_generation_configs(
+        generation, Path(python),
+        dict(adapter_value, engine_config=str(prepared_engine)),
+        product_validation,
+    )
+    (generation / updater.COMPLETE).write_text(identity + "\n", encoding="utf-8")
+    write_private(engine_config, value)
+    write_private(config, adapter_value)
+    sharing = write_community(community_config, community, python=python)
     genstate.write_current(
         {
             "generation": str(generation),

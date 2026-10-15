@@ -1,6 +1,7 @@
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -160,6 +161,85 @@ class SetupTests(unittest.TestCase):
             after = {str(path.relative_to(data)): path.read_bytes()
                      for path in data.rglob("*") if path.is_file() and path.suffix != ".lock"}
             self.assertEqual(after, before)
+
+    def test_final_candidate_failure_preserves_state_and_allows_ordinary_retry(self):
+        import setup
+        import updater
+        from mindie_knowledge.loop.store import Store
+        from mindie_knowledge.state_layout import state_root
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "candidate"
+            updater.snapshot_source(ROOT, source)
+            scripts = source / "scripts"
+            shutil.copy2(scripts / "candidate_validate.py", scripts / "fixture_validator.py")
+            fail_publication = root / "fail-final-publication"
+            fail_publication.touch()
+            # Only the publication transport is controlled. Both validations
+            # still check the actual candidate bytes, pins, API and receipts.
+            (scripts / "candidate_validate.py").write_text(
+                "import sys\n"
+                "from pathlib import Path\n"
+                "sys.path.insert(0,str(Path(__file__).resolve().parent))\n"
+                "import fixture_validator as real\n"
+                "def publication(_):\n"
+                f"    if Path({str(fail_publication)!r}).exists() and "
+                "Path(__file__).with_name('diagnostic-build.json').is_file():\n"
+                "        raise real.CheckFailure('publication_fetch','fetch_failed')\n"
+                "real.publication_contract=publication\n"
+                "raise SystemExit(real.main())\n",
+                encoding="utf-8",
+            )
+            config = root / "installation" / "cc.json"
+            community = config.with_name("mindie-community.json")
+            setup.write_community(community, None, python=sys.executable)
+            community_before = community.read_bytes()
+            data = root / "data"
+            store = Store(data / "cc", "vllm-ascend")
+            store.close()
+            database = state_root(data / "cc", "vllm-ascend") / "state-v4.sqlite3"
+            with sqlite3.connect(database) as db:
+                db.execute(
+                    "INSERT INTO material_summary_attempts VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    ("attempt", "task", "batch", "body", "input", "policy", "[]",
+                     "outcome_unknown", '{"paid_result":"retained"}', "interrupted", 1, 2),
+                )
+                attempts_before = db.execute("SELECT * FROM material_summary_attempts").fetchall()
+            remote = data / "cc" / "adapter-state" / "remote" / "task" / "jobs" / "paid.json"
+            remote.parent.mkdir(parents=True)
+            remote.write_text('{"submission_state":"uncertain","result":"retained"}')
+            remote_before = remote.read_bytes()
+            args = [
+                "--config", config, "--root", data, "--no-schedule",
+                "--no-native-install", "--no-public-feed", *explicit_local_candidate_args(),
+            ]
+
+            failed = run_setup(sys.executable, *args, source=source, real_product=True)
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertIn("publication_fetch: fetch_failed", failed.stderr)
+            self.assertFalse(config.exists())
+            self.assertFalse(config.with_name("cc.engine.json").exists())
+            self.assertFalse((data / "cc" / "adapter-state" / "update" / "current.json").exists())
+            self.assertEqual(community.read_bytes(), community_before)
+            with sqlite3.connect(database) as db:
+                self.assertEqual(db.execute("SELECT * FROM material_summary_attempts").fetchall(),
+                                 attempts_before)
+            self.assertEqual(remote.read_bytes(), remote_before)
+
+            fail_publication.unlink()
+            retry = run_setup(sys.executable, *args, source=source, real_product=True)
+            self.assertEqual(retry.returncode, 0, retry.stderr[:1500])
+            report = json.loads(retry.stdout)
+            self.assertEqual(report["product_validation"]["status"], "validated")
+            self.assertTrue(config.is_file())
+            generation = Path(report["generation"])
+            self.assertTrue((generation / updater.COMPLETE).is_file())
+            self.assertTrue((data / "cc" / "adapter-state" / "update" / "current.json").is_file())
+            with sqlite3.connect(database) as db:
+                self.assertEqual(db.execute("SELECT * FROM material_summary_attempts").fetchall(),
+                                 attempts_before)
+            self.assertEqual(remote.read_bytes(), remote_before)
 
     def test_existing_configuration_update_does_not_reinstall_candidate(self):
         from support import make_config
