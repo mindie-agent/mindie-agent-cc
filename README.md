@@ -71,7 +71,10 @@ The published tag is not available yet. For a candidate checkout, omit
 `git checkout v0.0.1`. `--channel main` is only for an explicit development
 install that should follow `main`.
 
-On Windows PowerShell, from the same candidate or published tag:
+On native Windows, install Git for Windows and make `git` available on PATH.
+Remote development uses that installation's bundled `usr/bin/ssh.exe` with
+the existing SSH configuration. From the same candidate or published tag,
+run in PowerShell:
 
 ```powershell
 py -3.11 scripts\setup.py
