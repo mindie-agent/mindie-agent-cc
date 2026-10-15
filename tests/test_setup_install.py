@@ -135,3 +135,23 @@ def test_immutable_entry_does_not_replace_a_published_runtime(tmp_path):
     with pytest.raises(ValueError, match="immutable"):
         setup.publish_entry(entry, tmp_path / "other.json")
     assert entry.read_bytes() == before
+
+
+def test_default_coinstallation_preserves_shared_authority_bytes(tmp_path):
+    from mindie_knowledge import consent_store
+    from mindie_knowledge.loop.settings import CommunityWriteContext
+
+    consent = tmp_path / "mindie-consent.json"
+    community = tmp_path / "mindie-community.json"
+    consent_store.record_choice(consent, "contribute")
+    consent_store.record_reporting(consent, "disabled")
+    with CommunityWriteContext(community) as context:
+        context.configure(community, {
+            "enabled": True,
+            "repository": "owner/repo",
+            "project_roots": [str(tmp_path)],
+            "consent_config": str(consent),
+        })
+    before = community.read_bytes(), consent.read_bytes()
+    assert setup.write_community(community, None, python=sys.executable) == "enabled"
+    assert (community.read_bytes(), consent.read_bytes()) == before

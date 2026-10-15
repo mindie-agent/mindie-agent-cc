@@ -82,13 +82,14 @@ def _sharing_enabled() -> bool:
         return False
     if not isinstance(community, str) or not os.path.isabs(community):
         raise ValueError("community configuration path is invalid")
-    community_path = Path(community)
-    state, raw = _read_regular_json(community_path)
-    if state == "missing":
+    from mindie_knowledge.loop.settings import load
+
+    sharing = load(community)
+    if sharing.state == "missing":
         return False
-    if state is not None or type(raw.get("enabled", False)) is not bool:
+    if sharing.state not in {"enabled", "disabled"}:
         raise ValueError("community sharing configuration is invalid")
-    return raw.get("enabled") is True
+    return sharing.enabled
 
 
 class DispatchFailure(RuntimeError):

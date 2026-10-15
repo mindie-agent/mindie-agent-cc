@@ -126,6 +126,19 @@ def test_existing_bad_community_is_recorded_and_user_visible(tmp_path):
     assert "forwarded" not in text
 
 
+def test_invalid_community_is_not_explicit_off(tmp_path):
+    for name, value in (
+        ("missing-enabled", {}),
+        ("wrong-schema", {"schema": "unsupported", "enabled": False}),
+        ("invalid-idle", {"schema": "mindie-community-config/1",
+                          "enabled": False, "idle_seconds": 1}),
+    ):
+        root = tmp_path / name
+        config = make_config(root, sharing=False)
+        (root / "cc.community.json").write_text(json.dumps(value), encoding="utf-8")
+        assert "configuration" in _run(root, env_for(config), warning=True)
+
+
 def test_bad_adapter_configuration_has_nonblocking_warning(tmp_path):
     config = make_config(tmp_path, sharing=False)
     config.write_text('{"PRIVATE_SENTINEL":', encoding="utf-8")
