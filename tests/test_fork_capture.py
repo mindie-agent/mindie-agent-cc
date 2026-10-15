@@ -181,3 +181,20 @@ def test_active_fork_binding_still_requires_its_native_queue_and_profile(tmp_pat
     raw_stop(dict(stop, transcript_path=str(foreign)), env, failed=True)
     assert admission.check(event["session_id"]) == original
     assert capture_rows(tmp_path) == []
+
+
+def test_later_maintenance_failure_keeps_successful_fork_binding(tmp_path, monkeypatch):
+    event, _, _, _, _, admission = fork_fixture(tmp_path, monkeypatch)
+    with patch.object(maintenance, "sync_public_feed",
+                      side_effect=RuntimeError("synthetic feed failure")):
+        with pytest.raises(RuntimeError, match="synthetic feed failure"):
+            maintenance.session_start(event)
+    original = admission.check(event["session_id"])
+    with patch("diagnostic_support.reporting_config_path", return_value=tmp_path / "off.json"), \
+            patch("paths.state_dir", return_value=tmp_path), \
+            patch.object(maintenance, "sync_public_feed",
+                         return_value={"result": "sync_failed", "error": "fixture"}), \
+            patch.object(maintenance, "run", return_value='{"status":"ok"}'):
+        result = maintenance.session_start(dict(event, source="resume"))
+    assert result["status"] == "incomplete"
+    assert admission.check(event["session_id"]) == original
