@@ -16,7 +16,7 @@ import service_handoff
 
 
 def test_real_helper_reuses_service_and_index_until_core_retirement(tmp_path):
-    run_probe(tmp_path, SCRIPTS, redactor_path())
+    run_probe(tmp_path / "service", SCRIPTS, redactor_path())
 
 
 @pytest.mark.skipif(os.name != "nt", reason="real Windows Job ownership")

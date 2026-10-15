@@ -10,7 +10,10 @@ import time
 
 def run_probe(root, scripts, redactor):
     root, scripts = Path(root).resolve(), Path(scripts).resolve()
-    root.mkdir(parents=True, exist_ok=True)
+    from mindie_diagnostics.fallback import _private_mkdir
+    # An elevated pytest temp parent can exclude the same user's filtered
+    # Scheduler token. Create this fixture's new leaf with the existing SID ACL.
+    _private_mkdir(root, parents=True, exist_ok=True)
     sys.path.insert(0, str(scripts))
     import bounded
     from mindie_knowledge.loop.cli import connect, config_at
@@ -45,13 +48,23 @@ _ObservedIndex._refresh = _index_refresh
     observed.write_text((scripts / "transcript.py").read_text() + "\nimport os\n" + instrumentation, encoding="utf-8")
     engine = root / "engine.json"
     community = root / "community.json"
+    diagnostic_policy = root / "diagnostics" / "off.json"
+    _private_mkdir(diagnostic_policy.parent)
+    diagnostic_policy.write_text(json.dumps(dict(
+        schema="mindie.diagnostics.reporting.v1", purpose="tool_fault_reporting",
+        decision="disabled", repository="mindie-agent/cc",
+        revision="1" * 32, roots=[str(root)])), encoding="utf-8")
+    diagnostic_paths = dict(
+        MINDIE_DIAGNOSTICS_CONFIG=str(diagnostic_policy),
+        MINDIE_DIAGNOSTICS_ROOT=str(root / "diagnostics" / "state"))
     community.write_text(json.dumps(dict(schema="mindie-community-config/1", enabled=False,
                                          repository=None, branch="main",
                                          project_roots=[])), encoding="utf-8")
     config = dict(root=str(root / "data"), domain="test", capture_mode="public-transcript",
                   redactor_executable=str(redactor), transcript_adapter=str(observed),
                   admission_path=str(root / "admission.sqlite3"),
-                  community_config=str(community))
+                  community_config=str(community),
+                  service_launch_context=dict(paths=diagnostic_paths, environment=[]))
     engine.write_text(json.dumps(config), encoding="utf-8")
     adapter = root / "adapter.json"
     adapter.write_text(json.dumps(dict(python=sys.executable, engine_config=str(engine),
@@ -75,9 +88,7 @@ _ObservedIndex._refresh = _index_refresh
         encoding="utf-8",
     )
     env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
-    env.update(MINDIE_CC_CONFIG=str(adapter),
-               MINDIE_DIAGNOSTICS_CONFIG=str(root / "diagnostics" / "off.json"),
-               MINDIE_DIAGNOSTICS_ROOT=str(root / "diagnostics" / "state"))
+    env.update(MINDIE_CC_CONFIG=str(adapter), **diagnostic_paths)
     consumer = root / "data" / "test" / "consumer.lock"
     result = dict(kind="synthetic-model-free-mechanism", queries=[])
     try:
