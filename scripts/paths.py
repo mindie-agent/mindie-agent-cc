@@ -27,29 +27,38 @@ TRANSPORT_ENV = (
 
 def service_launch_context(adapter_file: Path, adapter: dict, previous=None) -> dict:
     """Declare service bindings without reading credentials or requiring Claude."""
+    from mindie_knowledge.loop.service_context import validate
     from diagnostic_fallback import default_root
     from diagnostic_support import reporting_config_path
 
-    inherited = previous.get("paths", {}) if previous is not None else {}
+    if previous is not None:
+        # A scheduler's ambient environment is not a new installation choice.
+        selected_paths = validate({"service_launch_context": previous})["paths"]
+        selected_paths[CONFIG_ENV] = str(adapter_file.expanduser().absolute())
+        return validate({"service_launch_context": {
+            "paths": selected_paths, "environment": [*NATIVE_PROVIDER_ENV, *TRANSPORT_ENV],
+        }})
     selected = adapter.get("claude_config_dir")
     profile = Path(selected or os.environ.get("CLAUDE_CONFIG_DIR")
-                   or inherited.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
-    diagnostics_config = (reporting_config_path() if os.environ.get("MINDIE_DIAGNOSTICS_CONFIG")
-                          else inherited.get("MINDIE_DIAGNOSTICS_CONFIG") or reporting_config_path())
-    diagnostics_root = (default_root() if os.environ.get("MINDIE_DIAGNOSTICS_ROOT")
-                        else inherited.get("MINDIE_DIAGNOSTICS_ROOT") or default_root())
+                   or Path.home() / ".claude")
     paths = {
         CONFIG_ENV: str(adapter_file.expanduser().absolute()),
         "CLAUDE_CONFIG_DIR": str(profile.expanduser().absolute()),
-        "MINDIE_DIAGNOSTICS_CONFIG": str(Path(diagnostics_config).expanduser().absolute()),
-        "MINDIE_DIAGNOSTICS_ROOT": str(Path(diagnostics_root).expanduser().absolute()),
+        "MINDIE_DIAGNOSTICS_CONFIG": str(reporting_config_path()),
+        "MINDIE_DIAGNOSTICS_ROOT": str(default_root().expanduser().absolute()),
     }
     explicit = os.environ.get("MINDIE_CC_BIN")
-    native = ((shutil.which(explicit) or explicit) if explicit
-              else inherited.get("MINDIE_CC_BIN") or shutil.which("claude"))
+    native = shutil.which(explicit or "claude")
+    if explicit and native is None:
+        requested = Path(explicit).expanduser()
+        if not requested.is_absolute():
+            raise ValueError("explicit native executable is unavailable")
+        native = str(requested)
     if native:
         paths["MINDIE_CC_BIN"] = str(Path(native).expanduser().absolute())
-    return {"paths": paths, "environment": [*NATIVE_PROVIDER_ENV, *TRANSPORT_ENV]}
+    return validate({"service_launch_context": {
+        "paths": paths, "environment": [*NATIVE_PROVIDER_ENV, *TRANSPORT_ENV],
+    }})
 
 
 def config_path() -> Path:

@@ -9,6 +9,8 @@ host acceptance.
 """
 
 import os
+from contextlib import redirect_stdout
+import io
 from pathlib import Path
 import subprocess
 import sys
@@ -78,6 +80,20 @@ def _missing_contract(directory):
 
 
 class WorkerProbeTests(unittest.TestCase):
+    def test_service_launch_apis_are_required_before_install(self):
+        from mindie_knowledge.loop import cli, service_context
+
+        script = setup.probe_script(str(SCRIPTS / "transcript.py"))
+        for module, name, message in (
+            (cli, "prepare_service", "service lifecycle is unavailable"),
+            (service_context, "validate", "service launch context validation is unavailable"),
+        ):
+            with self.subTest(name=name), patch.object(module, name, None), \
+                    redirect_stdout(io.StringIO()) as output:
+                exec(script, {})
+            self.assertIn(message, output.getvalue())
+            self.assertTrue(output.getvalue().startswith("MISSING:"))
+
     def test_probe_does_not_require_retired_fts_capability(self):
         script = setup.probe_script(str(SCRIPTS / "transcript.py"))
         self.assertNotIn("contentless_delete", script)
