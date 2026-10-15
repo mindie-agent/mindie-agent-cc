@@ -27,6 +27,27 @@ def _alive(pid: int) -> bool:
 
 
 class BoundedTests(unittest.TestCase):
+    def test_core_managed_call_does_not_rejudge_the_shared_owner(self):
+        with patch.object(bounded, "_maintenance_owner", side_effect=AssertionError("second owner")), \
+                patch.object(bounded.os, "getppid", return_value=1):
+            output = bounded.run([sys.executable, "-c", "print('owned')"],
+                                 core_managed=True, timeout=3)
+        self.assertEqual(output, "owned" + os.linesep)
+
+    def test_unmanaged_call_keeps_owner_failure_before_spawn(self):
+        with patch.object(bounded, "_maintenance_owner", return_value=42), \
+                patch.object(bounded.os, "getppid", return_value=1), \
+                patch.object(bounded, "_spawn") as spawn:
+            with self.assertRaises(bounded.OwnerExited):
+                bounded.run([sys.executable, "-c", "print('not reached')"])
+        spawn.assert_not_called()
+
+    def test_managed_flag_rejects_unvalidated_truthy_text(self):
+        with patch.object(bounded, "_spawn") as spawn:
+            with self.assertRaisesRegex(ValueError, "core_managed"):
+                bounded.run([sys.executable, "-c", "pass"], core_managed="true")
+        spawn.assert_not_called()
+
     def _windows_reader(self, program, *, wait_for_exit=False):
         # Exercise the actual pipe reader strategy on every runner. Native
         # Windows additionally uses the real suspended spawn and owned Job.

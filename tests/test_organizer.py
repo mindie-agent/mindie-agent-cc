@@ -63,7 +63,8 @@ def fake_run(output=None, exc=None, started=True, captured=None):
         if captured is not None:
             captured.append(dict(argv=list(argv), stdin=data, timeout=timeout, env=env,
                                  cwd=cwd, max_output=max_output,
-                                 allow_service=kwargs.get("allow_service", False)))
+                                 allow_service=kwargs.get("allow_service", False),
+                                 core_managed=kwargs.get("core_managed", False)))
         if receipt is not None:
             receipt["started"] = started
         if exc is not None:
@@ -255,6 +256,7 @@ class WorkerEnvelopeTests(unittest.TestCase):
         self.assertEqual(value["status"], "returned")
         self.assertTrue(value["usage_known"])
         self.assertFalse(value["cleanup_failed"])
+        self.assertIs(captured[0]["core_managed"], False)
         self.assertFalse(Path(captured[0]["cwd"]).exists())
 
     def test_managed_worker_leaves_profile_for_its_tree_owner(self):
@@ -267,6 +269,7 @@ class WorkerEnvelopeTests(unittest.TestCase):
                     patch.object(organizer.shutil, "rmtree") as remove:
                 value = self.execute(payload, native_envelope(metadata_for(payload)), captured=captured)
             remove.assert_not_called()
+            self.assertIs(captured[0]["core_managed"], True)
             self.assertEqual(Path(captured[0]["cwd"]), profile)
             self.assertTrue((profile / "claude-config").is_dir())
             self.assertTrue((profile / "empty-mcp.json").is_file())

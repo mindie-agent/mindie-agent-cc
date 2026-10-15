@@ -8,11 +8,10 @@ cleanup still owns descendants after their leader exits.
 When this process is already the leader of an owned process group
 (MINDIE_MAINTENANCE_GROUP=1 set by the outer core), POSIX spawns stay in that
 group instead of a new session: the outer core owns whole-group terminal
-cleanup, so this module only kills the direct child, never the group. The
-owner handshake (MINDIE_MAINTENANCE_OWNER=<core pid>) is checked before spawn
-and during the wait; a dead owner ends the attempt instead of leaving an
-unobserved paid model call running. Owner checks are the lifecycle contract's
-substitute for an arbitrary total deadline.
+cleanup, so this module only kills the direct child, never the group. A
+summary call that has validated shared scratch ownership passes core_managed;
+the shared core is its sole lifetime authority. Other callers retain the
+existing maintenance-owner check before spawn and during the wait.
 
 Final cleanup closes a standalone owned tree; managed descendants are closed
 by the outer core when the worker returns. Cleanup failures use the caller's
@@ -775,6 +774,7 @@ def run(
     receipt=None,
     terminal=None,
     allow_service=False,
+    core_managed=False,
 ):
     active = _OPERATION.get()
     if cancel is None and active is not None:
@@ -788,6 +788,8 @@ def run(
         raise ValueError("an explicit execution timeout must be a positive finite number")
     if terminal is not None and not callable(terminal):
         raise ValueError("terminal must be a predicate over accumulated stdout bytes")
+    if type(core_managed) is not bool:
+        raise ValueError("core_managed must be the shared scratch ownership result")
     explicit_receipt = receipt is not None
     receipt = receipt if explicit_receipt else {}
     receipt["started"] = False
@@ -795,7 +797,10 @@ def run(
     receipt["cleanup"] = []
     if _cancelled(cancel):
         raise CommandCancelled("command cancelled")
-    owner = _maintenance_owner()
+    # The shared scratch contract proves managed ownership. Its core owns
+    # lifetime across redirectors and worker exit; a second PPID test disagrees
+    # with that authority. Other callers retain their existing owner checks.
+    owner = None if core_managed else _maintenance_owner()
     if _owner_exited(owner):
         # Never start an unobserved (possibly billed) child for a dead owner.
         raise OwnerExited("maintenance owner exited")

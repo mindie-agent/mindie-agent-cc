@@ -320,6 +320,7 @@ def _invoke_native(prompt, schema, env, model, receipt):
                 max_output=MAX_ENVELOPE_BYTES,
                 receipt=run_receipt,
                 terminal=_terminal_result,
+                core_managed=managed,
             )
         except OwnerExited as exc:
             raise NativeFailure("maintenance owner exited", reason="native_owner_exited") from exc
