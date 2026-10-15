@@ -700,16 +700,18 @@ def _generation_engine(current: dict) -> str:
 
 def stop_if_idle(adapter: dict, current: dict, deadline: float) -> dict:
     engine = _generation_engine(current)
-    stop_budget = min(5, _remaining(deadline, RESERVE))
+    _remaining(deadline, RESERVE)
     previous_handoff = read_status(adapter).get("service_handoff")
     _record(adapter, service_handoff={"status": "pending",
             "error": "interrupted-stop-or-restore-needs-attention",
             "sha": current.get("sha")})
+    execution = {}
     try:
         output = bounded_run(
             [current["python"], str(HERE / "service_handoff.py"), "stop", engine],
             "",
-            timeout=stop_budget,
+            check=False,
+            receipt=execution,
         )
     except Deferred:
         raise
@@ -717,20 +719,44 @@ def stop_if_idle(adapter: dict, current: dict, deadline: float) -> dict:
         _record(adapter, service_handoff={"status": "failed",
                 "error": "stop-outcome-unconfirmed", "sha": current.get("sha")})
         raise CheckFailed("stop outcome unconfirmed; service needs attention") from None
+    result = None
     try:
         result = json.loads(output.strip())
         if (not isinstance(result, dict)
                 or type(result.get("idle")) is not bool
-                or result.get("service") not in {"absent", "busy", "stopped"}):
+                or result.get("service") not in {"absent", "busy", "stopped"}
+                or not isinstance(result.get("retirement"), dict)
+                or result["retirement"].get("status") not in {"retired", "busy"}):
             raise ValueError("invalid stop result")
     except (ValueError, TypeError):
         _record(adapter, service_handoff={"status": "failed",
-                "error": "invalid-stop-result", "sha": current.get("sha")})
+                "error": "invalid-stop-result", "sha": current.get("sha"),
+                "observation": result if isinstance(result, dict) else None})
         raise CheckFailed("stop result unconfirmed; service needs attention") from None
-    if result.get("service") != "stopped":
+    if execution.get("cleanup_failed"):
+        result = dict(result, cleanup_failed=True, helper_cleanup=execution.get("cleanup", []))
+    if not result["idle"]:
         _record(adapter, service_handoff=previous_handoff)
-    if result.get("idle") is not True:
         raise Deferred("service has actual active work; switch deferred")
+    try:
+        _record(adapter, service_handoff={"status": "retired", "sha": current.get("sha"),
+                "engine_config": engine, "observation": result, "retirement": result["retirement"]})
+    except Exception as primary:
+        # Retirement is already a known effect. A failed status save must not
+        # strand the previously selected generation or imply no stop occurred.
+        if not result.get("cleanup_failed"):
+            try:
+                _restore_stopped_service(adapter, current, deadline,
+                                         retirement=result["retirement"], retired=current)
+            except Exception as restore_error:
+                primary.add_note("Retirement restoration bookkeeping failed: "
+                                 + type(restore_error).__name__)
+        raise
+    if result.get("cleanup_failed"):
+        _record(adapter, service_handoff={"status": "failed", "sha": current.get("sha"),
+                "error": "retirement-cleanup-failed", "observation": result,
+                "retirement": result["retirement"]})
+        raise CheckFailed("service retired but cleanup failed; no install attempted")
     return result
 
 
@@ -793,6 +819,7 @@ def switch(adapter: dict, current: dict, generation: Path, python: Path,
            idle, install, lock_timeout, *, package: Path | None = None) -> None:
     native_attempted = False
     stopped = False
+    retirement = None
     final = None
     wait = min(lock_timeout, deadline - RESERVE - time.monotonic())
     if wait <= 0:
@@ -810,7 +837,11 @@ def switch(adapter: dict, current: dict, generation: Path, python: Path,
         })
         try:
             idle_result = idle(adapter, current, deadline)
-            stopped = idle_result.get("service") == "stopped"
+            retirement = idle_result.get("retirement")
+            # A released old listener still has a retired configuration: queued
+            # wake helpers are barred, and rollback must restore that exact receipt.
+            stopped = (isinstance(retirement, dict) and retirement.get("status") == "retired"
+                       or idle_result.get("service") == "stopped")
             candidate_adapter = read_json(gen_adapter)
             if not isinstance(candidate_adapter, dict):
                 raise CheckFailed("candidate adapter configuration is unreadable")
@@ -851,7 +882,8 @@ def switch(adapter: dict, current: dict, generation: Path, python: Path,
 
         finally:
             if stopped:
-                _restore_stopped_service(adapter, final, deadline)
+                _restore_stopped_service(adapter, final, deadline,
+                                         retirement=retirement, retired=current)
 
 
 def _previous_package(adapter: dict, previous: dict) -> Path:
@@ -894,7 +926,7 @@ def _rollback_native(adapter: dict, previous: dict, install,
     return restored
 
 
-def _restore_stopped_service(adapter, final, deadline):
+def _restore_stopped_service(adapter, final, deadline, *, retirement=None, retired=None):
     """One attempt, only after our stop; never resolve a bootstrap fallback."""
     try:
         if final is None or read_json(current_path(adapter)) != final:
@@ -906,14 +938,24 @@ def _restore_stopped_service(adapter, final, deadline):
         env["MINDIE_CC_CONFIG"] = final["adapter_config"]
         if selected.get("claude_config_dir"):
             env["CLAUDE_CONFIG_DIR"] = selected["claude_config_dir"]
-        output = bounded_run(
-            [final["python"], str(HERE / "service_handoff.py"),
-             "restore", selected["engine_config"]], "", env=env,
-            timeout=_op_timeout(deadline, FEED_BUDGET, HANDOFF_BUDGET))
+        command = [final["python"], str(HERE / "service_handoff.py"),
+                   "restore", selected["engine_config"]]
+        if retirement is not None and retired is not None and final == retired:
+            command.append(json.dumps(retirement))
+        execution = {}
+        output = bounded_run(command, "", env=env, allow_service=True, check=False,
+                             receipt=execution)
         result = json.loads(output)
         if result.get("status") not in {"restored", "not-needed"}:
-            raise RuntimeError("invalid restoration result")
+            _record(adapter, service_handoff={"status": "failed",
+                    "error": "invalid-restoration-result", "observation": result,
+                    "retirement": retirement, "sha": final.get("sha")})
+            return
+        if execution.get("cleanup_failed"):
+            result = dict(status="failed", restoration=result, cleanup_failed=True,
+                          helper_cleanup=execution.get("cleanup", []))
         result["sha"] = final.get("sha")
+        result["retirement"] = retirement
     except Exception as exc:
         result = {"status": "failed", "error": type(exc).__name__,
                   "sha": (final or {}).get("sha")}

@@ -108,7 +108,7 @@ def _owner_exited(owner) -> bool:
     return owner is not None and os.getppid() != owner
 
 
-def _own_windows_tree(process):
+def _own_windows_tree(process, *, allow_service=False):
     """Keep descendant ownership after the process group leader exits.
 
     A taskkill PID traversal cannot find a tree whose root has already exited.
@@ -154,6 +154,10 @@ def _own_windows_tree(process):
     job = kernel.CreateJobObjectW(None, None)
     limits = Extended()
     limits.BasicLimitInformation.LimitFlags = 0x2000  # KILL_ON_JOB_CLOSE
+    if allow_service:
+        # Only explicit service launchers request CREATE_BREAKAWAY_FROM_JOB.
+        # Ordinary children still inherit this Job and remain caller-owned.
+        limits.BasicLimitInformation.LimitFlags |= 0x800  # BREAKAWAY_OK
     if (not job or not kernel.SetInformationJobObject(
             job, 9, ctypes.byref(limits), ctypes.sizeof(limits))
             or not kernel.AssignProcessToJobObject(job, int(process._handle))):
@@ -164,7 +168,7 @@ def _own_windows_tree(process):
     process._mindie_windows_job = (kernel, job)
 
 
-def _spawn(command, stdin, env, cwd):
+def _spawn(command, stdin, env, cwd, *, allow_service=False):
     inherited = (
         POSIX
         and os.environ.get("MINDIE_MAINTENANCE_GROUP") == "1"
@@ -188,7 +192,7 @@ def _spawn(command, stdin, env, cwd):
     process._mindie_inherited_group = inherited
     if not POSIX:
         try:
-            _own_windows_tree(process)
+            _own_windows_tree(process, allow_service=allow_service)
             _resume_windows_process(process)
         except OSError:
             # Do not continue an operation without the promised ownership.
@@ -712,6 +716,7 @@ def run(
     transport=False,
     receipt=None,
     terminal=None,
+    allow_service=False,
 ):
     if (not isinstance(argv, (list, tuple)) or not argv
             or not isinstance(argv[0], str) or not argv[0]
@@ -738,7 +743,7 @@ def run(
         if data:
             stream.write(data)
             stream.seek(0)
-        process = _spawn(argv, stream, env, cwd)
+        process = _spawn(argv, stream, env, cwd, allow_service=allow_service)
         if receipt is not None:
             receipt["started"] = True
         pgid = None

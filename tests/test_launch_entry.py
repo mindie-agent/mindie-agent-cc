@@ -42,6 +42,52 @@ def test_mcp_dispatch_has_no_total_deadline_and_keeps_caller_cancel(tmp_path):
         release.assert_called_once()
 
 
+def test_only_knowledge_business_calls_can_transfer_service_ownership(tmp_path):
+    sys.path.insert(0, str(SCRIPTS))
+    import mindie_launch
+
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "mcp_server.py").touch()
+    current = dict(generation=str(tmp_path), python=sys.executable,
+                   adapter_config=str(tmp_path / "adapter.json"))
+    response = dict(jsonrpc="2.0", id="ownership", result={"content": []})
+    cases = [
+        ("knowledge", "tools/call", "knowledge_query", True),
+        ("knowledge", "tools/call", "knowledge_explain", True),
+        ("knowledge", "tools/call", "knowledge_feedback", True),
+        ("knowledge", "tools/call", "mindie_status", False),
+        ("knowledge", "tools/list", None, False),
+        ("remote", "tools/call", "remote_bash", False),
+    ]
+    for surface, method, name, expected in cases:
+        raw = json.dumps(dict(jsonrpc="2.0", id="ownership", method=method,
+                              params=dict(name=name))).encode()
+        with patch.object(mindie_launch, "_state_dir", return_value=tmp_path), \
+                patch.object(mindie_launch, "_shared_lock", return_value=object()), \
+                patch.object(mindie_launch, "_current", return_value=current), \
+                patch.object(mindie_launch, "_release"), \
+                patch.object(mindie_launch.bounded, "run",
+                             return_value=json.dumps(response)) as runner:
+            mindie_launch._dispatch(surface, raw, "ownership")
+        assert runner.call_args.kwargs["allow_service"] is expected
+
+
+def test_only_stop_and_explicit_contribution_entries_allow_service_transfer():
+    import mindie_launch
+    assert mindie_launch._hook_can_start_service("stop", b"{}") is True
+    for command, expected in (
+        ("mindie-agent", True), ("mindie-agent:init", True),
+        ("mindie-agent:sharing-enable", True), ("mindie-agent:status", False),
+        ("mindie-agent:reporting-enable", False), ("mindie-agent:deactivate", False),
+    ):
+        event = dict(expansion_type="slash_command", command_source="plugin", command_name=command)
+        raw = json.dumps(event).encode()
+        assert mindie_launch._hook_can_start_service("expansion", raw) is expected
+        assert mindie_launch._hook_can_start_service("pretool", raw) is False
+        event["command_source"] = "user"
+        assert mindie_launch._hook_can_start_service("expansion", json.dumps(event).encode()) is False
+
 def _run(tmp, env, payload=b""):
     env = dict(env)
     env["MINDIE_DIAGNOSTICS_ROOT"] = str(tmp / "diag")

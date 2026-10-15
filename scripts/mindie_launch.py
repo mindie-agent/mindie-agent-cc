@@ -362,6 +362,25 @@ def _read_hook_stdin(deadline):
         return bytes(buf)
 
 
+def _hook_can_start_service(op, raw):
+    if op == "stop":
+        return True
+    if op != "expansion":
+        return False
+    try:
+        event = json.loads(raw)
+    except (ValueError, UnicodeDecodeError):
+        return False
+    return (
+        isinstance(event, dict) and event.get("expansion_type") == "slash_command"
+        and event.get("command_source") == "plugin"
+        and event.get("command_name") in {
+            "mindie-agent", "mindie-agent:mindie-agent", "mindie-agent:init",
+            "mindie-agent:sharing-enable",
+        }
+    )
+
+
 def _hook(op: str) -> int:
     started = time.monotonic()
     deadline = started + HOOK_TOTAL
@@ -468,6 +487,7 @@ def _hook(op: str) -> int:
                 env=_child_env(current),
                 cwd=str(Path(current["generation"])),
                 check=True,
+                allow_service=_hook_can_start_service(op, raw),
             )
         except bounded.CommandTimedOut as exc:
             _hook_failure("helper_deadline", "child_deadline", exc)
@@ -595,6 +615,13 @@ def _dispatch(surface: str, raw: bytes, ident, cancel=None):
                 current, "helper_missing", "missing_committed_file", None, started
             )
         payload = raw if raw.endswith(b"\n") else raw + b"\n"
+        message = json.loads(raw)
+        allow_service = (
+            surface == "knowledge" and message.get("method") == "tools/call"
+            and _local_tool_name(message) in {
+                "knowledge_query", "knowledge_explain", "knowledge_feedback",
+            }
+        )
         try:
             out = bounded.run(
                 [current["python"], str(script), surface, "--once"],
@@ -602,6 +629,7 @@ def _dispatch(surface: str, raw: bytes, ident, cancel=None):
                 env=_child_env(current),
                 cwd=str(Path(current["generation"])),
                 cancel=cancel,
+                allow_service=allow_service,
                 **(
                     {"max_output": KNOWLEDGE_MAX_OUTPUT}
                     if surface == "knowledge"

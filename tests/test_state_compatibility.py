@@ -201,6 +201,30 @@ class StateCompatibilityTests(unittest.TestCase):
             self.assertEqual(job.read_bytes(), before_job)
             self.assertEqual(genstate.read_current(adapter)["sha"], "b" * 40)
 
+    def test_absent_retired_generation_is_restored_after_prepare_failure(self):
+        import capture_config
+        import genstate
+
+        with tempfile.TemporaryDirectory() as tmp:
+            adapter, current, generation, gen_adapter = self._switch_fixture(Path(tmp))
+            retirement = dict(status="retired", operation_id="a" * 32)
+            with patch.object(updater, "validate_generation_state"), \
+                    patch.object(capture_config, "prepare_store", side_effect=RuntimeError("prepare failed")), \
+                    patch.object(updater, "_restore_stopped_service") as restore, \
+                    patch.object(updater, "native_install") as install:
+                with self.assertRaisesRegex(RuntimeError, "prepare failed"):
+                    updater.switch(
+                        adapter, current, generation, CURRENT, gen_adapter, "b" * 40,
+                        time.monotonic() + 180,
+                        lambda *_: dict(idle=True, service="absent", retirement=retirement),
+                        install, lock_timeout=1,
+                    )
+            install.assert_not_called()
+            self.assertEqual(genstate.read_current(adapter), current)
+            self.assertEqual(restore.call_args.kwargs,
+                             dict(retirement=retirement, retired=current))
+            self.assertEqual(restore.call_args.args[:2], (adapter, current))
+
     def test_store_failure_prevents_native_mutation_and_restores_stopped_service(self):
         import genstate
         from mindie_knowledge.loop.store import Store

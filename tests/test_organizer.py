@@ -62,7 +62,8 @@ def fake_run(output=None, exc=None, started=True, captured=None):
     def run(argv, data, *, timeout=None, env=None, cwd=None, max_output, receipt=None, **kwargs):
         if captured is not None:
             captured.append(dict(argv=list(argv), stdin=data, timeout=timeout, env=env,
-                                 cwd=cwd, max_output=max_output))
+                                 cwd=cwd, max_output=max_output,
+                                 allow_service=kwargs.get("allow_service", False)))
         if receipt is not None:
             receipt["started"] = started
         if exc is not None:
@@ -159,6 +160,14 @@ class WorkerEnvelopeTests(unittest.TestCase):
         self.assertEqual(value["model_calls"], 1)
         self.assertFalse(value["cleanup_failed"])
         summarizer.validate_outcome(value, payload)
+
+    def test_summary_worker_remains_owned_by_its_caller(self):
+        payload = make_payload()
+        captured = []
+        value = self.execute(payload, native_envelope(metadata_for(payload)), captured=captured)
+        self.assertEqual(value["status"], "returned")
+        self.assertEqual(len(captured), 1)
+        self.assertIs(captured[0]["allow_service"], False)
 
     def test_structured_output_is_authoritative_over_prose(self):
         payload = make_payload()
