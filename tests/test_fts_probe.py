@@ -114,8 +114,7 @@ class WorkerProbeTests(unittest.TestCase):
         script = runtime_probe.build_probe_script(str(SCRIPTS / "transcript.py"))
         for module, name, message in (
             (cli, "prepare_service", "service lifecycle is unavailable"),
-            (cli, "ensure_client_service", "service lifecycle is unavailable"),
-            (cli, "prepare_client_service", "service lifecycle is unavailable"),
+            (cli, "ensure_service", "service lifecycle is unavailable"),
             (service_context, "validate", "service launch context validation is unavailable"),
         ):
             with self.subTest(name=name), patch.object(module, name, None), \

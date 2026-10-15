@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+from functools import cache
+from importlib import metadata
 from pathlib import Path
 import re
 import tomllib
@@ -14,6 +16,12 @@ HEX40 = re.compile(r"[0-9a-f]{40}\Z")
 HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 SOURCE_LIMIT = 16 * 1024 * 1024
+
+
+@cache
+def installed_version():
+    """The installed distribution is the runtime's release identity."""
+    return metadata.version("mindie-agent-cc")
 
 FAILURE_CODES = {
     "source": {"source_invalid", "source_changed"},

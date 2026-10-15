@@ -125,14 +125,14 @@ def sync_public_feed(python, engine_config):
     return feed
 
 
-def session_start(handoff=None):
+def session_start():
     """Run session-triggered maintenance, with no plugin-version scheduler."""
     from diagnostic_support import reporting_config_path
     from install_state import atomic_write
     from paths import state_dir
-    from knowledge_service import client_engine_path
+    from paths import engine_config_path
 
-    feed = sync_public_feed(sys.executable, client_engine_path())
+    feed = sync_public_feed(sys.executable, engine_config_path())
     process = {}
     try:
         raw = run(
@@ -151,10 +151,6 @@ def session_start(handoff=None):
              and reporting.get("status") == "ok"
              and not reporting.get("operation_failed"))
     result = dict(status="ready" if ready else "incomplete", feed=feed, diagnostics=reporting)
-    if handoff is not None:
-        result["handoff"] = handoff
-        if handoff.get("status") == "pending":
-            result["status"] = "incomplete"
     try:
         atomic_write(state_dir() / "session-maintenance.json", result)
     except OSError as exc:

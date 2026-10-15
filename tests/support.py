@@ -78,6 +78,7 @@ def make_config(tmp: Path, *, sharing=False, roots=None, summary_command=None):
             branch="main",
             project_roots=roots or ([str(tmp / "project")] if sharing else []),
             idle_seconds=300,
+            consent_config=str(tmp / "mindie-consent.json"),
         ),
     )
     if sharing:
@@ -86,6 +87,7 @@ def make_config(tmp: Path, *, sharing=False, roots=None, summary_command=None):
         config,
         dict(
             python=sys.executable,
+            base_config=str(config),
             engine_config=str(engine),
             community_config=str(community),
             state_dir=str(tmp / "state"),

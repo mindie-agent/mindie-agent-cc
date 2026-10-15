@@ -1800,7 +1800,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "mindie-diagnostics", git = "https://github.com/mindie-agent/diagnostics?rev=10cc3391ed358d7b7e0e1acb99ca5be4d1934b47" },
-    { name = "mindie-knowledge", git = "https://github.com/mindie-agent/knowledge?rev=dbf6d7abbacaf7c7a218f00e327aac990410bf3e" },
+    { name = "mindie-knowledge", git = "https://github.com/mindie-agent/knowledge?rev=6a4bbf824820b9a72bb81de71034d11a8596e697" },
     { name = "remote-dev", git = "https://github.com/mindie-agent/remote-dev?rev=dc3f7cecdd9cabbc3cc222f576725d69514cfdf7" },
 ]
 
@@ -1818,10 +1818,11 @@ source = { git = "https://github.com/mindie-agent/diagnostics?rev=10cc3391ed358d
 [[package]]
 name = "mindie-knowledge"
 version = "0.11.0"
-source = { git = "https://github.com/mindie-agent/knowledge?rev=dbf6d7abbacaf7c7a218f00e327aac990410bf3e#dbf6d7abbacaf7c7a218f00e327aac990410bf3e" }
+source = { git = "https://github.com/mindie-agent/knowledge?rev=6a4bbf824820b9a72bb81de71034d11a8596e697#6a4bbf824820b9a72bb81de71034d11a8596e697" }
 dependencies = [
     { name = "langmem" },
     { name = "mindie-diagnostics" },
+    { name = "pywin32", marker = "sys_platform == 'win32'" },
     { name = "pyyaml" },
     { name = "reme-ai", extra = ["as"] },
 ]

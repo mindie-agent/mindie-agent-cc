@@ -86,20 +86,20 @@ class ProductContractTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 _load_validator().release_check(source)
 
-    def test_later_native_release_keeps_existing_state_format_protection(self):
+    def test_release_metadata_does_not_select_or_sort_runtime_versions(self):
         import mindie_knowledge.state_layout as layout
         with tempfile.TemporaryDirectory() as tmp:
             source = _source(Path(tmp), version="0.0.2")
-            with patch.object(layout, "RELEASE_VERSION", "0.0.1"):
+            with patch.object(layout, "RELEASE_VERSION", "9.0.0"):
                 _load_validator().release_check(source)
             self.assertEqual(product_contract.identity(source)["native_version"], "0.0.2")
 
-    def test_future_or_invalid_state_protection_boundary_is_rejected(self):
+    def test_invalid_state_protection_metadata_is_rejected(self):
         import mindie_knowledge.state_layout as layout
         validator = _load_validator()
         with tempfile.TemporaryDirectory() as tmp:
             source = _source(Path(tmp))
-            for boundary in ("0.0.2", "invalid", "0.0.1rc1", None):
+            for boundary in ("invalid", "0.0.1rc1", None):
                 with self.subTest(boundary=boundary), \
                         patch.object(layout, "RELEASE_VERSION", boundary):
                     with self.assertRaises(validator.CheckFailure):

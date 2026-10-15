@@ -25,20 +25,12 @@ TRANSPORT_ENV = (
 )
 
 
-def service_launch_context(adapter_file: Path, adapter: dict, previous=None) -> dict:
+def service_launch_context(adapter_file: Path, adapter: dict) -> dict:
     """Declare service bindings without reading credentials or requiring Claude."""
     from mindie_knowledge.loop.service_context import validate
     from diagnostic_fallback import default_root
     from diagnostic_support import reporting_config_path
 
-    if previous is not None:
-        # A scheduler's ambient environment is not a new installation choice.
-        selected_paths = validate({"service_launch_context": previous})["paths"]
-        selected_paths[CONFIG_ENV] = str(adapter_file.expanduser().absolute())
-        return validate({"service_launch_context": {
-            "paths": selected_paths,
-            "environment": [*NATIVE_PROVIDER_ENV, *NATIVE_RUNTIME_ENV, *TRANSPORT_ENV],
-        }})
     selected = adapter.get("claude_config_dir")
     profile = Path(selected or os.environ.get("CLAUDE_CONFIG_DIR")
                    or Path.home() / ".claude")
@@ -91,18 +83,26 @@ def base_config_path() -> Path:
     """The stable base adapter configuration.
 
     Hook/MCP children use a fixed runtime-specific binding. Its ``base_config``
-    names the shared business profile, which is not a release selector.
+    names the installation profile.
     Consent and community choices always remain beside this shared profile.
     """
+    from entry import _read_regular_json
+
     path = config_path()
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    state, data = _read_regular_json(path)
+    if state == "missing":
         return path
-    base = data.get("base_config") if isinstance(data, dict) else None
-    if isinstance(base, str) and os.path.isabs(base):
-        return Path(base)
-    return path
+    if state is not None:
+        raise ValueError("installation configuration is unreadable or corrupt; consent path unchanged")
+    base = data.get("base_config")
+    if not isinstance(base, str) or not os.path.isabs(base):
+        raise ValueError("installation configuration lacks an absolute base_config")
+    base = Path(base)
+    if base != path:
+        state, selected = _read_regular_json(base)
+        if state is not None or selected.get("base_config") != str(base):
+            raise ValueError("base installation configuration is unavailable; consent path unchanged")
+    return base
 
 
 def engine_config_path(config=None) -> Path:
@@ -160,10 +160,6 @@ def state_dir(config=None) -> Path:
         return Path(value)
     engine = load_engine_config(config)
     return Path(engine["root"]) / "cc-adapter"
-
-
-def first_use_path() -> Path:
-    return state_dir() / "cc.first-use.json"
 
 
 def configured_python(config=None) -> str:

@@ -12,7 +12,7 @@ import shlex
 import stat
 from pathlib import Path
 
-from entry_state import consume_prompt, first_use, set_first_use, configuration_required
+from entry_state import consume_prompt, set_choice, configuration_required
 from identity import is_subagent, require_absolute, require_session, slash_command
 from paths import config_path, load_adapter_config
 
@@ -96,9 +96,9 @@ def _diagnostics(session):
     """One bounded read of existing state; never activate or repair."""
     try:
         from mindie_knowledge.loop.diagnostics import snapshot
-        from knowledge_service import client_engine_path
+        from paths import engine_config_path
 
-        return snapshot(str(client_engine_path()), session=session)
+        return snapshot(str(engine_config_path()), session=session)
     except Exception as exc:
         return dict(
             status="unavailable",
@@ -156,16 +156,12 @@ def _number(value):
 
 
 def _installation_view():
-    """Retained legacy facts and maintenance receipts; never recover or select code."""
+    """Read maintenance receipts without recovering or selecting code."""
     try:
-        from legacy_update import status
         adapter = load_adapter_config()
-        legacy = status(adapter)
         state, maintenance = _read_regular_json(
             Path(adapter["state_dir"]) / "session-maintenance.json")
         result = {"code_updates": "native-marketplace"}
-        if legacy is not None:
-            result["legacy"] = legacy
         if state == "unavailable":
             result["maintenance"] = {"status": "unavailable"}
         elif maintenance is not None:
@@ -213,10 +209,9 @@ def _knowledge_status_payload(session=None):
         )
     payload["choices"] = []
     payload["repeat"] = bool(choice or saved["state"] in {"corrupt", "unreadable"}
-                             or sharing_view.get("state") in {"corrupt", "unreadable"}
-                             or consent_mod.marker_exists())
+                             or sharing_view.get("state") in {"corrupt", "unreadable"})
     # Saved preferences and runtime configuration are distinct facts. A prior
-    # marker/choice must not hide an incomplete or failed experience loop.
+    # choice must not hide an incomplete or failed experience loop.
     if saved["state"] in {"corrupt", "unreadable"}:
         payload["experience"] = "unavailable"
         payload["consent_error"] = dict(state=saved["state"], error=saved["error"])
@@ -257,7 +252,13 @@ def status_payload(session=None):
     import diagnostic_support
 
     payload = dict(_knowledge_status_payload(session))
-    saved = consent_mod.load()
+    try:
+        saved = consent_mod.load()
+    except (OSError, ValueError) as exc:
+        payload["reporting"] = dict(status="unavailable",
+                                    error=dict(stage="consent_path", type=type(exc).__name__))
+        payload["experience"] = "unavailable"
+        return payload
     payload["reporting"] = diagnostic_support.effective_reporting(
         diagnostic_support.reporting_status(), saved.get("reporting"))
     # A later task does not reopen an independent choice left unset at setup.
@@ -265,7 +266,6 @@ def status_payload(session=None):
         payload["reporting"].get("status") == "not_configured"
         and saved["state"] == "missing"
         and saved["reporting"] is None
-        and not consent_mod.marker_exists()
     ):
         payload["reporting_choice"] = diagnostic_support.reporting_hint()
     return payload
@@ -305,7 +305,7 @@ def _apply_native_choice(payload, native_choice, session=None):
         if native_choice == "disabled" and _configured():
             from sharing import write_disabled
             write_disabled()
-        stored = set_first_use(native_choice)
+        stored = set_choice(native_choice)
     except consent_mod.ConsentError as exc:
         # A damaged saved authority is never silently cleared: the fault
         # payload shows the real state instead of recording over it.
@@ -344,18 +344,13 @@ def _prepare_capture_service():
 
 
 def _finish_contribution(result: dict) -> dict:
-    """Shared tail of every contribution enablement: persist the choice,
-    converge the community authority at this explicit boundary, and wake the
-    capture service only when capture can actually persist."""
+    """Persist the explicit choice and prepare an authorized capture service."""
     import consent as consent_mod
 
     try:
         consent_mod.record_choice("contribute")
     except consent_mod.ConsentError as exc:
         result["consent_error"] = dict(state=exc.state, error=str(exc))
-    migration = consent_mod.migrate_community()
-    if migration.get("conflict") or migration.get("errors") or migration.get("migrated"):
-        result["community_migration"] = migration
     result["service"] = _prepare_capture_service()
     return result
 
@@ -450,11 +445,6 @@ def _configured_init_activation(session, cwd, ident):
     """Entry binding for a configured task: automatic, idempotent, and never
     a consent prompt. The persistent install-level choice is untouched."""
     from admission import activate, gate
-    import consent as consent_mod
-
-    # Entry attach boundary: converge the community authority once (no-op
-    # when converged); a conflict or fault is surfaced, never repaired.
-    migration = consent_mod.migrate_community()
     root = _project_root(cwd)
     lease = activate(session, project_root=root, root_session=session)
     claimed = gate().claim(session, "plugin_command", ident[:256], token=lease["token"]) is True
@@ -468,8 +458,6 @@ def _configured_init_activation(session, cwd, ident):
         project_root=lease["project_root"],
         service=service,
     )
-    if migration.get("conflict") or migration.get("errors") or migration.get("migrated"):
-        payload["community_migration"] = migration
     return payload
 
 
@@ -479,11 +467,6 @@ def op_init(session, event):
     reporting_token = _reporting_token_from_native(event.get("command_args"))
     ident = f"init:{_prompt_id(event)}"
     cwd = event.get("cwd")
-    import consent as consent_mod
-
-    # Entry attach boundary: import any legacy saved choice exactly once
-    # (kept/absent are quiet; conflict/error surface for diagnosis).
-    legacy = consent_mod.migrate_consent()
     if not _configured():
         if not consume_prompt(ident):
             payload = status_payload(session)
@@ -498,11 +481,6 @@ def op_init(session, event):
             payload = _apply_native_choice(status_payload(session), native_choice, session)
         if reporting_token is not None:
             payload = _apply_reporting_token(payload, reporting_token, False)
-        if legacy.get("status") in {"conflict", "error", "migrated"}:
-            payload["consent_migration"] = {
-                key: legacy[key] for key in ("status", "detail", "error", "sources")
-                if legacy.get(key)
-            }
         return payload
     payload = _configured_init_activation(session, cwd, ident)
     if native_choice == "contribute":
@@ -511,11 +489,6 @@ def op_init(session, event):
         payload = _apply_native_choice(payload, native_choice, session)
     if reporting_token is not None:
         payload = _apply_reporting_token(payload, reporting_token, True)
-    if legacy.get("status") in {"conflict", "error", "migrated"}:
-        payload["consent_migration"] = {
-            key: legacy[key] for key in ("status", "detail", "error", "sources")
-            if legacy.get(key)
-        }
     return payload
 
 
@@ -561,10 +534,6 @@ def op_sharing_disable(session, event):
     except consent_mod.ConsentError as exc:
         result = dict(result)
         result["consent_error"] = dict(state=exc.state, error=str(exc))
-    migration = consent_mod.migrate_community()
-    if migration.get("conflict") or migration.get("errors") or migration.get("migrated"):
-        result = dict(result)
-        result["community_migration"] = migration
     return result
 
 
@@ -585,8 +554,8 @@ def op_recover(session, event):
     consume_slash(session, event, "recover")
     if not _configured():
         raise ValueError("MindIE is not configured")
-    from knowledge_service import client_engine_path
-    engine = str(client_engine_path())
+    from paths import engine_config_path
+    engine = str(engine_config_path())
     python = load_adapter_config()["python"]
     argv = shlex.split(event.get("command_args") or "")
     batch = None

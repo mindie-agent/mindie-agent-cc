@@ -74,7 +74,6 @@ def adapter_check(source):
         "bootstrap.py",
         "install_state.py",
         "maintenance.py",
-        "legacy_update.py",
     ):
         if not (plugin / "scripts" / name).is_file():
             raise ValueError("missing bounded runtime entry: " + name)
@@ -89,12 +88,12 @@ def adapter_check(source):
 
 
 def release_check(plugin):
-    """State protection starts at a release; FORMAT owns later compatibility."""
+    """Read release metadata; persisted FORMAT declarations own compatibility."""
     from packaging.version import InvalidVersion, Version
     from mindie_knowledge.state_layout import RELEASE_VERSION as knowledge_release
     from receipt_layout import RELEASE_VERSION as receipt_release
 
-    release = Version(native_version(plugin))
+    native_version(plugin)
     for boundary in (knowledge_release, receipt_release):
         if boundary is None:
             raise CheckFailure("adapter", "release_state_undeclared")
@@ -103,8 +102,7 @@ def release_check(plugin):
         except (InvalidVersion, TypeError) as exc:
             raise CheckFailure("adapter", "release_version_mismatch") from exc
         if (protected.is_prerelease or protected.is_postrelease or protected.is_devrelease
-                or protected.local is not None or len(protected.release) != 3
-                or protected > release):
+                or protected.local is not None or len(protected.release) != 3):
             raise CheckFailure("adapter", "release_version_mismatch")
 
 

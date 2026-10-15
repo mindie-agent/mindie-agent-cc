@@ -61,7 +61,10 @@ class StatusDiagnosticTests(unittest.TestCase):
                 transcript_adapter=str(SCRIPTS / "transcript.py"),
             )), encoding="utf-8")
             adapter = root / "adapter.json"
-            adapter.write_text(json.dumps(dict(engine_config=str(engine), community_config=str(root / "community.json"), state_dir=str(root / "adapter-state"))), encoding="utf-8")
+            adapter.write_text(json.dumps(dict(
+                base_config=str(adapter), engine_config=str(engine),
+                community_config=str(root / "community.json"), state_dir=str(root / "adapter-state"),
+            )), encoding="utf-8")
             result = self._status(adapter, "task-A")
             self.assertTrue(result["this_session"]["bound"])
             self.assertNotIn("paused", result["this_session"])

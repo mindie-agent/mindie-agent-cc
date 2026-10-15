@@ -1,6 +1,7 @@
 # Framework stability — 2026-09-28
 
-Claude Code native adapter; reviewed production revision `3e36a28`.
+Historical component baseline at revision `3e36a28`. Current native installation
+and acceptance boundaries are described in the README.
 
 ## Everyday use
 
@@ -58,7 +59,8 @@ checks that actually need a native host.
 The shared configuration implementation combines delete-sharing reads with
 a native atomic rename on Windows. Existing readers retain the complete old
 document, and readers opening the published path see the complete new one.
-The core and all three bootstrap copies use the same implementation. This
+That historical baseline used Core and bootstrap copies of the same implementation.
+The current locked CC runtime imports the shared Core store directly. This
 requires both sides of the mechanism: Python's Windows `os.replace` alone
 cannot replace an open destination. See the [Windows rename semantics](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_file_rename_information).
 

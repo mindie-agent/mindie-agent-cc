@@ -16,12 +16,12 @@ release binds a persistent `CLAUDE_PLUGIN_DATA` entry to that exact runtime.
 No production updater, package refresh controller, scheduler or mutable
 `current.json` selection remains.
 
-Pre-contract migration unregisters only the verified owned old code-update task,
-checks unknown native effects without retrying them, and preserves the original
-configuration and receipts. Idle shared service retirement precedes the one-time
-modern anchor. Already loaded legacy sessions require reloading. New-protocol
-releases use explicit shared-Core successor receipts and compatible client reads;
-they never rewrite the shared profile to select a runtime.
+Unpublished development bindings are not migrated. Their configuration,
+services, user choices, data and uncertain outcomes are preserved, and a
+mismatch is reported explicitly. The current candidate only initializes an
+empty profile or verifies the identical installation. Fixed entries and every
+MCP request check the selected binding; there is no cross-version sorting,
+successor chain or alternate owner selection.
 
 SessionStart owns cold preparation and session-triggered feed/diagnostic
 maintenance. Stop only performs bounded admission; it cannot download Python or

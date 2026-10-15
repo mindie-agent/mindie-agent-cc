@@ -71,7 +71,6 @@ def community_settings(args, parser):
 
 def write_community(path, community, consent_config=None, python=None):
     from community_config import configure
-    from pathlib import Path
     request = dict(community) if community is not None else None
     if request is not None:
         request['consent_config'] = consent_config or str(Path(path).with_name('mindie-consent.json').resolve())
@@ -93,150 +92,83 @@ def validate_candidate(source):
     return validate(source, identity(source))
 
 
-def _handoff(adapter, engine_file, *, advance=True):
-    from knowledge_service import client_engine_path, newer_binding
-    from mindie_knowledge.loop.cli import config_at
-    from mindie_knowledge.loop.client_contract import connect_ready, resolve_config
-    from service_handoff import stop
-
-    own = Path(engine_file).resolve()
-    own_target, _ = resolve_config(own)
-    target = client_engine_path(adapter)
-    if own_target.resolve() != own or newer_binding(own, target) != own:
-        return dict(status="superseded", config=str(target))
-    connection = connect_ready(str(own), config_at(own))
-    if connection:
-        previous = Path(connection["config_path"])
-    else:
-        anchor = _read(adapter["base_config"])["engine_config"]
-        previous, _ = resolve_config(anchor)
-    if previous.resolve() == own:
-        return dict(status="ready")
-    if newer_binding(own, previous) != own:
-        return dict(status="superseded", config=str(previous))
-    if not advance:
-        return dict(status="pending", config=str(previous))
-    retirement = stop(str(previous), successor_config_path=str(own))
-    if retirement.get("idle") is True and not retirement.get("cleanup_failed"):
-        return dict(status="ready", retirement=retirement)
-    if retirement.get("idle") is False and retirement.get("service") == "busy":
-        return dict(status="pending", retirement=retirement)
-    raise RuntimeError("previous service handoff is uncertain; original owner "
-                       "and exact retirement receipt were retained")
-
-
-def advance_handoff(adapter_file=None):
-    """Session admission may finish a known busy handoff; hot Hooks never do."""
-    adapter_file = Path(adapter_file or default_config_path()).resolve()
-    adapter = _read(adapter_file)
-    with OperationLock(adapter).exclusive(timeout=30):
-        return _handoff(adapter, adapter["engine_config"])
-
-
 def prepare_binding(source, config=None, *, root=None, domain="vllm-ascend",
-                    no_public_feed=False, claude_config_dir=None, community=None,
-                    advance=True):
-    """Prepare the native-selected release without a mutable runtime selector."""
+                    no_public_feed=False, claude_config_dir=None, community=None):
+    """Initialize an empty profile, or verify this exact installed binding.
+
+    Unpublished development profiles and different bindings are never migrated,
+    retired, or overwritten. Their data and uncertain operations stay intact.
+    """
     from bootstrap import runtime_key
     from capture_config import prepare, prepare_store
+    from install_state import InstallationUnavailable, read_binding
     from state_compatibility import check
-    from service_handoff import stop
-    from legacy_update import migrate, status as legacy_status
 
     source = Path(source).resolve()
     config = Path(config or default_config_path()).expanduser().resolve()
     os.environ["MINDIE_CC_CONFIG"] = str(config)
-    if config.is_file():
-        adapter = _read(config)
-    else:
-        domain_root = Path(root or Path(os.environ.get("XDG_DATA_HOME")
-                                      or Path.home() / ".local/share") / "mindie-agent/cc")
-        domain_root = domain_root.expanduser().resolve()
-        adapter = dict(state_dir=str(domain_root / "adapter-state"),
-                       community_config=str(config.with_name("mindie-community.json")),
-                       base_config=str(config))
-    binding = Path(adapter["state_dir"]) / "installations" / runtime_key(source)
-    adapter_file, engine_file = binding / "cc.adapter.json", binding / "cc.engine.json"
+    key = runtime_key(source)
+    domain_root = Path(root or Path(os.environ.get("XDG_DATA_HOME")
+                                  or Path.home() / ".local/share") / "mindie-agent/cc")
+    domain_root = domain_root.expanduser().resolve()
+    initial = dict(state_dir=str(domain_root / "adapter-state"),
+                   community_config=str(config.with_name("mindie-community.json")),
+                   base_config=str(config))
+
+    def existing_binding():
+        value = read_binding(config)
+        binding_dir = Path(value["state_dir"]) / "installations" / key
+        adapter_file = binding_dir / "cc.adapter.json"
+        engine_file = binding_dir / "cc.engine.json"
+        if (value["base_config"] != str(config)
+                or value["engine_config"] != str(engine_file)
+                or value["python"] != sys.executable
+                or not adapter_file.is_file() or _read(adapter_file) != value):
+            raise InstallationUnavailable(
+                "native_reload_required: different or unsupported development binding; "
+                "replacement is unsupported before 0.0.1; existing choices and data are preserved"
+            )
+        engine = _read(engine_file)
+        if "client_contract" in engine:
+            raise InstallationUnavailable("unsupported development profile; preserved unchanged")
+        return value, adapter_file, engine
+
+    # Refuse unsupported profiles before creating even the installation lock.
+    adapter = existing_binding()[0] if config.exists() else initial
     with OperationLock(adapter).exclusive(timeout=30):
-        existing = config.is_file()
-        if existing:
-            adapter = _read(config)
-            anchor = Path(adapter["engine_config"])
-            engine = _read(anchor)
-        else:
-            anchor = None
-            engine = dict(root=str(domain_root), domain=domain,
-                          admission_path=str(domain_root / "admission.sqlite3"))
-        if claude_config_dir:
-            adapter["claude_config_dir"] = str(Path(claude_config_dir).expanduser().resolve())
-        legacy_profile = existing and not engine.get("client_contract")
-        if legacy_profile and not advance:
-            raise RuntimeError("legacy migration requires native SessionStart; "
-                               "reload or open a Claude session before using this release")
-        legacy = (migrate(adapter, config) if not existing or legacy_profile
-                  else legacy_status(adapter))
-        if adapter_file.is_file() and engine_file.is_file():
-            value = _read(adapter_file)
-            saved = _read(engine_file)
-            if (value.get("python") != sys.executable
-                    or value.get("base_config") != str(config)
-                    or saved.get("client_contract", {}).get("adapter_profile") != str(config)):
-                raise ValueError("prepared binding differs from this runtime/profile")
+        if config.exists():
+            value, adapter_file, engine = existing_binding()
             from candidate_validate import validate
             validate(source, identity(source), value["product_validation"])
-            engine = saved
+            check(engine, str(Path(value["state_dir"]) / "remote"))
+            if community is not None:
+                write_community(Path(value["community_config"]), community, python=sys.executable)
         else:
+            binding = Path(adapter["state_dir"]) / "installations" / key
+            adapter_file, engine_file = binding / "cc.adapter.json", binding / "cc.engine.json"
             validation = validate_candidate(source)
-            if anchor is not None:
-                check(anchor, str(Path(adapter["state_dir"]) / "remote"))
-            engine.update(
-                transcript_adapter=str(HERE / "transcript.py"),
-                **prepare(sys.executable, HERE),
-                community_config=adapter["community_config"],
-                product_validation=validation,
-                client_contract=dict(
-                    schema="mindie-service-client/1",
-                    transcript_protocol="mindie-cc-transcript/1",
-                    summary_protocol="mindie-cc-summary/1",
-                    adapter_profile=str(config), adapter_config_env="MINDIE_CC_CONFIG",
-                ),
-            )
-            if anchor is None and not no_public_feed:
+            engine = dict(root=str(domain_root), domain=domain,
+                          admission_path=str(domain_root / "admission.sqlite3"))
+            check(engine, str(Path(adapter["state_dir"]) / "remote"))
+            engine.update(transcript_adapter=str(HERE / "transcript.py"),
+                          **prepare(sys.executable, HERE),
+                          community_config=adapter["community_config"],
+                          product_validation=validation)
+            if not no_public_feed and domain == validation["publication"]["domain"]:
                 from product_contract import publication_feed
-                if engine["domain"] == validation["publication"]["domain"]:
-                    engine["feeds"] = [publication_feed(validation)]
+                engine["feeds"] = [publication_feed(validation)]
             value = dict(adapter, python=sys.executable, engine_config=str(engine_file),
-                         base_config=str(config), product_validation=validation)
-            engine["service_launch_context"] = service_launch_context(
-                adapter_file, value, previous=engine.get("service_launch_context"))
+                         product_validation=validation)
+            if claude_config_dir:
+                value["claude_config_dir"] = str(Path(claude_config_dir).expanduser().resolve())
+            engine["service_launch_context"] = service_launch_context(adapter_file, value)
             prepare_store(sys.executable, HERE, engine)
-            atomic_write(engine_file, engine)
-            atomic_write(adapter_file, value)
-        handoff = dict(status="ready")
-        if legacy_profile:
-            retirement = stop(str(anchor))
-            if retirement.get("idle") is not True or retirement.get("cleanup_failed"):
-                raise RuntimeError("legacy service handoff is pending; original "
-                                   "configuration and receipts were retained")
-            handoff["retirement"] = retirement
-        elif existing:
-            handoff = _handoff(value, engine_file, advance=advance)
-        write_community(Path(value["community_config"]), community, python=sys.executable)
-        if legacy_profile:
-            import hashlib
-            original = config.read_bytes()
-            preserved = binding.parent / (
-                "legacy-profile-" + hashlib.sha256(original).hexdigest() + ".json")
-            _publish_bytes(preserved, original)
-        if not existing or legacy_profile:
+            _publish_bytes(engine_file, (json.dumps(engine, indent=2) + "\n").encode())
+            _publish_bytes(adapter_file, (json.dumps(value, indent=2) + "\n").encode())
+            write_community(Path(value["community_config"]), community, python=sys.executable)
             atomic_write(config, value)
         os.environ["MINDIE_CC_CONFIG"] = str(adapter_file)
-        import consent
-        consent_result = consent.migrate_consent()
-        return dict(config=str(adapter_file), base_config=str(config), status=handoff["status"],
-                    legacy=legacy, handoff=handoff,
-                    legacy_session_reload_required=legacy_profile,
-                    consent_migration=consent_result)
+        return dict(config=str(adapter_file), base_config=str(config), status="ready")
 
 
 def _publish_bytes(path, value):

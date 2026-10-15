@@ -1,9 +1,4 @@
-"""Stdlib first-use and slash prompt_id consumption. No knowledge import.
-
-The persistent choice lives in the profile-shared consent document
-(``consent``); the legacy marker below only deduplicates native slash
-prompt ids and is a one-time migration source, never a consent source.
-"""
+"""Persistent explicit choice and native slash prompt_id deduplication."""
 
 from __future__ import annotations
 
@@ -11,7 +6,7 @@ import json
 import os
 from pathlib import Path
 
-from paths import first_use_path, state_dir
+from paths import state_dir
 
 import consent
 
@@ -19,11 +14,14 @@ CHOICES = ("contribute", "disabled")
 
 
 def _load(path: Path) -> dict:
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    from entry import _read_regular_json
+
+    state, data = _read_regular_json(path)
+    if state == "missing":
         return {}
-    return data if isinstance(data, dict) else {}
+    if state is not None:
+        raise ValueError("slash prompt receipt is unreadable or corrupt; preserved unchanged")
+    return data
 
 
 def _store(path: Path, data: dict) -> None:
@@ -37,16 +35,19 @@ def _store(path: Path, data: dict) -> None:
         pass
 
 
-def first_use():
+def saved_choice():
     saved = consent.load()
-    if saved["state"] == "ok" and saved["choice"] in consent.CHOICES:
-        return saved["choice"]
-    return None
+    if saved["state"] == "missing":
+        return None
+    if saved["state"] != "ok":
+        raise consent.ConsentError("saved consent is unavailable; preserved unchanged",
+                                   state=saved["state"])
+    return saved["choice"]
 
 
-def set_first_use(choice: str) -> str:
+def set_choice(choice: str) -> str:
     if choice not in CHOICES:
-        raise ValueError("configure contribution or explicitly disable it; read-only/later are legacy data only")
+        raise ValueError("configure contribution or explicitly disable it")
     return consent.record_choice(choice)
 
 
@@ -56,9 +57,9 @@ def consume_prompt(prompt_id: str) -> bool:
         raise ValueError("invalid prompt_id")
     path = state_dir() / "slash-prompts.json"
     data = _load(path)
-    seen = data.get("consumed")
-    if not isinstance(seen, list):
-        seen = []
+    seen = data.get("consumed", [])
+    if not isinstance(seen, list) or not all(isinstance(item, str) for item in seen):
+        raise ValueError("slash prompt receipt has an invalid consumed list; preserved unchanged")
     if prompt_id in seen:
         return False
     seen.append(prompt_id)
@@ -73,12 +74,12 @@ def configuration_required() -> dict:
         configured=False,
         experience="needs-configuration",
         sharing=dict(configured=False, enabled=False),
-        first_use=first_use(),
+        first_use=saved_choice(),
         choices=[],
         required=["runtime", "public_repository", "account", "project_scope"],
         setup="Start a new Claude session with the MindIE native plugin enabled",
         note=("Supply only missing destination and scope information. Reuse "
               "previously approved values. Installation or task binding alone "
               "does not make the experience loop available. Explicitly disabled "
-              "and legacy declined settings remain disabled until changed."),
+              "settings remain disabled until changed."),
     )

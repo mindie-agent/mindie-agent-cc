@@ -218,7 +218,7 @@ def test_session_recording_failure_keeps_known_feed_and_diagnostic_outcomes(tmp_
         return '{"status":"ok"}'
     with patch.object(maintenance, "sync_public_feed", return_value={"result": "ok", "results": rows}), \
             patch.object(maintenance, "run", side_effect=run), \
-            patch("knowledge_service.client_engine_path", return_value=tmp_path / "engine.json"), \
+            patch("paths.engine_config_path", return_value=tmp_path / "engine.json"), \
             patch("paths.state_dir", return_value=tmp_path), \
             patch("diagnostic_support.reporting_config_path", return_value=tmp_path / "reporting.json"), \
             patch("install_state.atomic_write", side_effect=PermissionError("fixture")):

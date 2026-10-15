@@ -1,20 +1,15 @@
 """Community sharing via the shared core validator and write boundary.
 
-The settings file is the declared ``community_config`` authority, resolved
-read-only; profile convergence and the ``consent_config`` stamp happen at
-explicit boundaries (``consent.migrate_community``), never inside a status
-read. Managed mutations hold the shared ``CommunityWriteContext`` anchored
-at the profile's canonical community path — the one lock key every writer
-of this profile uses — and resolve/re-read the current authority inside it
-before mutating. No adapter lock fork, no write-then-check replay, no
-caller-supplied stale merge base.
+The declared ``community_config`` is the sole settings authority. Mutations
+hold its shared ``CommunityWriteContext`` and read current scope inside that
+boundary. No alternate-file adoption or write-then-check replay occurs.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from consent import consent_path, resolve_community_path, shared_community_path
+from consent import consent_path, resolve_community_path
 
 
 def _settings_mod():
@@ -46,11 +41,9 @@ def capture_allowed(lease, cwd, config=None) -> bool:
 
 
 def _write_context(config):
-    """The profile's one write boundary, anchored at the canonical key even
-    while the declared authority is still a legacy file (an explicit test
-    path anchors at itself)."""
+    """Use the same declared authority and lock as the shared Core."""
     settings_mod = _settings_mod()
-    key = shared_community_path() if config is None else Path(config)
+    key = resolve_community_path() if config is None else Path(config)
     return settings_mod, settings_mod.CommunityWriteContext(key)
 
 

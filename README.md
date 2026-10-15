@@ -52,13 +52,20 @@ these candidate instructions as a published `v0.0.1`:
 ```sh
 claude plugin marketplace add https://github.com/mindie-agent/mindie-agent-cc.git
 claude plugin install mindie-agent@mindie-agent-cc --scope user
+claude --init-only
 claude plugin list --json
+claude mcp list
 ```
 
 The marketplace's selected Git revision determines the plugin version. MindIE
 does not resolve a second update channel or poll GitHub Releases independently.
-Start a Claude session after installation. SessionStart or initial MCP discovery prepares Python 3.13
-through uv and installs the complete `uv.lock` with `uv sync --locked
+The native `--init-only` command completes installation through SessionStart and
+exits without starting a conversation or calling a model. Check that both MindIE
+MCP servers report `Connected` before treating installation as complete.
+Claude starts MCP connections concurrently with SessionStart in an ordinary
+session; its connection window may expire before a cold dependency build finishes.
+The explicit native initialization stage prepares Python 3.13 through uv and
+installs the complete `uv.lock` with `uv sync --locked
 --no-editable`. The adapter itself is installed into that runtime; it does not
 import executable code from a disposable checkout or native plugin cache.
 The cold installation requires network access to the declared dependencies.
@@ -75,10 +82,10 @@ consulting the cache. Hot Hooks run uv offline with Python downloads disabled;
 Stop never installs a runtime, syncs a feed or invokes the business model.
 
 Shared business configuration remains at
-`${XDG_CONFIG_HOME:-$HOME/.config}/mindie-agent/cc.json`. Its first installation
-binding is a fixed anchor, not a mutable version selector. Contribution scope,
-consent, bodies, cursors and paid or uncertain results remain in their existing
-shared locations across releases.
+`${XDG_CONFIG_HOME:-$HOME/.config}/mindie-agent/cc.json`. It records the selected installation binding. Contribution scope and consent
+remain separate user data; changing code or reloading the native host never
+authorizes resetting or asking again for those choices. Bodies, cursors, usage
+and uncertain results remain in their existing locations.
 
 The mindie-agent skill describes available capabilities; `/mindie-agent:init`
 is an optional configuration/status entry. Ordinary tasks do not need a
@@ -126,25 +133,24 @@ Use Claude's native marketplace update and plugin update commands. MindIE has
 no code-update timer, `current.json` selector, automatic install retry or second
 package registry. Different native releases must have different plugin versions;
 a fixed release entry cannot be overwritten with different code.
+Complete the selected version's installation with `claude --init-only`, then
+read back its two connections with `claude mcp list`, using the same profile.
+These are installation and update steps; ordinary tasks do not run a preparation
+or reconnect command.
 
-A new native release prepares its locked environment and checks durable state
-compatibility before handing off the service. An authenticated live connection,
-or an explicit shared-Core successor receipt when the service is stopped,
-identifies the previous owner. An idle owner can be retired for the new fixed
-binding. Busy or uncertain ownership remains visible and is not forced closed.
-Compatible old sessions retain their fixed runtime, can read through the new
-owner and durably enqueue Stop work without restarting a retired owner.
-Only SessionStart advances the service owner. A new entry prepared while the
-old owner is busy can still use that compatible owner; a later SessionStart
-may complete the idle handoff. Cold MCP/Stop startup always follows the fixed
-anchor's explicit successor chain. A late prepared release cannot move a newer
-completed handoff backwards, and the base profile is not rewritten.
+The unpublished 0.0.1 candidate initializes an empty installation profile and
+verifies an existing identical binding. It rejects other development bindings
+without changing their configuration, services, data or authorization. It does
+not implement migration between unpublished candidates. A fixed entry that no
+longer matches the installation reports `native_reload_required`; it never
+selects another runtime or restarts an old owner. MCP requests check this
+identity before dispatch, including requests from an already connected server.
 
-Migration from the pre-contract updater is finite: verify the exact owned old
-code-update task, unregister it, preserve old receipts and configuration, and
-retire the old owner only when idle. Unknown native install outcomes block
-migration. Already open pre-contract sessions must be reloaded after this one
-time migration; only the new protocol promises compatible old/new coexistence.
+This boundary does not define upgrades between future published releases.
+Those must preserve existing contribution/reporting choices, scope and durable
+data according to their actual format contract. A host reload is not a request
+to authorize contribution again. Transparent old/new session coexistence and
+automatic candidate migration are not claimed by this release.
 
 SessionStart performs shared knowledge-feed interval/backoff maintenance and
 bounded diagnostic retention, including the existing reporter handoff contract.

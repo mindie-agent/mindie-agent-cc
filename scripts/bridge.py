@@ -162,7 +162,7 @@ def handle_stop():
             _print({})
             return 0
         import sharing as sharing_mod
-        from knowledge_service import client_engine_path as engine_path
+        from paths import engine_config_path as engine_path
 
         session = require_session(event.get("session_id"))
         try:

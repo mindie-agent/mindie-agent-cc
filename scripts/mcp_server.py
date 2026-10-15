@@ -27,6 +27,7 @@ from identity import (
     meta_tool_use_id,
 )
 from paths import state_dir
+from product_contract import installed_version
 
 MAX_YIELD_TIME_MS = 30000
 REMOTE_ERROR_CATEGORIES = frozenset({
@@ -266,7 +267,7 @@ def handle(surface, message):
             result=dict(
                 protocolVersion="2025-11-25",
                 capabilities={"tools": {}},
-                serverInfo={"name": f"mindie-cc-{surface}", "version": "0.1.0"},
+                serverInfo={"name": f"mindie-cc-{surface}", "version": installed_version()},
             ),
         )
     if method == "ping":

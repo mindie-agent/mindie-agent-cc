@@ -24,7 +24,8 @@ def check(engine_config, remote_base):
     from mindie_knowledge.state_layout import state_root
 
     try:
-        config = json.loads(Path(engine_config).read_text(encoding="utf-8"))
+        config = (engine_config if isinstance(engine_config, dict)
+                  else json.loads(Path(engine_config).read_text(encoding="utf-8")))
         if not isinstance(config, dict):
             raise ValueError("engine config is not an object")
         if not isinstance(remote_base, str) or not os.path.isabs(remote_base):

@@ -1,25 +1,24 @@
 # Fixed-runtime service continuity
 
-Current 0.0.1 candidates use native Git marketplace selection and immutable uv
-runtimes. Each release has its own fixed adapter/engine binding. The shared base
-profile remains the first-install anchor; it is not rewritten to select code.
+The unpublished 0.0.1 candidate uses native Git marketplace selection and an
+immutable uv runtime. One adapter installation config names the selected fixed
+binding; the shared Core owns the exact service identity and process lifetime.
+There is no version ordering, compatible-client fallback or successor chain.
 
-Before a new entry is published, setup holds the profile installation lock and
-checks durable state compatibility. An authenticated Core connection identifies
-the active owner. Without a live owner, only an explicit Core successor chain
-may identify the previous binding. Retirement requires idle ownership; busy or
-uncertain state stays visible. A prepared entry may reuse the compatible busy
-owner. Only SessionStart attempts an idle handoff; ordinary MCP and Stop recover
-from the fixed anchor's explicit successor chain without advancing it. Version
-and source checks also protect an unretired intermediate release: if v2 was
-prepared while v1 was busy and v3 later completed handoff, a late v2 cannot retire
-v3. The shared Core authenticates the compatible live owner, and Stop admits its
-work into the same durable queue.
+First preparation initializes an empty profile after checking durable formats.
+An identical existing binding can be verified without rewriting it. Other
+unpublished bindings are rejected without retiring services or changing data.
+A fixed entry checks the selected installation before use. Each MCP request
+checks the process's fixed binding under the existing operation lock before
+launching its helper; a stale entry reports `native_reload_required` and cannot
+reverse the selection. Long remote operations do not hold this setup lock or
+block their own status/cancellation requests.
 
-Pre-contract installations are different: their original config and receipts are
-preserved, their exact code-update task is unregistered, and their idle service
-is retired without claiming client compatibility. The base anchor moves once to
-the modern binding. Existing legacy sessions must reload.
+Contribution and reporting choices are independent user data. Native code
+selection or host reload does not ask for authorization again, reset scope,
+or change a recorded disabled choice. Paid and uncertain outcomes remain
+preserved. This first release does not promise transparent concurrent sessions
+across different unpublished builds or automatically migrate their profiles.
 
 The following notes describe earlier updater implementations and their historical
 acceptance. They do not claim that the replacement has passed native acceptance.
@@ -33,10 +32,10 @@ without restoring the service. A later query hid the defect by starting it;
 a task that only used remote development could then deliver a Stop event to
 no service and lose that increment.
 
-The update transaction now confirms that the exact old loopback endpoint has
-exited, switches the native package and committed runtime tuple, and makes
+The historical update transaction confirmed that the exact old loopback endpoint
+had exited, switched the native package and committed runtime tuple, and made
 one bounded restoration attempt while retaining the exclusive operation lock.
-Restoration uses the selected interpreter and engine configuration directly,
+Restoration used the selected interpreter and engine configuration directly,
 never a shared-lock launcher. Core startup remains one spawn, five seconds,
 and three readiness probes; the returned service must be unfrozen.
 
@@ -52,11 +51,11 @@ on-demand startup. Hook acceptance, a live worker, organized experience and a
 submitted PR are separate outcomes. This change requires new native acceptance;
 the historical update-continuity evidence below does not establish it.
 
-Rollback restores a service only after both the retained native package and
-the exact old pointer are proven restored. Failed or interrupted handoff is
-kept in the existing updater status as service_handoff. Same-revision checks
-and successful Feed sync cannot hide it. A later scheduler invocation does
-not interpret that marker as permission to spawn or retry restoration.
+Historical rollback restored a service only after both the retained native
+package and exact old pointer were proven restored. Failed or interrupted
+handoff was kept in updater status as service_handoff. That updater, pointer
+and scheduler have been removed. The current implementation uses the fixed installation and exact Core owner
+described above; it does not retain that update transaction.
 
 The selected native profile is retained for the replacement service. Claude
 Code imports only supported provider/model/effort values from that profile's

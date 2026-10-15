@@ -8,10 +8,10 @@ import json
 import os
 from pathlib import Path
 import shutil
-import subprocess
 import sys
 import sysconfig
 
+import bounded
 from install_state import OperationLock
 from product_contract import native_version, package_files, source_identity
 from install_state import atomic_write
@@ -47,9 +47,8 @@ spec = importlib.util.find_spec('mindie_cc')
 print(json.dumps({'scripts':str(pathlib.Path(spec.origin).parent),
                   'prefix':sys.prefix, 'version':d.version}))
 """
-    result = subprocess.run([str(python), "-I", "-c", script],
-                            capture_output=True, text=True, check=True)
-    value = json.loads(result.stdout)
+    output = _run("runtime-readback", [str(python), "-I", "-c", script])
+    value = json.loads(output)
     if value["version"] != native_version(source):
         raise ValueError("installed adapter version differs from the native plugin")
     scripts = Path(value["scripts"])
@@ -62,7 +61,21 @@ print(json.dumps({'scripts':str(pathlib.Path(spec.origin).parent),
     return scripts
 
 
+def _run(stage, command, **kwargs):
+    try:
+        return bounded.run(command, **kwargs)
+    except Exception as exc:
+        exc.mindie_stage = stage
+        exc.add_note(f"MindIE preparation failed at {stage}; not retried.")
+        raise
+
+
 def ensure_runtime(source, *, prepare=True):
+    with bounded.operation(signals=True):
+        return _ensure_runtime(source, prepare=prepare)
+
+
+def _ensure_runtime(source, *, prepare):
     source = Path(source).resolve()
     if not (source / "uv.lock").is_file():
         raise ValueError("the native plugin does not contain its complete uv.lock")
@@ -87,9 +100,9 @@ def ensure_runtime(source, *, prepare=True):
         env = dict(os.environ, UV_PROJECT_ENVIRONMENT=str(runtime), UV_NO_PROGRESS="1",
                    GIT_TERMINAL_PROMPT="0")
         env.pop("PYTHONPATH", None)
-        subprocess.run([uv, "sync", "--project", str(source), "--locked", "--no-editable",
-                        "--no-dev", "--python", sys.executable],
-                       env=env, stdout=sys.stderr, stderr=sys.stderr, check=True)
+        _run("locked-runtime-install",
+             [uv, "sync", "--project", str(source), "--locked", "--no-editable",
+              "--no-dev", "--python", sys.executable], env=env)
         scripts = readback(python, source)
         atomic_write(complete, expected)
         return python, scripts

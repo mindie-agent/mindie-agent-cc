@@ -34,7 +34,10 @@ class FrontControlTests(unittest.TestCase):
         (generation / "scripts").mkdir(parents=True)
         (generation / "scripts/mcp_server.py").write_text(CHILD, encoding="utf-8")
         config = self.root / "adapter.json"
-        config.write_text(json.dumps({"state_dir": str(self.root / "state")}), encoding="utf-8")
+        config.write_text(json.dumps({
+            "state_dir": str(self.root / "state"), "base_config": str(config),
+            "python": sys.executable, "engine_config": str(self.root / "engine.json"),
+        }), encoding="utf-8")
         for path in SCRIPTS.glob("*.py"):
             if path.name != "mcp_server.py":
                 shutil.copyfile(path, generation / "scripts" / path.name)

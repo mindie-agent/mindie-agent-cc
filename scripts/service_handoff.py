@@ -1,4 +1,4 @@
-"""Exact-generation retirement and restoration owned by the shared core."""
+"""Exact-configuration retirement and restoration owned by the shared core."""
 import json
 import sys
 
@@ -7,8 +7,8 @@ from mindie_knowledge.loop.activation import Admission
 from mindie_knowledge.loop.lifecycle import retire_service, restore_service, inspect_retirement
 
 
-def stop(engine, *, successor_config_path=None):
-    return retire_service(engine, successor_config_path=successor_config_path)
+def stop(engine):
+    return retire_service(engine)
 
 
 def restore(engine, retirement=None):

@@ -1,11 +1,13 @@
-"""The existing profile installation lock; no runtime selection registry."""
+"""One installation profile and its existing operation lock."""
 
+from contextlib import contextmanager
 import json
 import os
+import sys
 import time
 from pathlib import Path
 
-from paths import state_dir
+from paths import config_path, state_dir
 
 if os.name == "nt":
     import msvcrt
@@ -14,8 +16,43 @@ else:
 
 
 def lock_path(config=None):
-    # Keep the prior path so a live legacy updater cannot race migration.
     return state_dir(config) / "update" / "operation.lock"
+
+
+class InstallationUnavailable(ValueError):
+    """This fixed entry is no longer the selected installation."""
+
+
+def read_binding(path=None):
+    from entry import _read_regular_json
+
+    state, value = _read_regular_json(Path(path or config_path()))
+    if state is not None:
+        raise InstallationUnavailable(
+            "native_reload_required: installation configuration is unavailable"
+        )
+    for name in ("base_config", "engine_config", "python", "state_dir"):
+        if not isinstance(value.get(name), str) or not os.path.isabs(value[name]):
+            raise InstallationUnavailable(
+                "unsupported development profile; existing choices and data are preserved"
+            )
+    return value
+
+
+@contextmanager
+def installed_binding(expected=None, *, timeout=5.0):
+    """Check the process's fixed binding under the installation operation lock."""
+    expected = read_binding() if expected is None else expected
+    with OperationLock(expected).shared(timeout=timeout):
+        selected = read_binding(expected["base_config"])
+        fixed = read_binding()
+        if (selected != expected or fixed != expected
+                or os.path.normcase(expected["python"]) != os.path.normcase(sys.executable)):
+            raise InstallationUnavailable(
+                "native_reload_required: this entry is not the selected installation"
+            )
+        yield expected
+
 
 def atomic_write(path: Path, value) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -60,15 +97,24 @@ class _Held:
         self._descriptor = None
 
     def __enter__(self):
+        from bounded import check_cancelled
+
+        check_cancelled()
         self._path.parent.mkdir(parents=True, exist_ok=True)
         descriptor = os.open(self._path, os.O_RDWR | os.O_CREAT, 0o600)
         deadline = time.monotonic() + self._timeout
-        while not _lock_once(descriptor, self._exclusive):
-            if time.monotonic() >= deadline:
-                os.close(descriptor)
-                kind = "exclusive" if self._exclusive else "shared"
-                raise LockTimeout(f"timed out acquiring {kind} operation lock")
-            time.sleep(0.05)
+        try:
+            while True:
+                check_cancelled()
+                if _lock_once(descriptor, self._exclusive):
+                    break
+                if time.monotonic() >= deadline:
+                    kind = "exclusive" if self._exclusive else "shared"
+                    raise LockTimeout(f"timed out acquiring {kind} operation lock")
+                time.sleep(0.05)
+        except BaseException:
+            os.close(descriptor)
+            raise
         self._descriptor = descriptor
         return self
 
