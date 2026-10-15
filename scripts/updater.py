@@ -68,6 +68,7 @@ try:
         engine_config_path,
         load_adapter_config,
         load_engine_config,
+        service_launch_context,
     )
 except ImportError as exc:
     diagnostic_support.failure(
@@ -569,6 +570,9 @@ def write_generation_configs(generation: Path, python: Path, adapter: dict,
     gen_adapter = config_dir / "cc.adapter.json"
     atomic_write(gen_engine, dict(
         engine,
+        service_launch_context=service_launch_context(
+            gen_adapter, adapter, engine.get("service_launch_context"),
+        ),
         transcript_adapter=str(generation / "scripts" / "transcript.py"),
         **__import__("capture_config").prepare(python, generation / "scripts"),
     ))

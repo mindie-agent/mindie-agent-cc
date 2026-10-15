@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 from paths import engine_config_path
@@ -39,15 +38,8 @@ def ensure_service(engine_file=None):
 
 
 def prepare_service(engine_file=None):
-    """Transfer one explicit service starter to the shared lifetime owner."""
-    from mindie_knowledge.loop.process import spawn_service
+    """Request the shared service owner without claiming readiness."""
+    from mindie_knowledge.loop.cli import prepare_service as core_prepare
 
     path = str(Path(engine_file or engine_config_path()).resolve())
-    spawn_service([sys.executable, str(Path(__file__).resolve()), path])
-    return "starting"
-
-
-if __name__ == "__main__":
-    from mindie_knowledge.loop.cli import ensure_service as core_ensure
-
-    core_ensure(sys.argv[1], _from_detached_starter=True)
+    return core_prepare(path)

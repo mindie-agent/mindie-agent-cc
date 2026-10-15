@@ -36,6 +36,7 @@ if str(HERE) not in sys.path:
 
 import bounded
 from bounded import OutputLimitExceeded, OwnerExited
+import paths
 from mindie_knowledge.loop.process import AGENT_ERROR_EXIT_CODES
 from mindie_knowledge.materials import summarizer
 
@@ -106,13 +107,7 @@ def native_environment():
             raise ValueError("native provider settings are not an object")
     except (OSError, ValueError, TypeError) as exc:
         raise ProfileUnavailableError("native provider settings are unavailable") from exc
-    allowed = {
-        "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
-        "ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-        "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL",
-        "CLAUDE_CODE_EFFORT_LEVEL", "MAX_THINKING_TOKENS",
-    }
-    for key in allowed:
+    for key in paths.NATIVE_PROVIDER_ENV:
         if key in provider:
             if not isinstance(provider[key], str):
                 raise ProfileUnavailableError("native provider setting must be text")
@@ -140,7 +135,8 @@ def identity(env=None):
     if env is None:
         env = native_environment()
     # Read the implementation actually executing, not merely its command path.
-    sources = (Path(__file__), Path(bounded.__file__), Path(summarizer.__file__))
+    sources = (Path(__file__), Path(bounded.__file__), Path(summarizer.__file__),
+               Path(paths.__file__))
     implementation = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in sources}
     implementation["native_command"] = os.environ.get("MINDIE_CC_BIN", "claude")
     return summarizer.policy_identity(model=native_model(env), effort=SUMMARY_EFFORT,

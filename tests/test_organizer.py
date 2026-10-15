@@ -79,7 +79,7 @@ class WorkerIdentityTests(unittest.TestCase):
         self.assertEqual(identity["model"], "fixture-model")
         self.assertEqual(identity["effort"], "low")
         implementation = identity["implementation"]
-        for name in ("organizer.py", "bounded.py", "summarizer.py"):
+        for name in ("organizer.py", "bounded.py", "summarizer.py", "paths.py"):
             self.assertEqual(len(implementation[name]), 64, name)
         self.assertEqual(implementation["native_command"], "claude")
         changed = organizer.identity({"ANTHROPIC_MODEL": "other-model"})
@@ -113,14 +113,21 @@ class WorkerIdentityTests(unittest.TestCase):
                         "ANTHROPIC_MODEL": "selected-model",
                         "CLAUDE_CODE_EFFORT_LEVEL": "high",
                         "UNRELATED_SETTING": "must-not-import"},
+                "model": "settings-model-fallback",
+                "effortLevel": "settings-effort-fallback",
                 "hooks": {"Stop": "must-not-run"},
             }), encoding="utf-8")
-            with patch.dict(organizer.os.environ, {}, clear=True), patch(
+            with patch.dict(organizer.os.environ, {
+                "ANTHROPIC_AUTH_TOKEN": "caller-secret",
+                "ANTHROPIC_MODEL": "caller-model",
+                "CLAUDE_CODE_EFFORT_LEVEL": "caller-effort",
+            }, clear=True), patch(
                 "paths.load_adapter_config", return_value={"claude_config_dir": tmp}
             ):
                 env = organizer.native_environment()
             self.assertEqual(env["ANTHROPIC_AUTH_TOKEN"], "fixture-secret")
             self.assertEqual(organizer.native_model(env), "selected-model")
+            self.assertEqual(env["CLAUDE_CODE_EFFORT_LEVEL"], "high")
             self.assertEqual(organizer.SUMMARY_EFFORT, "low")
             self.assertNotIn("UNRELATED_SETTING", env)
             self.assertNotIn("hooks", env)

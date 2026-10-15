@@ -425,6 +425,8 @@ def main():
     )
     if args.claude_config_dir:
         adapter_value["claude_config_dir"] = str(args.claude_config_dir.expanduser().absolute())
+    from paths import service_launch_context
+    value["service_launch_context"] = service_launch_context(config, adapter_value)
     if args.update_remote:
         adapter_value["update_remote"] = args.update_remote
     adapter_value["update_channel"] = args.channel

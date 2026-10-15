@@ -5,12 +5,51 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shutil
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ID = "mindie-agent"
 MARKETPLACE = "mindie-agent-cc"
 PLUGIN_QUALIFIED = f"{PLUGIN_ID}@{MARKETPLACE}"
 CONFIG_ENV = "MINDIE_CC_CONFIG"
+NATIVE_PROVIDER_ENV = (
+    "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "CLAUDE_CODE_EFFORT_LEVEL", "MAX_THINKING_TOKENS",
+)
+TRANSPORT_ENV = (
+    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+    "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+    "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS",
+)
+
+
+def service_launch_context(adapter_file: Path, adapter: dict, previous=None) -> dict:
+    """Declare service bindings without reading credentials or requiring Claude."""
+    from diagnostic_fallback import default_root
+    from diagnostic_support import reporting_config_path
+
+    inherited = previous.get("paths", {}) if previous is not None else {}
+    selected = adapter.get("claude_config_dir")
+    profile = Path(selected or os.environ.get("CLAUDE_CONFIG_DIR")
+                   or inherited.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+    diagnostics_config = (reporting_config_path() if os.environ.get("MINDIE_DIAGNOSTICS_CONFIG")
+                          else inherited.get("MINDIE_DIAGNOSTICS_CONFIG") or reporting_config_path())
+    diagnostics_root = (default_root() if os.environ.get("MINDIE_DIAGNOSTICS_ROOT")
+                        else inherited.get("MINDIE_DIAGNOSTICS_ROOT") or default_root())
+    paths = {
+        CONFIG_ENV: str(adapter_file.expanduser().absolute()),
+        "CLAUDE_CONFIG_DIR": str(profile.expanduser().absolute()),
+        "MINDIE_DIAGNOSTICS_CONFIG": str(Path(diagnostics_config).expanduser().absolute()),
+        "MINDIE_DIAGNOSTICS_ROOT": str(Path(diagnostics_root).expanduser().absolute()),
+    }
+    explicit = os.environ.get("MINDIE_CC_BIN")
+    native = ((shutil.which(explicit) or explicit) if explicit
+              else inherited.get("MINDIE_CC_BIN") or shutil.which("claude"))
+    if native:
+        paths["MINDIE_CC_BIN"] = str(Path(native).expanduser().absolute())
+    return {"paths": paths, "environment": [*NATIVE_PROVIDER_ENV, *TRANSPORT_ENV]}
 
 
 def config_path() -> Path:

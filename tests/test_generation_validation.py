@@ -150,6 +150,9 @@ class PreparedGenerationTests(unittest.TestCase):
         generation, python, adapter_path = self._stage()
         selected = genstate.read_json(adapter_path)
         engine = genstate.read_json(Path(selected["engine_config"]))
+        self.assertEqual(
+            engine["service_launch_context"]["paths"]["MINDIE_CC_CONFIG"], str(adapter_path),
+        )
         receipt = selected["product_validation"]
         self.assertTrue((generation / "scripts" / "diagnostic-build.json").is_file())
         self.assertEqual(receipt, dict(product_contract.identity(generation, SHA), status="validated"))

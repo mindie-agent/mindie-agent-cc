@@ -101,6 +101,7 @@ class SetupTests(unittest.TestCase):
             self.assertTrue(Path(report["config"]).is_file())
             engine = json.loads(Path(report["engine_config"]).read_text(encoding="utf-8"))
             self.assertIn("admission_path", engine)
+            self.assertEqual(engine["service_launch_context"]["paths"]["MINDIE_CC_CONFIG"], str(config))
             self.assertNotIn("session_activation", engine)
             community = json.loads(Path(report["community_config"]).read_text(encoding="utf-8"))
             self.assertFalse(community["enabled"])
@@ -116,6 +117,11 @@ class SetupTests(unittest.TestCase):
             import product_contract
             generation = Path(report["generation"])
             selected = json.loads((generation / "config" / "cc.adapter.json").read_text())
+            generation_engine = json.loads(Path(selected["engine_config"]).read_text())
+            self.assertEqual(
+                generation_engine["service_launch_context"]["paths"]["MINDIE_CC_CONFIG"],
+                str(generation / "config" / "cc.adapter.json"),
+            )
             self.assertEqual(selected["product_validation"], report["product_validation"])
             expected = product_contract.identity(
                 generation, report["product_validation"]["candidate_revision"],
