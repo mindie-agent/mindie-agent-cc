@@ -281,11 +281,24 @@ class WorkerEnvelopeTests(unittest.TestCase):
         self.assertEqual(value["billing_status"], "unknown")
         summarizer.validate_outcome(value, payload)
 
-    def test_extra_turn_is_rejected(self):
+    def test_structured_tool_result_event_is_not_an_extra_model_call(self):
         payload = make_payload()
         value = self.execute(payload, native_envelope(metadata_for(payload), num_turns=2))
-        self.assertEqual(value["status"], "outcome_unknown")
-        self.assertEqual(value["error_reason"], "native_extra_turn")
+        self.assertEqual(value["status"], "returned")
+        self.assertEqual(value["model_calls"], 1)
+        self.assertTrue(value["usage_known"])
+        summarizer.validate_outcome(value, payload)
+
+    def test_native_max_turns_error_is_failed_with_known_usage(self):
+        payload = make_payload()
+        native = json.loads(native_envelope(None, is_error=True, num_turns=2))
+        native["subtype"] = "error_max_turns"
+        value = self.execute(payload, json.dumps(native))
+        self.assertEqual(value["status"], "failed")
+        self.assertEqual(value["error_reason"], "native_turn_failed")
+        self.assertEqual(value["model_calls"], 1)
+        self.assertTrue(value["usage_known"])
+        self.assertEqual(value["billing_status"], "reported")
         summarizer.validate_outcome(value, payload)
 
     def test_policy_mismatch_never_calls_the_model(self):

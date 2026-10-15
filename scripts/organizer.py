@@ -183,9 +183,8 @@ def _parse_native_result(output, receipt):
     usage = _usage_counters(data.get("usage"))
     if usage is not None:
         receipt["usage"] = usage
-    turns = data.get("num_turns")
-    if type(turns) is int and turns > 1:
-        raise NativeFailure("native invocation attempted another turn", reason="native_extra_turn")
+    # Native num_turns includes tool-result user events, including the local
+    # StructuredOutput result. The CLI --max-turns bound limits model turns.
     if data.get("is_error") is True:
         receipt["turn_failed"] = True
         raise NativeFailure("native invocation reported an error result", reason="native_turn_failed")
