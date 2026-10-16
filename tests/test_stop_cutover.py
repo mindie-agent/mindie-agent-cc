@@ -1,6 +1,7 @@
 """Real capture queue during owner cutover; synthetic input and zero model calls."""
 
 from contextlib import closing
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -64,19 +65,76 @@ def capture_fixture(root):
     return canonical, binding, event, env, model_marker, old_retirement
 
 
+def stop_failure_details(env, result, elapsed, error_type):
+    details = {
+        "elapsed_seconds": round(elapsed, 6),
+        "returncode": result.returncode,
+        "assertion_error_type": error_type,
+        "stdout_bytes": len(result.stdout),
+        "stderr": {
+            "bytes": len(result.stderr),
+            "sha256": hashlib.sha256(result.stderr).hexdigest(),
+            "markers": [label for label in (
+                "Traceback", "TimeoutError", "PermissionError", "JSONDecodeError",
+                "diagnostic storage unavailable",
+            ) if label.encode() in result.stderr],
+        },
+    }
+    try:
+        from mindie_diagnostics.local_snapshot import recent_failures
+
+        snapshot = recent_failures([env["MINDIE_DIAGNOSTICS_ROOT"]])
+        details["diagnostics"] = {
+            key: snapshot[key]
+            for key in ("status", "truncated", "scanned_files", "errors")
+        }
+        details["diagnostics"]["recent"] = [
+            {key: row[key] for key in ("operation", "stage", "category", "error_type")
+             if key in row}
+            for row in snapshot["recent"]
+        ]
+    except Exception as exc:
+        details["diagnostics"] = {"read_error_type": type(exc).__name__}
+    try:
+        database = store_file(Path(env["MINDIE_CC_CONFIG"]).parent)
+        if not database.exists():
+            details["captures"] = {"state": "database_missing"}
+        else:
+            with closing(sqlite3.connect(
+                    database.as_uri() + "?mode=ro", uri=True, timeout=0.1)) as db:
+                statuses = [row[0] for row in db.execute("SELECT status FROM captures")]
+            known = ("queued", "processing", "failed", "cancelled",
+                     "no-new-material", "no-shareable-material")
+            details["captures"] = {
+                "total": len(statuses),
+                "states": {state: statuses.count(state) for state in known},
+                "other": sum(state not in known for state in statuses),
+            }
+    except Exception as exc:
+        details["captures"] = {"read_error_type": type(exc).__name__}
+    return details
+
+
 def raw_stop(event, env, *, failed=False):
+    started = time.monotonic()
     result = subprocess.run(
         [sys.executable, str(SCRIPTS / "mindie_launch.py"), "hook", "stop"],
         input=json.dumps(event).encode(), capture_output=True, env=env, timeout=5,
     )
-    assert result.returncode == 0, result.stderr.decode()
-    output = json.loads(result.stdout)
-    if failed:
-        assert set(output) == {"systemMessage"}
-        assert "encountered an error" in output["systemMessage"]
-        assert "decision" not in output and "continue" not in output
-    else:
-        assert output == {}
+    elapsed = time.monotonic() - started
+    try:
+        assert result.returncode == 0
+        output = json.loads(result.stdout)
+        if failed:
+            assert set(output) == {"systemMessage"}
+            assert "encountered an error" in output["systemMessage"]
+            assert "decision" not in output and "continue" not in output
+        else:
+            assert output == {}
+    except (AssertionError, ValueError) as exc:
+        # Reuse the bounded diagnostic projection; never print transcript or stderr text.
+        details = stop_failure_details(env, result, elapsed, type(exc).__name__)
+        pytest.fail(json.dumps(details, sort_keys=True), pytrace=False)
 
 
 def capture_rows(root):
@@ -233,3 +291,46 @@ def test_committed_capture_warns_only_for_known_worker_or_wake_failure():
     with patch.object(bridge, "_record_stop"):
         for result, expected in cases:
             assert bridge._observe_stop(result) is expected
+
+
+def test_raw_stop_failure_preserves_safe_diagnostics_and_capture_state(tmp_path):
+    secret = "PRIVATE_SENTINEL_transcript_or_credential"
+    log = tmp_path / "diagnostics" / "events" / "mindie-agent-cc" / (
+        "123-" + "a" * 32 + ".jsonl")
+    log.parent.mkdir(parents=True)
+    log.write_text(json.dumps({
+        "event": "operation.end", "status": "error", "operation_id": "b" * 32,
+        "operation": "hook", "attributes": {
+            "stage": "helper_failed", "category": "child_failure",
+            "error_type": "TimeoutError", "exception_message": secret,
+        },
+    }) + "\n", encoding="utf-8")
+    database = store_file(tmp_path)
+    database.parent.mkdir(parents=True)
+    with closing(sqlite3.connect(database)) as db:
+        db.execute("CREATE TABLE captures(status TEXT, body TEXT)")
+        db.execute("INSERT INTO captures VALUES (?, ?)", ("queued", secret))
+        db.commit()
+    result = subprocess.CompletedProcess(
+        [], 0, json.dumps({"systemMessage": secret}).encode(),
+        ("TimeoutError: " + secret).encode(),
+    )
+    env = {
+        "MINDIE_CC_CONFIG": str(tmp_path / "cc.json"),
+        "MINDIE_DIAGNOSTICS_ROOT": str(tmp_path / "diagnostics"),
+    }
+    with patch.object(subprocess, "run", return_value=result):
+        with pytest.raises(pytest.fail.Exception) as failed:
+            raw_stop({"private_input": secret}, env)
+    message = str(failed.value)
+    assert secret not in message
+    details = json.loads(message)
+    assert details["returncode"] == 0
+    assert details["elapsed_seconds"] >= 0
+    assert details["stderr"]["markers"] == ["TimeoutError"]
+    assert details["diagnostics"]["recent"] == [{
+        "operation": "hook", "stage": "helper_failed",
+        "category": "child_failure", "error_type": "TimeoutError",
+    }]
+    assert details["captures"]["total"] == details["captures"]["states"]["queued"] == 1
+    assert str(tmp_path) not in message
