@@ -1,5 +1,7 @@
 # Fixed-runtime service continuity
 
+[中文](service-continuity.zh.md) | English · [Documentation Index](README.en.md)
+
 The unpublished 0.0.1 candidate uses native Git marketplace selection and an
 immutable uv runtime. One adapter installation config names the selected fixed
 binding; the shared Core owns the exact service identity and process lifetime.

@@ -1,5 +1,7 @@
 # Failure diagnosis and local cancellation
 
+English | [中文](failure-diagnostics.zh.md)
+
 Native status reports existing knowledge configuration, service/storage health,
 this task's binding and diagnostic failure counter, and the latest five captures
 and contribution batches associated with the bound task. An absent identity
@@ -10,7 +12,7 @@ Status does not initialize databases, start models/services, bind a task,
 reset failure counters, or replay consumed input. SQLite read-only access may create normal
 WAL reader sidecars; it does not change business records. Failure projections omit
 raw provider stderr, transcript text, tokens and other task identities. Existing
-malformed adapter settings produce a diagnostic instead of first-use choices.
+formed or malformed adapter settings produce a diagnostic instead of first-use choices when corrupted.
 Native shell/SSH and independent remote-dev remain available when knowledge is down.
 
 The stdio front keeps input responsive while bounded tool requests run. Cancel and
@@ -78,6 +80,5 @@ tasks. The returned setup `command` is an argv array; `command_line` declares
 `command_shell` and uses PowerShell quoting on Windows.
 
 The synthetic adapter/log/outbox/mock-Issue checks and actual Windows process
-identity checks are recorded in diagnostics'
-`docs/production-reporting-acceptance-2026-10-15.md`. They do not demonstrate
+identity checks are recorded in the `mindie-agent/diagnostics` repository. They do not demonstrate
 native Claude event delivery, scheduled-task setup or a public Issue write.

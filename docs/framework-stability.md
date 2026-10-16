@@ -1,5 +1,7 @@
 # Framework stability — 2026-09-28
 
+[中文](framework-stability.zh.md) | English · [Documentation Index](README.en.md)
+
 Historical component baseline at revision `3e36a28`. Current native installation
 and acceptance boundaries are described in the README.
 
