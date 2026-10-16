@@ -5,8 +5,8 @@
 <h1 align="center">MindIE Agent for Claude Code</h1>
 
 <p align="center">
-  <b>Native Claude Code Plugin for Ascend Inference & Operator Engineering</b><br/>
-  <sub>On-Demand Domain Knowledge · SSH Remote NPU Development · Privacy-Gated Experience Loop</sub>
+  <b>Native Claude Code Plugin for the Full Ascend NPU AI Infra Lifecycle</b><br/>
+  <sub>Architecture Design · Feature Development · AscendC / Triton Kernels · Remote NPU Testing · Silent Experience Loop</sub>
 </p>
 
 <p align="center">
@@ -27,43 +27,43 @@
 
 ---
 
-**MindIE Agent for Claude Code** (`mindie-agent-cc`) is the official native Claude Code plugin for [MindIE Agent](https://github.com/mindie-agent/mindie-agent). It equips your everyday Claude Code sessions with **`vLLM-Ascend` domain knowledge search**, **SSH remote Ascend NPU execution**, and a **privacy-gated local experience loop**.
+**MindIE Agent for Claude Code** (`mindie-agent-cc`) is the official native Claude Code plugin for [MindIE Agent](https://github.com/mindie-agent/mindie-agent), providing **a unified Agent capability foundation across the entire Ascend NPU AI Infra workflow — architecture design, feature development, operator implementation, testing & verification, and performance tuning**. Today it includes deep support for **`vLLM-Ascend` development & testing** and **`AscendC` / `Triton` kernel engineering**, with broader Ascend AI Infra domains continuously expanding.
 
-Built on the [MindIE Agent Engineering Design Principles](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.en.md), **domain knowledge and the Skill system are invoked manually on demand via `/mindie-agent`** so they never pollute unrelated tasks, while **`remote-dev` remote NPU tools trigger automatically by default** in everyday conversation—surfacing every failure or uncertain external state transparently without silent fallbacks.
+Built on the [MindIE Agent Engineering Design Principles](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.en.md), **domain knowledge and the Skill system are invoked manually on demand via `/mindie-agent`** so they never pollute unrelated tasks, while **`remote-dev` remote NPU development and testing tools trigger automatically by default** in everyday conversation—surfacing every failure or uncertain external state transparently without silent fallbacks.
 
 ---
 
 ## Why Use This Plugin? (Trigger Modes & Usage Examples)
 
-MindIE Agent uses a two-mode trigger model—**manual on-demand activation for domain knowledge & skills** plus **default automatic triggering for remote NPU execution**:
+MindIE Agent combines **manual on-demand activation for domain knowledge & skills** with **default automatic triggering for remote NPU development & testing**:
 
 | Capability | Trigger Mode | When to Use | How to Use |
 | :--- | :--- | :--- | :--- |
-| **Experience, Knowledge & Skill System**<br/>(`mindie-knowledge` + `mindie-agent` Skill) | **🎯 Manual Trigger** | When troubleshooting Ascend / `vLLM-Ascend` errors, adapting operators, debugging Graph Mode failures, or tuning performance/accuracy and you want historical experience, domain knowledge, and Skill guidance | Explicitly type **`/mindie-agent` + your problem description** (all setup and status actions are also wrapped inside `/mindie-agent`) |
-| **Remote Ascend NPU Development**<br/>(`remote-dev` MCP toolset) | **⚡ Default Auto-Trigger** | When syncing local edits to a remote Ascend server/container, running NPU builds/tests, checking `npu-smi`, or tailing long job logs | **No slash command needed**—just describe the remote task in natural language |
-| **Community Experience Loop**<br/>(`Stop` Auto-Capture + Gitleaks Redaction) | **🔄 Silent Background Run** | When contributing sanitized debugging takeaways back to the open-source knowledge base | **Set once, zero daily friction**—once enabled in setup, every session is automatically redacted and packaged into a knowledge PR in the background |
+| **Experience, Knowledge & Skill System**<br/>(`mindie-knowledge` + `mindie-agent` Skill) | **🎯 Manual Trigger** | When designing Ascend AI Infra features, developing in `vLLM-Ascend`, writing `AscendC` / `Triton` kernels, authoring unit/accuracy tests, or tuning performance | Explicitly type **`/mindie-agent` + your task description** (all setup and status actions are also wrapped inside `/mindie-agent`) |
+| **Remote Ascend NPU Dev & Testing**<br/>(`remote-dev` MCP toolset) | **⚡ Default Auto-Trigger** | When syncing local code/tests to a remote Ascend server/container, running NPU builds/tests, checking `npu-smi`, or tailing long job logs | **No slash command needed**—just describe the remote task in natural language |
+| **Engineering Experience Loop**<br/>(`Stop` Auto-Capture + Gitleaks Redaction) | **🔄 Silent Background Run** | When contributing sanitized design, kernel development, testing, or tuning takeaways back to the open-source knowledge base | **Set once, zero daily friction**—once enabled in setup, every session is automatically redacted and packaged into a knowledge PR in the background |
 
-### Scenario 1: Type `/mindie-agent` to Invoke Experience, Knowledge & Skills (Manual Trigger)
-> **The Problem**: When you hit an `HCCL` communication timeout, an `ACL` operator failure, a Graph Mode compilation error, or numerical drift, digging through scattered GitHub Issues and chat logs takes hours.  
+### Scenario 1: Type `/mindie-agent` for Feature Design, Kernel Development & Test Authoring (Manual Trigger)
+> **The Problem**: Designing new Ascend features, implementing `AscendC` / `Triton` operators, or writing `vLLM-Ascend` accuracy tests often requires domain-specific architecture conventions, kernel constraints, and verified test patterns.  
 > **Copy-Paste Example**:
 > ```text
-> /mindie-agent I'm hitting an HCCL AllReduce timeout (hcclRet=4) running DeepSeek-R1 with vllm-ascend on 8x Ascend 910B (CANN 8.0.RC3). Please check past experience and help me find the root cause.
+> /mindie-agent I want to design and implement a custom fused operator in vllm-ascend (with Triton / AscendC kernel support) and add unit + accuracy tests. Please check past experience and architecture conventions to propose an implementation plan.
 > ```
-> **What Happens**: Typing `/mindie-agent` activates the `mindie-agent` Skill and queries locally synced [`knowledge-vllm-ascend`](https://github.com/mindie-agent/knowledge-vllm-ascend) packages, returning real troubleshooting cases complete with **applicable environments, verification evidence, and known caveats** as reference material rather than a rigid checklist.
+> **What Happens**: Typing `/mindie-agent` activates the `mindie-agent` Skill and queries locally synced [`knowledge-vllm-ascend`](https://github.com/mindie-agent/knowledge-vllm-ascend) packages, returning verified engineering cases complete with **applicable environments, verification evidence, and known caveats** as reference material.
 
-### Scenario 2: Everyday Conversation Automatically Triggers Remote Ascend NPU Execution (`remote-dev` Default Auto-Trigger)
-> **The Problem**: Your daily machine is a macOS or Windows laptop, while the Ascend NPU cards live on a remote Linux server or container. Manually syncing patches and tailing long build logs breaks your flow.  
+### Scenario 2: Everyday Conversation Automatically Triggers Remote Ascend NPU Dev & Testing (`remote-dev` Default Auto-Trigger)
+> **The Problem**: Your daily machine is a macOS or Windows laptop, while the Ascend NPU cards live on a remote Linux server or container. Manually syncing code, compiling kernels, and tailing long test logs breaks your flow.  
 > **Copy-Paste Example (no slash command required)**:
 > ```text
-> Connect to the vllm_dev container on my remote 910B server, check current NPU memory usage, and sync my local rotary_embedding.py changes to run the corresponding pytest unit test.
+> Connect to the vllm_dev container on my remote 910B server, check current NPU memory usage, and sync my new operator implementation and rotary_embedding tests to run the full pytest verification suite.
 > ```
 > **What Happens**: The built-in `remote-dev` MCP server is always on and **triggers automatically by default** whenever your prompt involves remote servers, containers, or NPU commands—handling remote file reads/writes, patch application, managed background jobs, and live log polling over SSH. It works completely independently, even if the knowledge service or community sharing is turned off.
 
 ### Scenario 3: Silent Background Experience Capture & Community Contribution (Set Once, Zero Friction)
-> **The Problem**: After spending half a day root-causing a subtle NPU issue, that insight usually disappears when you close the terminal—yet sharing raw transcripts risks leaking internal IPs, tokens, or file paths.  
-> **Copy-Paste Example (just ask your technical question normally)**:
+> **The Problem**: After completing a complex architecture design, kernel implementation, or NPU test verification, that engineering insight usually disappears when you close the terminal—yet sharing raw transcripts risks leaking internal IPs, tokens, or file paths.  
+> **Copy-Paste Example (just work on your engineering task normally)**:
 > ```text
-> /mindie-agent Help me diagnose this custom Ascend operator build failure using the knowledge base and our remote NPU container, and verify the fix with unit tests.
+> /mindie-agent Help me complete the build and accuracy alignment verification for this custom Ascend operator using the knowledge base and our remote NPU container, and run the unit test suite.
 > ```
 > **What Happens**: Community contribution is **off by default**. Once you opt in during initial setup, every time a session finishes (`Stop`), the plugin silently extracts public user/assistant messages in the background, runs local deterministic redaction and Gitleaks scanning, generates navigation metadata, and opens a sanitized knowledge PR—with zero extra steps required during your daily work.
 > - Read the **[User & Contribution Notice](skills/mindie-agent/references/user-notice.md)** for full details on sharing scope, redaction limits, and public Git history.
@@ -137,7 +137,7 @@ To keep daily engineering effortless, MindIE Agent wraps all interactions into *
 
 | Scenario | What You Type | What Happens Behind the Scenes |
 |---|---|---|
-| **Ascend Troubleshooting, Operator Adaptation & Tuning** | `/mindie-agent <your problem description>` | Activates Ascend Skill guidance and local `mindie-knowledge` search, working alongside `remote-dev` to diagnose and verify fixes |
+| **Ascend AI Infra Design, Dev (`vLLM-Ascend` / `AscendC` / `Triton`), Testing & Tuning** | `/mindie-agent <describe your design, development, or testing task>` | Activates Ascend Skill guidance and local `mindie-knowledge` search, working alongside `remote-dev` to implement, test, and verify on real NPUs |
 | **First-Time Setup, Checking Status, or Changing Sharing Settings** | `/mindie-agent` (or `/mindie-agent check status`, `/mindie-agent enable/disable community sharing`) | Your Agent reads the progressively disclosed context to display status or update preferences; saved choices persist across sessions and updates |
 | **Everyday Remote Ascend Server / Container Work** | **No slash command needed**—just use natural language | Always-on `remote-dev` MCP tools trigger automatically to read/edit remote files, apply patches, and poll background jobs |
 
