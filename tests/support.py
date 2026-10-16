@@ -10,32 +10,6 @@ SCRIPTS = ROOT / "scripts"
 FIXTURES = ROOT / "tests" / "fixtures"
 
 
-def knowledge_install():
-    """(url, git commit or None) from the running interpreter. No writes."""
-    from importlib.metadata import distribution
-
-    raw = distribution("mindie-knowledge").read_text("direct_url.json") or ""
-    data = json.loads(raw) if raw else {}
-    vcs = data.get("vcs_info") or {}
-    commit = vcs.get("commit_id") if vcs.get("vcs") == "git" else None
-    return data.get("url") or "", commit
-
-
-def explicit_local_candidate_args():
-    """Declare the installed file-git commit so the identity gate can pass.
-
-    Empty when that install is already the official pin. A directory install
-    with no commit id gets nothing here; production rejection stays in force.
-    """
-    url, commit = knowledge_install()
-    if not (isinstance(commit, str) and len(commit) == 40 and str(url).startswith("file:")):
-        return []
-    official = "https://github.com/mindie-agent/knowledge"
-    if str(url).rstrip("/") in {official, official + ".git"}:
-        return []
-    return ["--allow-local-candidate", f"mindie-knowledge={commit}"]
-
-
 def env_for(config=None, extra=None):
     env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
     if config is not None:
@@ -51,7 +25,30 @@ def write_json(path: Path, value):
     return path
 
 
-def make_config(tmp: Path, *, sharing=False, roots=None):
+_REDACTOR = None
+
+
+def redactor_path():
+    """The real verified redactor binary, installed once per test process.
+
+    The pinned scanner archive is hash-verified; the lane cache avoids a
+    download per case. Capture tests exercise actual redaction, never a stub.
+    """
+    global _REDACTOR
+    if _REDACTOR is None:
+        from mindie_knowledge.loop.transcript_redaction import install_scanner
+
+        cache = ROOT.parent / "state" / "component-tests" / "redactor-cache"
+        _REDACTOR = install_scanner(cache=cache)
+    return _REDACTOR
+
+
+def store_file(tmp: Path) -> Path:
+    """The current shared-core store location for a make_config domain root."""
+    return tmp / "domain" / "vllm-ascend" / "state-v1" / "state-v4.sqlite3"
+
+
+def make_config(tmp: Path, *, sharing=False, roots=None, summary_command=None):
     config = tmp / "cc.json"
     engine = tmp / "cc.engine.json"
     community = tmp / "cc.community.json"
@@ -63,6 +60,9 @@ def make_config(tmp: Path, *, sharing=False, roots=None):
             root=str(root),
             domain="vllm-ascend",
             admission_path=str(admission),
+            capture_mode="public-transcript",
+            redactor_executable=redactor_path(),
+            summary_command=summary_command or [sys.executable, str(SCRIPTS / "organizer.py")],
             transcript_adapter=str(SCRIPTS / "transcript.py"),
             community_config=str(community),
         ),
@@ -78,6 +78,7 @@ def make_config(tmp: Path, *, sharing=False, roots=None):
             branch="main",
             project_roots=roots or ([str(tmp / "project")] if sharing else []),
             idle_seconds=300,
+            consent_config=str(tmp / "mindie-consent.json"),
         ),
     )
     if sharing:
@@ -85,7 +86,12 @@ def make_config(tmp: Path, *, sharing=False, roots=None):
     write_json(
         config,
         dict(
+            schema="mindie-cc-installation/1",
+            facade_protocol=1,
             python=sys.executable,
+            runtime_scripts=str(SCRIPTS),
+            adapter_config=str(config),
+            base_config=str(config),
             engine_config=str(engine),
             community_config=str(community),
             state_dir=str(tmp / "state"),

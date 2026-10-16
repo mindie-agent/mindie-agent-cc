@@ -12,9 +12,9 @@ import shlex
 import stat
 from pathlib import Path
 
-from entry_state import consume_prompt, first_use, set_first_use, configuration_required
+from entry_state import consume_prompt, set_choice, configuration_required
 from identity import is_subagent, require_absolute, require_session, slash_command
-from paths import config_path, engine_config_path, load_adapter_config
+from paths import config_path, load_adapter_config
 
 
 def _configured() -> bool:
@@ -96,6 +96,7 @@ def _diagnostics(session):
     """One bounded read of existing state; never activate or repair."""
     try:
         from mindie_knowledge.loop.diagnostics import snapshot
+        from paths import engine_config_path
 
         return snapshot(str(engine_config_path()), session=session)
     except Exception as exc:
@@ -154,135 +155,20 @@ def _number(value):
     return value
 
 
-def _launcher_command(adapter, operation, current):
-    """Absolute retained launcher command from an already-read current tuple."""
+def _installation_view():
+    """Read maintenance receipts without recovering or selecting code."""
     try:
-        from genstate import launch_dir
-
-        if not isinstance(current, dict):
-            return None
-        sha = current.get("sha") if isinstance(current.get("sha"), str) and current.get("sha") else "bootstrap"
-        python = current.get("python")
-        if not isinstance(python, str) or not python:
-            return None
-        launcher = launch_dir(adapter) / sha / "mindie_launch.py"
-        if not stat.S_ISREG(launcher.stat().st_mode):
-            return None
-        config_value = adapter.get("base_config") if isinstance(adapter.get("base_config"), str) else str(config_path())
-        config_file = str(Path(config_value).expanduser().resolve())
-        return shlex.join([python, str(launcher.resolve()), "--config", config_file, "updater", operation])
-    except OSError:
-        return None
-    except Exception:
-        return None
-
-
-def _updater_view():
-    """Read updater failure state. Does not check the network or mutate it."""
-    try:
-        from genstate import current_path, failed_path, status_path
-
         adapter = load_adapter_config()
-        if not isinstance(adapter, dict):
-            return {"status": "unavailable"}
-        failed_state, failed = _read_regular_json(failed_path(adapter))
-        status_state, status = _read_regular_json(status_path(adapter))
-        current_state, current = _read_regular_json(current_path(adapter))
-    except Exception:
-        return {"status": "unavailable"}
-    if "unavailable" in {failed_state, status_state, current_state}:
-        return {"status": "unavailable"}
-    failed = failed or {}
-    status = status or {}
-    current = current or {}
-    if not isinstance(failed, dict):
-        failed = {}
-    if not isinstance(status, dict):
-        status = {}
-    klass = failed.get("failure_class") if isinstance(failed.get("failure_class"), str) else None
-    if klass is None and isinstance(status.get("resolve_failure_class"), str):
-        klass = status.get("resolve_failure_class")
-    phase = failed.get("phase") if isinstance(failed.get("phase"), str) else None
-    retryable = klass in {"temporary_network", "rate_limited"} and phase != "package-refresh"
-    certificate = klass == "certificate"
-    actionable = klass in {"authentication", "permission", "hook_trust", "certificate"}
-    quarantined = klass in {"resolver", "bad_content"} or failed.get("quarantined") is True
-    unknown = bool(failed.get("error")) and not retryable and not actionable and not quarantined
-    nxt = _number(failed.get("next_retry_at"))
-    if nxt is None:
-        nxt = _number(status.get("next_retry_at"))
-    active = bool(
-        failed.get("error") or klass or failed.get("quarantined") or phase or nxt is not None
-        or status.get("error") or status.get("resolve_wait")
-        or status.get("result") in {
-            "failed", "check-failed", "action-required",
-            "suppressed-known-failed", "retry-waiting",
-        }
-    )
-    if not active:
-        if isinstance(failed.get("sha"), str) or failed.get("history") or failed.get("count"):
-            view = {
-                "status": "recovered",
-                "recovery": "recovered",
-                "active_failure": False,
-                "note": "no active updater failure; history remains in updater status",
-            }
-            if isinstance(status.get("result"), str):
-                view["result"] = status["result"][:80]
-            if isinstance(status.get("current_sha"), str):
-                view["current_sha"] = status["current_sha"][:64]
-            return view
-        if not isinstance(status.get("result"), str):
-            return None
-        view = {"result": status["result"][:80]}
-        if isinstance(status.get("current_sha"), str):
-            view["current_sha"] = status["current_sha"][:64]
-        command = _launcher_command(adapter, "status", current)
-        if command:
-            view["command"] = command
-        return view
-    view = {"active_failure": True}
-    if isinstance(status.get("result"), str):
-        view["result"] = status["result"][:80]
-    if isinstance(status.get("current_sha"), str):
-        view["current_sha"] = status["current_sha"][:64]
-    if isinstance(failed.get("sha"), str):
-        view["failed_sha"] = failed["sha"][:64]
-    error = _bounded_text(failed.get("error"), 200) or _bounded_text(status.get("error"), 200)
-    if error:
-        view["error"] = error
-    if klass:
-        view["failure_class"] = klass[:40]
-    if nxt is not None:
-        view["next_retry_at"] = nxt
-    if isinstance(failed.get("count"), int) and not isinstance(failed.get("count"), bool):
-        view["attempts"] = failed["count"]
-    if isinstance(failed.get("first_failure_at"), (int, float)) and not isinstance(failed.get("first_failure_at"), bool):
-        view["first_failure_at"] = failed["first_failure_at"]
-    if phase:
-        view["phase"] = phase[:40]
-    if retryable:
-        view["recovery"] = "automatic"
-        view["note"] = "scheduled checks retry this temporary failure"
-        operation = "status"
-    elif certificate:
-        view["recovery"] = "action_required"
-        view["note"] = "certificate trust needs repair; scheduled checks retry after backoff"
-        operation = "status"
-    elif actionable:
-        view["recovery"] = "action_required"
-        view["note"] = "credentials or host permission need attention"
-        operation = "status"
-    elif quarantined or unknown or phase == "package-refresh":
-        view["recovery"] = "manual"
-        view["note"] = "manual recovery is required for this revision"
-        operation = "recover"
-    else:
-        operation = "status"
-    command = _launcher_command(adapter, operation, current)
-    if command:
-        view["command"] = command
-    return view
+        state, maintenance = _read_regular_json(
+            Path(adapter["state_dir"]) / "session-maintenance.json")
+        result = {"code_updates": "native-marketplace"}
+        if state == "unavailable":
+            result["maintenance"] = {"status": "unavailable"}
+        elif maintenance is not None:
+            result["maintenance"] = maintenance
+        return result
+    except (OSError, ValueError, TypeError, KeyError):
+        return {"status": "unavailable", "code_updates": "native-marketplace"}
 
 
 def _knowledge_status_payload(session=None):
@@ -323,10 +209,9 @@ def _knowledge_status_payload(session=None):
         )
     payload["choices"] = []
     payload["repeat"] = bool(choice or saved["state"] in {"corrupt", "unreadable"}
-                             or sharing_view.get("state") in {"corrupt", "unreadable"}
-                             or consent_mod.marker_exists())
+                             or sharing_view.get("state") in {"corrupt", "unreadable"})
     # Saved preferences and runtime configuration are distinct facts. A prior
-    # marker/choice must not hide an incomplete or failed experience loop.
+    # choice must not hide an incomplete or failed experience loop.
     if saved["state"] in {"corrupt", "unreadable"}:
         payload["experience"] = "unavailable"
         payload["consent_error"] = dict(state=saved["state"], error=saved["error"])
@@ -355,7 +240,7 @@ def _knowledge_status_payload(session=None):
         else:
             payload["experience"] = "configured"
         payload["hint"] = "Configuration and task binding are prerequisites; inspect captures and contributions for actual processing receipts."
-    update = _updater_view()
+    update = _installation_view()
     if update:
         payload["update"] = update
     return payload
@@ -367,16 +252,19 @@ def status_payload(session=None):
     import diagnostic_support
 
     payload = dict(_knowledge_status_payload(session))
-    payload["reporting"] = diagnostic_support.reporting_status()
-    saved = consent_mod.load()
-    # Reporting is offered once inside the first setup and stays offered
-    # while genuinely undecided; an installer default-off is NOT a saved
-    # choice and must not mask it. Any recorded decision (enabled, disabled
-    # or later) persists and is never re-asked; a damaged authority shows
-    # the fault above instead of a fresh offer.
+    try:
+        saved = consent_mod.load()
+    except (OSError, ValueError) as exc:
+        payload["reporting"] = dict(status="unavailable",
+                                    error=dict(stage="consent_path", type=type(exc).__name__))
+        payload["experience"] = "unavailable"
+        return payload
+    payload["reporting"] = diagnostic_support.effective_reporting(
+        diagnostic_support.reporting_status(), saved.get("reporting"))
+    # A later task does not reopen an independent choice left unset at setup.
     if (
         payload["reporting"].get("status") == "not_configured"
-        and saved["state"] in {"ok", "missing"}
+        and saved["state"] == "missing"
         and saved["reporting"] is None
     ):
         payload["reporting_choice"] = diagnostic_support.reporting_hint()
@@ -417,7 +305,7 @@ def _apply_native_choice(payload, native_choice, session=None):
         if native_choice == "disabled" and _configured():
             from sharing import write_disabled
             write_disabled()
-        stored = set_first_use(native_choice)
+        stored = set_choice(native_choice)
     except consent_mod.ConsentError as exc:
         # A damaged saved authority is never silently cleared: the fault
         # payload shows the real state instead of recording over it.
@@ -456,18 +344,13 @@ def _prepare_capture_service():
 
 
 def _finish_contribution(result: dict) -> dict:
-    """Shared tail of every contribution enablement: persist the choice,
-    converge the community authority at this explicit boundary, and wake the
-    capture service only when capture can actually persist."""
+    """Persist the explicit choice and prepare an authorized capture service."""
     import consent as consent_mod
 
     try:
         consent_mod.record_choice("contribute")
     except consent_mod.ConsentError as exc:
         result["consent_error"] = dict(state=exc.state, error=str(exc))
-    migration = consent_mod.migrate_community()
-    if migration.get("conflict") or migration.get("errors") or migration.get("migrated"):
-        result["community_migration"] = migration
     result["service"] = _prepare_capture_service()
     return result
 
@@ -482,7 +365,7 @@ def _apply_contribute(payload, session, event, configured):
             recorded=False,
             note=(
                 "Contribution requires an installed runtime first: "
-                "python3 scripts/setup.py --config ~/.config/mindie-agent/cc.json"
+                "Start a new Claude session with the MindIE native plugin enabled"
             ),
         )
         return payload
@@ -513,27 +396,25 @@ def _apply_contribute(payload, session, event, configured):
 
 
 def _record_reporting_decision(enable: bool) -> dict:
-    """Configure the real reporter and persist the decision only when the
-    service reached the intended state. Shared by the reporting-* commands
-    and the unified entry's reporting tokens."""
+    """Save explicit intent before changing the independent reporter policy."""
     import consent as consent_mod
     import diagnostic_support
 
     python = load_adapter_config()["python"]
+    try:
+        consent_mod.record_reporting("enabled" if enable else "disabled")
+    except consent_mod.ConsentError as exc:
+        return dict(status="unavailable", enabled=None,
+                    consent_error=dict(state=exc.state, error=str(exc)))
     result = diagnostic_support.configure_reporting(enable, python)
-    if result.get("enabled") is enable:
-        try:
-            consent_mod.record_reporting("enabled" if enable else "disabled")
-        except consent_mod.ConsentError as exc:
-            result = dict(result)
-            result["consent_error"] = dict(state=exc.state, error=str(exc))
+    if result.get("enabled") is not enable:
+        result = dict(result, saved_reporting="enabled" if enable else "disabled",
+                      policy_change_confirmed=False)
     return result
 
 
 def _apply_reporting_token(payload, token, configured):
-    """The independent reporting choice, decided inside the same entry. A
-    real service change is recorded only when the service reached the
-    intended state; later/disable persist without touching the service."""
+    """Persist the independent choice without starting a service in a Hook."""
     import consent as consent_mod
     import diagnostic_support
 
@@ -546,14 +427,15 @@ def _apply_reporting_token(payload, token, configured):
         if token == "reporting-enable":
             payload["reporting"] = dict(
                 recorded=False,
-                note="Reporting enable requires an installed runtime first: python3 scripts/setup.py",
+                note="Reporting enable requires a prepared runtime; start a new Claude session with MindIE enabled",
             )
             return payload
         try:
             consent_mod.record_reporting(value)
         except consent_mod.ConsentError as exc:
             payload["consent_error"] = dict(state=exc.state, error=str(exc))
-        payload["reporting"] = diagnostic_support.reporting_status()
+        payload["reporting"] = diagnostic_support.effective_reporting(
+            diagnostic_support.reporting_status(), consent_mod.load().get("reporting"))
         return payload
     payload["reporting"] = _record_reporting_decision(token == "reporting-enable")
     return payload
@@ -563,11 +445,6 @@ def _configured_init_activation(session, cwd, ident):
     """Entry binding for a configured task: automatic, idempotent, and never
     a consent prompt. The persistent install-level choice is untouched."""
     from admission import activate, gate
-    import consent as consent_mod
-
-    # Entry attach boundary: converge the community authority once (no-op
-    # when converged); a conflict or fault is surfaced, never repaired.
-    migration = consent_mod.migrate_community()
     root = _project_root(cwd)
     lease = activate(session, project_root=root, root_session=session)
     claimed = gate().claim(session, "plugin_command", ident[:256], token=lease["token"]) is True
@@ -581,8 +458,6 @@ def _configured_init_activation(session, cwd, ident):
         project_root=lease["project_root"],
         service=service,
     )
-    if migration.get("conflict") or migration.get("errors") or migration.get("migrated"):
-        payload["community_migration"] = migration
     return payload
 
 
@@ -592,11 +467,6 @@ def op_init(session, event):
     reporting_token = _reporting_token_from_native(event.get("command_args"))
     ident = f"init:{_prompt_id(event)}"
     cwd = event.get("cwd")
-    import consent as consent_mod
-
-    # Entry attach boundary: import any legacy saved choice exactly once
-    # (kept/absent are quiet; conflict/error surface for diagnosis).
-    legacy = consent_mod.migrate_consent()
     if not _configured():
         if not consume_prompt(ident):
             payload = status_payload(session)
@@ -611,11 +481,6 @@ def op_init(session, event):
             payload = _apply_native_choice(status_payload(session), native_choice, session)
         if reporting_token is not None:
             payload = _apply_reporting_token(payload, reporting_token, False)
-        if legacy.get("status") in {"conflict", "error", "migrated"}:
-            payload["consent_migration"] = {
-                key: legacy[key] for key in ("status", "detail", "error", "sources")
-                if legacy.get(key)
-            }
         return payload
     payload = _configured_init_activation(session, cwd, ident)
     if native_choice == "contribute":
@@ -624,11 +489,6 @@ def op_init(session, event):
         payload = _apply_native_choice(payload, native_choice, session)
     if reporting_token is not None:
         payload = _apply_reporting_token(payload, reporting_token, True)
-    if legacy.get("status") in {"conflict", "error", "migrated"}:
-        payload["consent_migration"] = {
-            key: legacy[key] for key in ("status", "detail", "error", "sources")
-            if legacy.get(key)
-        }
     return payload
 
 
@@ -653,7 +513,7 @@ def op_sharing_enable(session, event):
         payload["already"] = True
         return payload
     if not _configured():
-        raise ValueError("MindIE is not configured; run scripts/setup.py first")
+        raise ValueError("MindIE is not configured; start a new Claude session with the native plugin enabled")
     import sharing as sharing_mod
 
     parsed = _parse_sharing(event.get("command_args") or "")
@@ -674,10 +534,6 @@ def op_sharing_disable(session, event):
     except consent_mod.ConsentError as exc:
         result = dict(result)
         result["consent_error"] = dict(state=exc.state, error=str(exc))
-    migration = consent_mod.migrate_community()
-    if migration.get("conflict") or migration.get("errors") or migration.get("migrated"):
-        result = dict(result)
-        result["community_migration"] = migration
     return result
 
 
@@ -698,6 +554,7 @@ def op_recover(session, event):
     consume_slash(session, event, "recover")
     if not _configured():
         raise ValueError("MindIE is not configured")
+    from paths import engine_config_path
     engine = str(engine_config_path())
     python = load_adapter_config()["python"]
     argv = shlex.split(event.get("command_args") or "")
@@ -753,11 +610,15 @@ def op_reporting(session, event, command):
     import diagnostic_support
 
     if command == "reporting-status":
-        return diagnostic_support.reporting_status()
+        import consent as consent_mod
+        return diagnostic_support.effective_reporting(
+            diagnostic_support.reporting_status(), consent_mod.load().get("reporting"))
     if not first:
-        return dict(diagnostic_support.reporting_status(), already=True)
+        import consent as consent_mod
+        return dict(diagnostic_support.effective_reporting(
+            diagnostic_support.reporting_status(), consent_mod.load().get("reporting")), already=True)
     if not _configured():
-        raise ValueError("MindIE is not configured; run scripts/setup.py first")
+        raise ValueError("MindIE is not configured; start a new Claude session with the native plugin enabled")
     return _record_reporting_decision(command == "reporting-enable")
 
 

@@ -56,6 +56,9 @@ def build_metadata():
         raw = _read_small(here / "diagnostic-build.json")
         if raw is not None:
             data = json.loads(raw)
+        elif (here / "resources/plugin.json").is_file():
+            manifest = json.loads(_read_small(here / "resources/plugin.json") or "null")
+            data = {"version": manifest.get("version")} if isinstance(manifest, dict) else {}
         else:
             # Old updaters do not emit diagnostic-build.json. Their completed
             # Git generation and stamped host manifest are existing facts.
@@ -216,6 +219,12 @@ def ensure_argv(python):
             "--config", str(reporting_config_path())]
 
 
+def ensure_command_line(command):
+    if os.name == "nt":
+        return "& " + " ".join("'" + part.replace("'", "''") + "'" for part in command)
+    return shlex.join(command)
+
+
 def configure_reporting(enabled, python):
     if type(enabled) is not bool:
         return _unavailable("reporting_configure", "TypeError")
@@ -229,7 +238,8 @@ def configure_reporting(enabled, python):
         if enabled:
             result.update(
                 run_outside_hook=True, command=command,
-                command_line=shlex.join(command),
+                command_line=ensure_command_line(command),
+                command_shell="powershell" if os.name == "nt" else "posix",
                 note=("Reporting settings are enabled. Execute this command once outside "
                       "the Hook and inspect its result before claiming reporter readiness. "
                       "Report any failure; do not automatically retry."),
@@ -237,6 +247,19 @@ def configure_reporting(enabled, python):
         return result
     except Exception as exc:
         return _unavailable("reporting_configure", type(exc).__name__)
+
+
+def effective_reporting(view, saved_reporting):
+    """Expose a stale enabled policy without treating it as a saved choice."""
+    if not isinstance(view, dict) or view.get("enabled") is not True:
+        return view
+    if saved_reporting == "enabled":
+        return view
+    return dict(view, enabled=False, policy_enabled=True,
+                status="consent_mismatch",
+                detail=("The reporter policy is enabled but the saved reporting choice is "
+                        f"{saved_reporting or 'absent'}. Inspect reporting status and explicitly "
+                        "choose reporting-enable or reporting-disable to reconcile them."))
 
 
 def reporting_hint():

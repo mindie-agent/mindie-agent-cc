@@ -3,6 +3,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from support import make_config
@@ -32,6 +33,31 @@ def expansion(command, args="", **extra):
 
 
 class EntryTests(unittest.TestCase):
+    def test_corrupt_prompt_receipt_does_not_repeat_an_explicit_action(self):
+        config = make_config(self.tmp)
+        os.environ["MINDIE_CC_CONFIG"] = str(config)
+        receipt = self.tmp / "state" / "slash-prompts.json"
+        receipt.parent.mkdir(parents=True)
+        for raw in ('{broken', '{"consumed":"not-a-list"}'):
+            receipt.write_text(raw, encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "receipt"):
+                self.entry_state.consume_prompt(PROMPT)
+            self.assertEqual(receipt.read_text(encoding="utf-8"), raw)
+
+    def test_unreadable_prompt_receipt_is_not_an_empty_ledger(self):
+        import entry
+        with patch.object(entry, "_read_regular_json", return_value=("unavailable", None)):
+            with self.assertRaisesRegex(ValueError, "unreadable"):
+                self.entry_state.consume_prompt(PROMPT)
+
+    def test_damaged_saved_choice_is_not_reported_as_unconfigured(self):
+        import consent
+        for state in ("corrupt", "unreadable"):
+            with patch.object(consent, "load", return_value={"state": state, "choice": None}):
+                with self.assertRaises(consent.ConsentError) as caught:
+                    self.entry_state.saved_choice()
+            self.assertEqual(caught.exception.state, state)
+
     def test_repeated_enable_preserves_omitted_fork_and_account(self):
         import sharing
         import consent

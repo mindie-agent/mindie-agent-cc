@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Claude plugin hooks. Activation is UserPromptExpansion, not MCP.
 
-Stop never exits 2 and never continues the model. It calls the shared
-capture handoff. Default-off sharing returns {} before any capture state.
+Stop never exits 2 and never continues the model. With contribution enabled
+and the task's own transcript inside the configured scope, Stop automatically
+associates the task (an internal binding, never a consent prompt) and calls
+the shared capture handoff; an explicit deactivate is never undone here.
+Default-off sharing returns {} before any capture state.
 """
 
 from __future__ import annotations
@@ -10,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -21,6 +25,7 @@ from identity import (
     is_subagent,
     parse_hook,
     publish_bind,
+    require_session,
     session_from_hook,
 )
 from paths import config_path
@@ -56,7 +61,7 @@ def handle_expansion():
     except FileNotFoundError as exc:
         text = (
             f"{exc}. This hook does not install packages. "
-            "Run python3 scripts/setup.py from the plugin checkout."
+            "Start a new Claude session with the MindIE native plugin enabled."
         )
         _print(
             {
@@ -124,18 +129,92 @@ def _record_stop(stage, category, exc=None):
 def _observe_stop(result):
     if not isinstance(result, dict):
         _record_stop("handoff", "internal")
-        return
+        return True
     stage = result.get("stage")
-    if stage not in {"unavailable", "rejected"}:
-        return
+    if stage in {"inert", "organized", "no-new-material", "no-shareable-material",
+                 "cancelled", "discarded", "processing", "accepted-runtime",
+                 "apply-pending", "accepted-local"}:
+        if result.get("wake") == "failed" or result.get("reason") == "worker-dead":
+            _record_stop("wake", "unavailable")
+            return True
+        return False
+    if stage not in {"unavailable", "rejected", "failed"}:
+        _record_stop("handoff", "internal")
+        return True
     reason = result.get("reason")
-    if not isinstance(reason, str) or not reason[:1].isalpha():
+    if not isinstance(reason, str) or not reason.replace("-", "").replace("_", "").isalnum():
+        reason = "handoff"
+    if not reason[:1].isalpha():
         reason = "handoff"
     _record_stop(stage, reason)
+    return True
+
+
+def _stop_output(failed=False):
+    if failed:
+        _print({
+            "systemMessage": "MindIE background capture encountered an error. "
+                             "Task completion is unaffected; details are in MindIE diagnostics."
+        })
+    else:
+        _print({})
+    return 0
+
+
+def _stop_failure(stage, category, exc=None):
+    _record_stop(stage, category, exc)
+    return _stop_output(failed=True)
+
+
+def associate_fork(event):
+    """Bind a native fork before it copies parent history into its own file.
+
+    This is the host's SessionStart event, not model-provided tool arguments.
+    The existing Admission stores scope and the pre-prompt boundary; no
+    lineage table or parent transcript lookup is needed.
+    """
+    if event.get("source") != "fork":
+        return {"status": "inert"}
+    if event.get("hook_event_name") != "SessionStart":
+        raise ValueError("fork association requires native SessionStart")
+    if is_subagent(event):
+        return {"status": "inert"}
+    import sharing
+    from admission import gate
+    from transcript import capture_path
+
+    settings = sharing.load()
+    if not settings.allows_capture():
+        if settings.capture_block_kind() == "fault":
+            raise ValueError("capture authority is unavailable")
+        return {"status": "inert"}
+    session = require_session(event.get("session_id"))
+    capture_path(event.get("transcript_path"), session, must_exist=False)
+    scope = event.get("cwd")
+    if not isinstance(scope, str) or not os.path.isabs(scope):
+        raise ValueError("native fork project scope is missing")
+    scope = str(Path(scope).resolve())
+    if not settings.in_scope(scope):
+        return {"status": "inert"}
+    admission = gate()
+    inspected = admission.inspect(session)
+    if inspected["status"] == "unavailable":
+        raise ValueError("capture admission is unavailable")
+    if inspected["status"] == "inactive":
+        return {"status": "inert"}
+    if inspected["status"] == "active":
+        lease = admission.check(session)
+        if lease["project_root"] != scope:
+            raise ValueError("native fork identity already has another scope")
+    else:
+        admission.associate(session, project_root=scope,
+                            not_before=max(settings.enabled_at or 0, time.time()))
+    return {"status": "associated"}
 
 
 def handle_stop():
     attempted = False
+    failed = False
     try:
         event = _read_event()
         if event.get("hook_event_name") not in {None, "Stop"}:
@@ -151,36 +230,51 @@ def handle_stop():
             _print({})
             return 0
         import sharing as sharing_mod
-        from admission import gate
-        from identity import require_session
         from paths import engine_config_path as engine_path
 
         session = require_session(event.get("session_id"))
-        admission = gate()
-        inspected = admission.inspect(session)
-        if inspected.get("status") == "unavailable":
-            _record_stop("admission", "unavailable")
-            _print({})
-            return 0
-        if inspected.get("status") != "active":
-            _print({})
-            return 0
         try:
-            lease = admission.check(session)
-        except ValueError:
-            _record_stop("admission", "unavailable")
-            _print({})
-            return 0
-        attempted = True
-        if not sharing_mod.capture_allowed(lease, None):
+            settings = sharing_mod.load()
+        except Exception as exc:
+            return _stop_failure("configuration", "unavailable", exc)
+        if not settings.allows_capture():
+            if settings.capture_block_kind() == "fault":
+                return _stop_failure("authorization", "authority_unavailable")
             _print({})
             return 0
         turn = event.get("prompt_id")
         if not isinstance(turn, str) or not turn or len(turn) > 256:
-            _record_stop("identity", "missing_identity")
+            return _stop_failure("identity", "missing_identity")
+        transcript = event.get("transcript_path")
+        if not isinstance(transcript, str) or not os.path.isabs(transcript):
+            return _stop_failure("material", "no_capturable_material")
+        from admission import associate, gate
+
+        admission = gate()
+        inspected = admission.inspect(session)
+        if inspected.get("status") == "unavailable":
+            return _stop_failure("admission", "unavailable")
+        if inspected.get("status") == "inactive":
+            # An explicit deactivation is a revocation; an ordinary Stop never
+            # reactivates the task.
             _print({})
             return 0
-        transcript = event.get("transcript_path")
+        lease = admission.check(session) if inspected["status"] == "active" else None
+        from transcript import capture_source
+
+        try:
+            source = capture_source(transcript, session, binding=lease)
+        except (OSError, ValueError) as exc:
+            return _stop_failure("material", "source_unavailable", exc)
+        if not settings.in_scope(source["project_root"]):
+            _print({})
+            return 0
+        attempted = True
+        if lease is None:
+            lease = associate(
+                session, project_root=source["project_root"],
+                not_before=max(settings.enabled_at or 0, source["created_at"]),
+            )
         forwarded = dict(
             hook_event_name="Stop",
             identity_kind="turn",
@@ -188,22 +282,14 @@ def handle_stop():
             turn_id=turn,
             mindie_activation=lease.get("token"),
             harness="claude",
-            budget_seconds=0.8,
+            transcript_path=source["transcript_path"],
         )
-        if isinstance(transcript, str) and os.path.isabs(transcript):
-            forwarded["transcript_path"] = transcript
-        if "transcript_path" not in forwarded:
-            _record_stop("material", "no_capturable_material")
-            _print({})
-            return 0
         from mindie_knowledge.loop.cli import capture_hook
 
-        _observe_stop(capture_hook(str(engine_path()), forwarded))
+        failed = _observe_stop(capture_hook(str(engine_path()), forwarded))
     except Exception as exc:
-        if attempted:
-            _record_stop("handoff", "internal", exc)
-    _print({})
-    return 0
+        return _stop_failure("handoff" if attempted else "configuration", "internal", exc)
+    return _stop_output(failed)
 
 
 def main(argv=None):

@@ -34,6 +34,7 @@ class StatusDiagnosticTests(unittest.TestCase):
     def test_failure_counts_are_diagnostic_and_scoped_without_replay(self):
         from mindie_knowledge.loop.activation import Admission
         from mindie_knowledge.loop.store import Store, session_key
+        from support import SCRIPTS, redactor_path
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             engine = root / "engine.json"
@@ -48,9 +49,22 @@ class StatusDiagnosticTests(unittest.TestCase):
                 store.mark_capture(own["id"], "failed", "RuntimeError: maintenance agent exited 124; category=deadline; elapsed=120.000s")
             finally:
                 store.close()
-            engine.write_text(json.dumps(dict(root=str(root / "state"), domain="test", admission_path=str(admission.path))), encoding="utf-8")
+            # Mirror the fields setup.py writes for a real installation; the
+            # current core rejects a config without the public-transcript
+            # redactor and the adapter parser module.
+            engine.write_text(json.dumps(dict(
+                root=str(root / "state"),
+                domain="test",
+                admission_path=str(admission.path),
+                capture_mode="public-transcript",
+                redactor_executable=redactor_path(),
+                transcript_adapter=str(SCRIPTS / "transcript.py"),
+            )), encoding="utf-8")
             adapter = root / "adapter.json"
-            adapter.write_text(json.dumps(dict(engine_config=str(engine), community_config=str(root / "community.json"), state_dir=str(root / "adapter-state"))), encoding="utf-8")
+            adapter.write_text(json.dumps(dict(
+                base_config=str(adapter), engine_config=str(engine),
+                community_config=str(root / "community.json"), state_dir=str(root / "adapter-state"),
+            )), encoding="utf-8")
             result = self._status(adapter, "task-A")
             self.assertTrue(result["this_session"]["bound"])
             self.assertNotIn("paused", result["this_session"])

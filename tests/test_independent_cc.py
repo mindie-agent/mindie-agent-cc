@@ -43,6 +43,23 @@ _ENV_KEYS = (
 
 def _service_pids(root: Path) -> list[int]:
     needle = str(root)
+    own = {os.getpid(), os.getppid()}
+    if os.name == "nt":
+        command = (
+            "$ErrorActionPreference='Stop'; "
+            "Get-CimInstance Win32_Process -Filter \"Name LIKE 'python%'\" | "
+            "Where-Object { $_.CommandLine -and "
+            "$_.CommandLine.Contains($env:MINDIE_TEST_SERVICE_ROOT) -and "
+            "$_.CommandLine.Contains('mindie_knowledge.loop.cli') } | "
+            "ForEach-Object { $_.ProcessId }"
+        )
+        listing = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
+            capture_output=True, text=True, timeout=15, check=True,
+            env=dict(os.environ, MINDIE_TEST_SERVICE_ROOT=needle),
+        )
+        return [int(line) for line in listing.stdout.splitlines()
+                if line.strip().isdigit() and int(line) not in own]
     found = []
     listing = subprocess.run(
         ["ps", "-ax", "-o", "pid=,command="],
@@ -51,7 +68,6 @@ def _service_pids(root: Path) -> list[int]:
         timeout=5,
         check=False,
     )
-    own = {os.getpid(), os.getppid()}
     for raw in listing.stdout.splitlines():
         line = raw.strip()
         if needle not in line or "mindie_knowledge.loop.cli" not in line:
@@ -74,7 +90,7 @@ def reap_services(root: Path) -> None:
             pass
 
 
-# Explicit local checkout of the mindie-knowledge pin in runtime-requirements.txt.
+# Explicit local checkout of the mindie-knowledge pin in uv.lock.
 # There is no default path and no sibling search.
 KNOWLEDGE_CHECKOUT_ENV = "MINDIE_TEST_KNOWLEDGE_CHECKOUT"
 
@@ -152,6 +168,9 @@ def _file_url(path: Path) -> str:
 
 
 class LaneCase(unittest.TestCase):
+    # Subclasses that can start a knowledge service must opt into exact-root cleanup.
+    may_start_knowledge_service = False
+
     def setUp(self):
         LANE_STATE.mkdir(parents=True, exist_ok=True)
         self.tmp = Path(tempfile.mkdtemp(prefix="case-", dir=LANE_STATE))
@@ -181,13 +200,16 @@ class LaneCase(unittest.TestCase):
             sys.path.insert(0, tests)
 
     def tearDown(self):
-        reap_services(self.tmp)
-        shutil.rmtree(self.tmp, ignore_errors=True)
-        for key, value in self._saved_env.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
+        try:
+            if self.may_start_knowledge_service:
+                reap_services(self.tmp)
+        finally:
+            shutil.rmtree(self.tmp, ignore_errors=True)
+            for key, value in self._saved_env.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
 
     def _env(self, config: Path) -> dict:
         env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
@@ -199,7 +221,8 @@ class LaneCase(unittest.TestCase):
 
 
 def _store_path(case: Path) -> Path:
-    return case / "domain" / "vllm-ascend" / "store-v3.sqlite3"
+    from support import store_file
+    return store_file(case)
 
 
 def _capture_rows(case: Path):
@@ -217,80 +240,19 @@ def _capture_rows(case: Path):
         db.close()
 
 
+def _runtime_pins():
+    from product_contract import requirements
+    repositories = {"mindie-knowledge": "knowledge", "remote-dev": "remote-dev",
+                    "mindie-diagnostics": "diagnostics"}
+    return {name: {"url": "https://github.com/mindie-agent/" + repositories[name],
+                   "commit": pin} for name, pin in requirements(ROOT)[0].items()}
+
+
 class SetupIdentityTests(LaneCase):
-    def _pin_rejection(self):
-        import setup
-
-        try:
-            setup.probe_runtime(sys.executable)
-        except SystemExit as exc:
-            return str(exc)
-        return None
-
-    def _run_setup(self, config: Path, root: Path, extra=(), python=None):
-        python = str(python or sys.executable)
-        return subprocess.run(
-            [
-                python,
-                str(SCRIPTS / "setup.py"),
-                "--config",
-                str(config),
-                "--root",
-                str(root),
-                "--knowledge-python",
-                python,
-                "--no-schedule",
-                "--no-native-install",
-                "--no-public-feed",
-                *extra,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=60,
-            env=self._env(config),
-        )
-
-    def test_production_setup_obeys_official_pin(self):
-        reason = self._pin_rejection()
-        config = self.tmp / "prod" / "cc.json"
-        data = self.tmp / "prod" / "data"
-        proc = self._run_setup(config, data)
-        if reason is None:
-            self.assertEqual(proc.returncode, 0, proc.stderr[-1500:])
-            community = json.loads(config.with_name("mindie-community.json").read_text(encoding="utf-8"))
-            self.assertEqual(
-                community.get("consent_config"),
-                str((config.parent / "mindie-consent.json").resolve()),
-            )
-            self.assertIs(community.get("enabled"), False)
-            return
-        self.assertNotEqual(proc.returncode, 0, proc.stdout[-500:])
-        self.assertIn("mindie-knowledge", proc.stderr)
-        self.assertNotIn("remote-dev does not match", proc.stderr)
-        self.assertFalse(config.exists())
-        self.assertFalse(data.exists())
-        self.assertIn("does not match the required official Git commit", reason)
-
-    def test_ok_then_nonzero_probe_is_rejected_when_pin_stage_passes(self):
-        """The exit-1-after-OK runtime probe is a separate gate from the pin check."""
-        import setup
-        from unittest.mock import patch
-
-        fault = "print('OK', flush=True)\nraise SystemExit(1)\n"
-        real = setup.run
-
-        def wrapped(argv, data="", timeout=15, **kwargs):
-            script = argv[-1] if argv else ""
-            if "commit_id" in script:
-                return "OK\n"
-            return real(argv, data, timeout=timeout, **kwargs)
-
-        with patch.object(setup, "run", wrapped), patch.object(setup, "PROBE_SCRIPT", fault):
-            with self.assertRaises(SystemExit) as caught:
-                setup.probe_runtime(sys.executable)
-        message = str(caught.exception)
-        self.assertIn("knowledge runtime probe failed", message)
-        self.assertNotIn("exact required commits", message)
+    def test_production_runtime_obeys_official_lock_pins(self):
+        from candidate_validate import installed_revisions
+        from product_contract import requirements
+        installed_revisions(requirements(ROOT)[0])
 
     def _read_direct(self, python, dist_name):
         code = (
@@ -332,7 +294,7 @@ class SetupIdentityTests(LaneCase):
                 detail = lines[-1] if lines else "no output"
                 raise IdentityPrecondition(
                     f"{python} cannot read {name} metadata ({detail[:300]}). "
-                    "Install runtime-requirements.txt in this interpreter. "
+                    "Install uv.lock in this interpreter. "
                     "This test does not download runtime dependencies."
                 )
             url = str(info.get("url") or "").rstrip("/")
@@ -363,7 +325,8 @@ class SetupIdentityTests(LaneCase):
         """Make the isolated venv import the interpreter's already-installed deps.
 
         A venv created from this interpreter does not see that interpreter's
-        site-packages. A path file points at them without copying metadata.
+        site-packages. Process its .pth files as well as adding the directory:
+        Windows pywin32 needs its bootstrap and extension-module paths.
         """
         code = (
             "import sysconfig\n"
@@ -405,7 +368,9 @@ class SetupIdentityTests(LaneCase):
                 sources.append(candidate)
         destination = Path(child.stdout.splitlines()[0].strip())
         destination.mkdir(parents=True, exist_ok=True)
-        payload = "".join(str(path) + "\n" for path in sources)
+        payload = "import site; " + "; ".join(
+            f"site.addsitedir({str(path)!r})" for path in sources
+        ) + "\n"
         (destination / "official-runtime.pth").write_text(payload, encoding="utf-8")
 
     def _genuine_local_git_python(self, commit, remote_commit):
@@ -417,7 +382,7 @@ class SetupIdentityTests(LaneCase):
         import setup
 
         checkout = knowledge_checkout(commit)
-        self._require_reused_runtime(setup.runtime_pins())
+        self._require_reused_runtime(_runtime_pins())
         parent_knowledge = self._direct_url(sys.executable, "mindie-knowledge")["raw"]
         parent_remote = self._direct_url(sys.executable, "remote-dev")["raw"]
         work = self.tmp / "local-git-runtime"
@@ -516,7 +481,7 @@ class SetupIdentityTests(LaneCase):
         """Missing or inexact checkouts stop before git clone or pip."""
         import setup
 
-        commit = setup.runtime_pins()["mindie-knowledge"]["commit"]
+        commit = _runtime_pins()["mindie-knowledge"]["commit"]
         saved = os.environ.pop(KNOWLEDGE_CHECKOUT_ENV, None)
         try:
             with self.assertRaises(IdentityPrecondition) as missing:
@@ -586,78 +551,22 @@ class SetupIdentityTests(LaneCase):
             else:
                 os.environ[KNOWLEDGE_CHECKOUT_ENV] = saved
 
-    def test_explicit_local_candidate_accepts_only_recorded_vcs_commit(self):
-        """A separate git+file install may be named explicitly.
-
-        Wrong SHAs are rejected. The recorded commit is accepted. The
-        official https runtime is not rewritten and is not this fixture.
-        """
-        import setup
-
-        pins = setup.runtime_pins()
+    def test_local_git_source_is_rejected_even_when_commit_matches(self):
+        pins = _runtime_pins()
         commit = pins["mindie-knowledge"]["commit"]
         try:
-            python, before = self._genuine_local_git_python(
-                commit, pins["remote-dev"]["commit"]
-            )
+            python, before = self._genuine_local_git_python(commit, pins["remote-dev"]["commit"])
         except IdentityPrecondition as exc:
             raise self.failureException(str(exc)) from None
-        bare = self.tmp / "bare"
-        proc = self._run_setup(bare / "cc.json", bare / "data", python=python)
-        self.assertNotEqual(proc.returncode, 0, proc.stdout[-400:])
-        self.assertIn("does not match the required official Git commit", proc.stderr)
-        self.assertNotIn("remote-dev does not match", proc.stderr)
-        self.assertFalse((bare / "cc.json").exists())
-        self.assertFalse((bare / "data").exists())
+        code = ("import sys;sys.path.insert(0,sys.argv[1]);"
+                "from candidate_validate import installed_revisions;"
+                "from product_contract import requirements;"
+                "installed_revisions(requirements(sys.argv[2])[0])")
+        result = subprocess.run([str(python), "-c", code, str(SCRIPTS), str(ROOT)],
+                                capture_output=True, text=True, env=self._env(self.tmp / "unset.json"))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("revision_mismatch", result.stderr)
         self.assertEqual(self._direct_url(python, "mindie-knowledge")["raw"], before)
-        wrong = "0" * 40
-        other = "b34851a5df99f05787fd3c63ed6f68190a050f14"
-        self.assertNotEqual(other, commit)
-        for label, declared in (("zeros", wrong), ("other-commit", other)):
-            with self.subTest(declared=label):
-                config = self.tmp / label / "cc.json"
-                data = self.tmp / label / "data"
-                proc = self._run_setup(
-                    config,
-                    data,
-                    extra=("--allow-local-candidate", f"mindie-knowledge={declared}"),
-                    python=python,
-                )
-                self.assertEqual(self._direct_url(python, "mindie-knowledge")["raw"], before)
-                self.assertNotEqual(proc.returncode, 0, proc.stdout[-400:])
-                self.assertIn(
-                    "matches neither the official Git commit nor the declared local candidate",
-                    proc.stderr,
-                )
-                self.assertFalse(config.exists())
-                self.assertFalse(data.exists())
-        config = self.tmp / "exact" / "cc.json"
-        data = self.tmp / "exact" / "data"
-        proc = self._run_setup(
-            config,
-            data,
-            extra=("--allow-local-candidate", f"mindie-knowledge={commit}"),
-            python=python,
-        )
-        self.assertEqual(
-            self._direct_url(python, "mindie-knowledge")["raw"],
-            before,
-            "candidate setup rewrote direct_url.json",
-        )
-        self.assertEqual(
-            proc.returncode,
-            0,
-            textwrap.shorten(proc.stderr, width=1500, placeholder=" ..."),
-        )
-        report = json.loads(proc.stdout)
-        self.assertEqual(report.get("local_candidates", {}).get("mindie-knowledge"), commit)
-        community = json.loads(config.with_name("mindie-community.json").read_text(encoding="utf-8"))
-        self.assertEqual(
-            Path(community["consent_config"]).resolve(),
-            (config.parent / "mindie-consent.json").resolve(),
-        )
-        self.assertIs(community.get("enabled"), False)
-        self.assertFalse((data / "cc" / "bootstrap-venv").exists())
 
 
 class ConsentFileTests(LaneCase):
@@ -867,6 +776,8 @@ def _race_worker(config, home, scripts, kind, value, rounds, barrier):
 
 
 class StopGateTests(LaneCase):
+    may_start_knowledge_service = True
+
     def _arm(self, case: Path, *, sharing: bool, choice=None, corrupt=False, authority=None):
         import support
         from mindie_knowledge.loop.handoff import prepare_schema
@@ -902,35 +813,32 @@ class StopGateTests(LaneCase):
             data["consent_config"] = str(target.resolve())
             community.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
         prepare_schema(str(engine_config_path()))
-        current_dir = case / "state" / "update"
-        current_dir.mkdir(parents=True, exist_ok=True)
-        (current_dir / "current.json").write_text(
-            json.dumps(
-                {
-                    "generation": str(ROOT),
-                    "python": sys.executable,
-                    "adapter_config": str(config),
-                    "sha": "independent-test",
-                }
-            )
-            + "\n"
-        , encoding="utf-8")
         return config, project, outside
 
-    def _stop(self, case: Path, project: Path, *, session=None, prompt=None, sentinel="SENTINEL"):
-        import admission
+    def _stop(self, case: Path, project: Path, *, session=None, prompt=None,
+              sentinel="SENTINEL", hook_cwd=None):
+        from datetime import datetime, timezone
 
         session = session or str(uuid.uuid4())
         prompt = prompt or str(uuid.uuid4())
-        admission.activate(session, project_root=str(project), root_session=session)
-        transcript = project / "turn.jsonl"
+        # Ordinary Stop must associate an authorized native task without an
+        # entry invocation. Only the named profile artifact supplies scope.
+        transcript = Path(os.environ["CLAUDE_CONFIG_DIR"]) / "projects" / "fixture" / f"{session}.jsonl"
         transcript.parent.mkdir(parents=True, exist_ok=True)
-        transcript.write_text(sentinel + "\n", encoding="utf-8")
+        if not transcript.exists():
+            stamp = datetime.now(timezone.utc).isoformat()
+            queue = dict(type="queue-operation", operation="enqueue",
+                         sessionId=session, timestamp=stamp)
+            transcript.write_text(json.dumps(queue) + "\n" + json.dumps(dict(
+                type="assistant", sessionId=session, cwd=str(project),
+                timestamp=stamp,
+                message=dict(role="assistant", content=sentinel),
+            )) + "\n", encoding="utf-8")
         payload = {
             "hook_event_name": "Stop",
             "session_id": session,
             "prompt_id": prompt,
-            "cwd": str(project),
+            "cwd": str(hook_cwd or project),
             "transcript_path": str(transcript),
             "last_assistant_message": sentinel,
             "stop_hook_active": False,
@@ -943,12 +851,8 @@ class StopGateTests(LaneCase):
             env=self._env(config),
             timeout=8,
         )
-        return proc, _capture_rows(case), (case / "domain" / "vllm-ascend" / "wake.json").exists()
+        return proc, _capture_rows(case), _store_path(case).with_name("wake.json").exists()
 
-    def _migrate(self):
-        import consent
-
-        return consent.migrate_community()
 
     def test_authorized_contribute_stop_is_received_once(self):
         case = self.tmp / "allow"
@@ -994,10 +898,30 @@ class StopGateTests(LaneCase):
         finally:
             reap_services(case)
 
+    def test_hook_cwd_cannot_override_native_artifact_scope(self):
+        case = self.tmp / "artifact-scope"
+        _config, project, outside = self._arm(case, sharing=True, choice="contribute")
+        proc, rows, wake = self._stop(case, outside, hook_cwd=project)
+        self.assertEqual(proc.returncode, 0, proc.stderr.decode()[:500])
+        self.assertEqual(rows, [])
+        self.assertFalse(wake)
+
+    def test_ordinary_stop_preserves_explicit_deactivation(self):
+        import admission
+
+        case = self.tmp / "revoked-task"
+        _config, project, _outside = self._arm(case, sharing=True, choice="contribute")
+        session = str(uuid.uuid4())
+        admission.activate(session, project_root=str(project))
+        admission.deactivate(session)
+        proc, rows, wake = self._stop(case, project, session=session)
+        self.assertEqual(proc.returncode, 0, proc.stderr.decode()[:500])
+        self.assertEqual(rows, [])
+        self.assertFalse(wake)
+        self.assertEqual(admission.gate().inspect(session)["status"], "inactive")
+
     def test_disallowed_or_damaged_consent_does_not_persist_stop(self):
-        """After the explicit community migration stamps consent_config, the
-        core gate must refuse capture. A legacy file with no such field is a
-        different case and is not this test."""
+        """The declared consent authority must refuse disallowed capture."""
         scenarios = [
             ("later", dict(choice="later")),
             ("read-only", dict(choice="read-only")),
@@ -1008,37 +932,28 @@ class StopGateTests(LaneCase):
             with self.subTest(name=name):
                 case = self.tmp / name
                 _config, project, _outside = self._arm(case, sharing=True, **kwargs)
-                migration = self._migrate()
-                self.assertFalse(migration.get("conflict"), migration)
-                self.assertFalse(migration.get("errors"), migration)
                 sentinel = "SENTINEL-" + name
                 try:
                     proc, rows, wake = self._stop(case, project, sentinel=sentinel)
                     self.assertEqual(proc.returncode, 0, proc.stderr.decode()[:500])
-                    self.assertEqual(json.loads(proc.stdout.decode() or "{}"), {})
+                    output = json.loads(proc.stdout.decode() or "{}")
+                    if name == "corrupt":
+                        self.assertEqual(set(output), {"systemMessage"})
+                        self.assertIn("capture encountered an error", output["systemMessage"])
+                        self.assertNotIn("decision", output)
+                        self.assertNotIn("continue", output)
+                    else:
+                        self.assertEqual(output, {})
                     self.assertEqual(rows, [], rows)
                     self.assertFalse(wake)
                     self.assertEqual(_service_pids(case), [])
                 finally:
                     reap_services(case)
 
-    def test_unstamped_legacy_config_still_captures(self):
-        """No consent_config field: the published gate keeps the old read.
-        This is compatibility, not proof that a migrated install may capture."""
-        case = self.tmp / "legacy-field"
-        _config, project, _outside = self._arm(case, sharing=True, choice="later")
-        try:
-            proc, rows, _wake = self._stop(case, project, sentinel="SENTINEL-legacy-field")
-            self.assertEqual(proc.returncode, 0, proc.stderr.decode()[:400])
-            self.assertEqual([row[0] for row in rows], [""])
-        finally:
-            reap_services(case)
 
     def test_field_target_wins_over_sibling_contribute(self):
         case = self.tmp / "field-target"
         config, project, _outside = self._arm(case, sharing=True, choice="contribute")
-        migration = self._migrate()
-        self.assertFalse(migration.get("errors"), migration)
         community = Path(json.loads(config.read_text(encoding="utf-8"))["community_config"])
         authority = case / "disabled-authority.json"
         authority.write_text(
@@ -1105,6 +1020,8 @@ class StopGateTests(LaneCase):
 
 
 class EntryContractTests(LaneCase):
+    may_start_knowledge_service = True
+
     def _config(self, sharing=False):
         import support
 
@@ -1175,40 +1092,6 @@ class EntryContractTests(LaneCase):
         self.assertEqual(third.get("choices"), [])
         self.assertEqual(third.get("first_use"), "disabled")
 
-    def test_status_does_not_import_marker_and_entry_imports_once(self):
-        import consent
-        import entry
-
-        config, project = self._config(False)
-        marker = self.tmp / "entry" / "state" / "cc.first-use.json"
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.write_text(json.dumps({"choice": "read-only"}) + "\n", encoding="utf-8")
-        status = entry.status_payload()
-        self.assertEqual(status.get("choices"), [])
-        self.assertFalse((config.parent / "mindie-consent.json").exists())
-        entered = entry.dispatch_event(
-            self._event(
-                "mindie-agent",
-                "",
-                session=str(uuid.uuid4()),
-                prompt=str(uuid.uuid4()),
-                cwd=project,
-            )
-        )
-        self.assertEqual(consent.load().get("choice"), "read-only")
-        self.assertEqual(entered.get("choices"), [])
-        marker.unlink()
-        again = entry.dispatch_event(
-            self._event(
-                "mindie-agent",
-                "",
-                session=str(uuid.uuid4()),
-                prompt=str(uuid.uuid4()),
-                cwd=project,
-            )
-        )
-        self.assertEqual(again.get("first_use"), "read-only")
-        self.assertEqual(again.get("choices"), [])
 
     def test_subagent_does_not_inherit_the_parent_binding(self):
         import admission
@@ -1357,70 +1240,9 @@ class EntryContractTests(LaneCase):
         self.assertNotIn("sharing-enable", text)
 
 
-class AuthorityMigrationTests(LaneCase):
-    def test_divergent_scopes_are_not_merged(self):
-        import consent
-        import support
+class SharedConsentTests(LaneCase):
 
-        case = self.tmp / "conflict"
-        project = case / "project"
-        outside = case / "outside"
-        project.mkdir(parents=True)
-        outside.mkdir()
-        config = support.make_config(case, sharing=True, roots=[str(project)])
-        self._use(config)
-        declared = Path(json.loads(config.read_text(encoding="utf-8"))["community_config"])
-        shared = config.parent / "mindie-community.json"
-        other = json.loads(declared.read_text(encoding="utf-8"))
-        other["project_roots"] = [str(project.resolve()), str(outside.resolve())]
-        other["enabled"] = True
-        shared.write_text(json.dumps(other, indent=2) + "\n", encoding="utf-8")
-        declared_bytes = declared.read_bytes()
-        shared_bytes = shared.read_bytes()
-        result = consent.migrate_community()
-        self.assertTrue(result.get("conflict"), result)
-        self.assertFalse(result.get("migrated"))
-        self.assertEqual(declared.read_bytes(), declared_bytes)
-        self.assertEqual(shared.read_bytes(), shared_bytes)
-        self.assertEqual(json.loads(config.read_text(encoding="utf-8"))["community_config"], str(declared))
 
-    def test_corrupt_declared_migration_is_not_success(self):
-        import consent
-        import support
-
-        case = self.tmp / "bad-declared"
-        case.mkdir()
-        config = support.make_config(case, sharing=True)
-        self._use(config)
-        declared = Path(json.loads(config.read_text(encoding="utf-8"))["community_config"])
-        declared.write_bytes(b"{broken-community\n")
-        result = consent.migrate_community()
-        self.assertTrue(result.get("errors"), result)
-        self.assertFalse(result.get("migrated"))
-        self.assertNotIn("effective", result)
-        self.assertEqual(declared.read_bytes(), b"{broken-community\n")
-        self.assertFalse((config.parent / "mindie-community.json").exists())
-
-    def test_stamp_preserves_generation(self):
-        import consent
-        import support
-
-        case = self.tmp / "generation"
-        project = case / "project"
-        project.mkdir(parents=True)
-        config = support.make_config(case, sharing=True, roots=[str(project)])
-        self._use(config)
-        declared = Path(json.loads(config.read_text(encoding="utf-8"))["community_config"])
-        generation = json.loads(declared.read_text(encoding="utf-8"))["generation"]
-        first = consent.migrate_community()
-        self.assertFalse(first.get("errors"), first)
-        effective = Path(first["effective"])
-        stamped = json.loads(effective.read_text(encoding="utf-8"))
-        self.assertEqual(stamped.get("generation"), generation)
-        self.assertTrue(stamped.get("consent_config"))
-        second = consent.migrate_community()
-        self.assertFalse(second.get("conflict"), second)
-        self.assertEqual(json.loads(effective.read_text(encoding="utf-8")).get("generation"), generation)
 
     def test_kimi_choice_is_the_same_profile_authority(self):
         """Uses the committed kimi adapter scripts, not a second CC config."""
@@ -1464,7 +1286,6 @@ class AuthorityMigrationTests(LaneCase):
         other = self.tmp / "isolated"
         other.mkdir()
         other_config = other / "cc.json"
-        other_config.write_text("{}\n", encoding="utf-8")
         probe = subprocess.run(
             [
                 sys.executable,
@@ -1503,12 +1324,7 @@ def _profile_mutation(config, home, scripts, kind, entered):
     os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
     sys.path.insert(0, scripts)
     try:
-        if kind == "stamp":
-            import consent
-
-            entered.set()
-            consent.migrate_community()
-        elif kind == "disable":
+        if kind == "disable":
             import sharing
 
             entered.set()
@@ -1522,91 +1338,14 @@ def _profile_mutation(config, home, scripts, kind, entered):
         raise
 
 
-def _community_mutation_worker(config, home, scripts, kind, barrier):
-    os.environ["HOME"] = home
-    os.environ["MINDIE_CC_CONFIG"] = config
-    os.environ["XDG_CONFIG_HOME"] = str(Path(home) / "xdg")
-    os.environ["XDG_STATE_HOME"] = str(Path(home) / "state")
-    os.environ["MINDIE_DIAGNOSTICS_CONFIG"] = str(Path(home) / "diagnostics.json")
-    os.environ["MINDIE_DIAGNOSTICS_ROOT"] = str(Path(home) / "diag")
-    os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
-    sys.path.insert(0, scripts)
-    barrier.wait(15)
-    if kind == "stamp":
-        import consent
-
-        consent.migrate_community()
-    else:
-        import sharing
-
-        sharing.write_disabled()
 
 
-class StampRaceTests(LaneCase):
-    def test_first_stamp_keeps_a_concurrent_disable(self):
-        """The one-time consent_config stamp and a settings write must both survive.
-
-        Twenty synchronized pairs. A lost update drops either enabled=false
-        or consent_config. This does not patch a private reader.
-        """
-        import multiprocessing
-        import support
-
-        losses = []
-        home = os.environ["HOME"]
-        ctx = multiprocessing.get_context("spawn")
-        for index in range(20):
-            case = self.tmp / f"race-{index}"
-            project = case / "project"
-            project.mkdir(parents=True)
-            config = support.make_config(case, sharing=True, roots=[str(project)])
-            self._use(config)
-            (config.parent / "mindie-consent.json").write_text(
-                json.dumps(
-                    {"schema": "mindie-consent/1", "choice": "later", "reporting": "disabled"}
-                )
-                + "\n"
-            , encoding="utf-8")
-            barrier = ctx.Barrier(2)
-            stamp = ctx.Process(
-                target=_community_mutation_worker,
-                args=(str(config), home, str(SCRIPTS), "stamp", barrier),
-            )
-            disable = ctx.Process(
-                target=_community_mutation_worker,
-                args=(str(config), home, str(SCRIPTS), "disable", barrier),
-            )
-            stamp.start()
-            disable.start()
-            try:
-                stamp.join(20)
-                disable.join(20)
-            finally:
-                for proc in (stamp, disable):
-                    if proc.is_alive():
-                        proc.terminate()
-                        proc.join(2)
-            if stamp.exitcode != 0 or disable.exitcode != 0:
-                losses.append(f"{index}: exit {stamp.exitcode}/{disable.exitcode}")
-                continue
-            pointer = json.loads(config.read_text(encoding="utf-8")).get("community_config")
-            try:
-                data = json.loads(Path(pointer).read_text(encoding="utf-8"))
-            except (OSError, ValueError, TypeError) as exc:
-                losses.append(f"{index}: unreadable authority {exc}")
-                continue
-            if data.get("enabled") is not False or not data.get("consent_config"):
-                losses.append(
-                    f"{index}: enabled={data.get('enabled')} "
-                    f"field={data.get('consent_config')!r}"
-                )
-        self.assertEqual(losses, [])
 
 
-class CanonicalWriteTests(LaneCase):
-    """Final core context: one canonical lock, no write-then-replay, corrupt bytes stay."""
+class DeclaredAuthorityWriteTests(LaneCase):
+    """Final core context: one declared lock, no write-then-replay, corrupt bytes stay."""
 
-    def _legacy(self, name):
+    def _authority(self, name):
         import support
 
         case = self.tmp / name
@@ -1621,7 +1360,7 @@ class CanonicalWriteTests(LaneCase):
     def test_write_disabled_preserves_corrupt_community_bytes(self):
         import sharing
 
-        config, legacy, canonical = self._legacy("corrupt-disable")
+        config, legacy, canonical = self._authority("corrupt-disable")
         raw = b"{broken-community\n"
         legacy.write_bytes(raw)
         with self.assertRaises(ValueError):
@@ -1630,42 +1369,19 @@ class CanonicalWriteTests(LaneCase):
         self.assertFalse(canonical.exists())
         self.assertEqual(json.loads(config.read_text(encoding="utf-8"))["community_config"], str(legacy))
 
-    def test_disable_after_migration_does_not_replay_onto_legacy(self):
-        import consent
-        import sharing
 
-        config, legacy, canonical = self._legacy("no-replay")
-        before = legacy.read_bytes()
-        result = consent.migrate_community()
-        self.assertFalse(result.get("errors"), result)
-        self.assertEqual(Path(result["effective"]).resolve(), canonical.resolve())
-        self.assertEqual(legacy.read_bytes(), before)
-        stamped = json.loads(canonical.read_text(encoding="utf-8"))
-        self.assertEqual(stamped.get("generation"), "gen-test")
-        self.assertTrue(stamped.get("consent_config"))
-        sharing.write_disabled()
-        self.assertEqual(legacy.read_bytes(), before)
-        current = json.loads(canonical.read_text(encoding="utf-8"))
-        self.assertIs(current.get("enabled"), False)
-        self.assertEqual(current.get("consent_config"), stamped["consent_config"])
-        self.assertNotEqual(current.get("generation"), "gen-test")
-        pointer = json.loads(config.read_text(encoding="utf-8"))["community_config"]
-        self.assertEqual(Path(pointer).resolve(), canonical.resolve())
-        self.assertFalse((legacy.parent / (legacy.name + ".lock")).exists())
-        self.assertTrue((canonical.parent / (canonical.name + ".lock")).exists())
-
-    def _assert_blocks_on_canonical_lock(self, kind):
+    def _assert_blocks_on_declared_lock(self, kind):
         import multiprocessing
         import time
 
-        config, legacy, canonical = self._legacy("lock-" + kind)
+        config, legacy, canonical = self._authority("lock-" + kind)
         ctx = multiprocessing.get_context("spawn")
         ready = ctx.Event()
         release = ctx.Event()
         entered = ctx.Event()
         holder = ctx.Process(
             target=_hold_canonical_lock,
-            args=(str(canonical), ready, release),
+            args=(str(legacy), ready, release),
         )
         worker = ctx.Process(
             target=_profile_mutation,
@@ -1681,7 +1397,7 @@ class CanonicalWriteTests(LaneCase):
                 worker.is_alive(),
                 kind + " finished while the canonical community lock was held",
             )
-            self.assertFalse((legacy.parent / (legacy.name + ".lock")).exists())
+            self.assertTrue((legacy.parent / (legacy.name + ".lock")).exists())
             release.set()
             worker.join(6)
             detail = ""
@@ -1696,26 +1412,19 @@ class CanonicalWriteTests(LaneCase):
                 if proc.is_alive():
                     proc.terminate()
                     proc.join(2)
-        self.assertTrue((canonical.parent / (canonical.name + ".lock")).exists())
-        self.assertFalse((legacy.parent / (legacy.name + ".lock")).exists())
+        self.assertFalse((canonical.parent / (canonical.name + ".lock")).exists())
+        self.assertTrue((legacy.parent / (legacy.name + ".lock")).exists())
         return config, legacy, canonical
 
-    def test_migration_waits_on_the_canonical_lock(self):
-        config, _legacy, canonical = self._assert_blocks_on_canonical_lock("stamp")
-        pointer = json.loads(config.read_text(encoding="utf-8"))["community_config"]
-        self.assertEqual(Path(pointer).resolve(), canonical.resolve())
-        stamped = json.loads(canonical.read_text(encoding="utf-8"))
-        self.assertEqual(stamped.get("generation"), "gen-test")
-        self.assertTrue(stamped.get("consent_config"))
 
-    def test_disable_waits_on_the_canonical_lock(self):
-        _config, legacy, canonical = self._assert_blocks_on_canonical_lock("disable")
+    def test_disable_waits_on_the_declared_lock(self):
+        _config, legacy, canonical = self._assert_blocks_on_declared_lock("disable")
         self.assertIs(json.loads(legacy.read_text(encoding="utf-8")).get("enabled"), False)
         self.assertFalse(canonical.is_file())
 
 
 class BootstrapCommunityWriterTests(LaneCase):
-    """setup.write_community is the pre-runtime bootstrap writer.
+    """setup.write_community uses the installed shared authority.
 
     The invalid-file case matches integration-20260928/cc-bootstrap-corrupt-repro.json:
     explicit settings must not replace an existing damaged authority.
@@ -1830,7 +1539,7 @@ class BootstrapCommunityWriterTests(LaneCase):
         Reopening the path sees the new enabled document. An in-place
         truncate fails this; atomic replace does not.
         """
-        import consent_store
+        from mindie_knowledge import consent_store
         import setup
 
         path = self.tmp / "held" / "mindie-community.json"
@@ -1876,7 +1585,6 @@ class BootstrapCommunityWriterTests(LaneCase):
 class HookManifestTests(LaneCase):
     def test_expansion_matchers_cover_every_accepted_command(self):
         import identity
-        from native_claude import render_hooks
 
         accepted = set(identity.COMMANDS)
         committed = json.loads((ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
@@ -1885,20 +1593,8 @@ class HookManifestTests(LaneCase):
             for item in committed["hooks"]["UserPromptExpansion"]
             if isinstance(item, dict)
         }
-        rendered = render_hooks(
-            sys.executable,
-            str(SCRIPTS / "mindie_launch.py"),
-            str(self.tmp / "cc.json"),
-        )
-        rendered_matchers = {
-            item.get("matcher")
-            for item in rendered["hooks"]["UserPromptExpansion"]
-            if isinstance(item, dict)
-        }
         with self.subTest("committed hooks.json"):
             self.assertEqual(sorted(accepted - committed_matchers), [])
-        with self.subTest("render_hooks"):
-            self.assertEqual(sorted(accepted - rendered_matchers), [])
 
 
 if __name__ == "__main__":

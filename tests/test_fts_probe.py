@@ -1,11 +1,17 @@
-"""Behavioral FTS probe checks. The unsupported double is not an old or Windows SQLite.
+"""The runtime probe checks the current worker contract.
 
-Exact Git pin enforcement stays in the product probe ahead of this check.
+SQLite FTS5 contentless_delete is not a requirement of the current core.
+These checks use the selected interpreter, sys.executable. CI installs the
+pinned runtime there, so the current-core check runs instead of skipping.
+An old core is a synthetic interpreter whose modules omit the current
+contract. No private filesystem path is required. These checks do not claim
+host acceptance.
 """
 
 import os
+from contextlib import redirect_stdout
+import io
 from pathlib import Path
-import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -18,56 +24,10 @@ sys.path.insert(0, str(SCRIPTS))
 
 import inspect
 
-import setup
-from support import explicit_local_candidate_args
+import runtime_probe
+import candidate_validate
 
-CAPABILITY = "FTS5 contentless_delete=1 (SQLite >=3.43.0)"
-
-
-def _exec(source, connect, namespace=None):
-    real = sqlite3.connect
-    sqlite3.connect = connect
-    namespace = {} if namespace is None else namespace
-    try:
-        exec(source, namespace)
-    finally:
-        sqlite3.connect = real
-    return namespace
-
-
-class _Recording:
-    def __init__(self, raw, name, closed):
-        self._raw = raw
-        self._name = name
-        self._closed = closed
-
-    def execute(self, *args, **kwargs):
-        return self._raw.execute(*args, **kwargs)
-
-    def close(self):
-        self._closed.append(self._name)
-        return self._raw.close()
-
-
-def _recording_connect(seen, closed):
-    real = sqlite3.connect
-
-    def connect(name, *args, **kwargs):
-        seen.append(name)
-        return _Recording(real(name, *args, **kwargs), name, closed)
-
-    return connect
-
-
-class _Unsupported:
-    def __init__(self):
-        self.closed = False
-
-    def execute(self, _sql, *_args):
-        raise sqlite3.OperationalError("no such module: fts5")
-
-    def close(self):
-        self.closed = True
+CURRENT = Path(sys.executable)
 
 
 def _child_env():
@@ -76,74 +36,140 @@ def _child_env():
     return env
 
 
-def _run(source, cwd):
+def _run(python, source, extra_env=None):
+    env = _child_env()
+    if extra_env:
+        env.update(extra_env)
+        # The old-core fixture is the only caller that sets PYTHONPATH.
+        # _child_env removes it so ordinary checks cannot inherit one.
+        if "PYTHONPATH" in extra_env:
+            env["PYTHONPATH"] = extra_env["PYTHONPATH"]
     return subprocess.run(
-        [sys.executable, "-c", source],
-        cwd=cwd,
+        [str(python), "-c", source],
+        cwd=ROOT,
         capture_output=True,
         text=True,
-        timeout=15,
-        env=_child_env(),
+        timeout=30,
+        env=env,
     )
 
 
-class FtsProbeTests(unittest.TestCase):
-    def test_supported_ddl_succeeds_and_closes(self):
-        seen, closed = [], []
-        namespace = _exec(
-            setup._FTS_PROBE,
-            _recording_connect(seen, closed),
-            {"missing": ["import-already-failed"]},
-        )
-        self.assertEqual(namespace["missing"], ["import-already-failed"])
-        self.assertEqual(seen, [":memory:"])
-        self.assertEqual(closed, [":memory:"])
-        script = setup.probe_script("/probe/transcript.py")
-        child = "missing = []\n" + script[script.rindex("import sqlite3\n") :]
+def _missing_contract(directory):
+    """Packages that import and omit the current worker symbols.
+
+    The selected interpreter still runs the probe. These modules hide the
+    pinned runtime for that one process, so rejection does not depend on a
+    private older virtualenv.
+    """
+    root = Path(directory)
+    packages = {
+        "mindie_knowledge/__init__.py": "",
+        "mindie_knowledge/loop/__init__.py": "",
+        "mindie_knowledge/materials/__init__.py": "",
+        "mindie_knowledge/community/__init__.py": "",
+        "remote_dev/__init__.py": "",
+        "remote_dev/mcp/__init__.py": "",
+        "langmem/__init__.py": "",
+        "langmem/short_term.py": "def summarize_messages(*args, **kwargs):\n    return None\n",
+    }
+    for relative, body in packages.items():
+        path = root.joinpath(*relative.split("/"))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+    return root
+
+
+class WorkerProbeTests(unittest.TestCase):
+    def test_update_contract_apis_are_required_before_install(self):
+        from mindie_knowledge.loop import cli, lifecycle, locks
+        from mindie_knowledge import releases
+
+        script = runtime_probe.build_probe_script(str(SCRIPTS / "transcript.py"))
+        for module, name, value, message in (
+            (locks, "try_lock_file", None, "shared operation admission locks"),
+            (releases, "supports_harness", None, "compatible Release selection APIs"),
+            (lifecycle, "retire_service", lambda path: None, "bounded control observation"),
+            (cli, "prepare_service", lambda path: None, "bounded readiness probe"),
+        ):
+            with self.subTest(name=name), patch.object(module, name, value), \
+                    redirect_stdout(io.StringIO()) as output:
+                exec(script, {})
+            self.assertIn(message, output.getvalue())
+            self.assertTrue(output.getvalue().startswith("MISSING:"))
+
+    def test_git_layout_preflight_is_required_before_install(self):
+        from mindie_knowledge import git_layout
+
+        script = runtime_probe.build_probe_script(str(SCRIPTS / "transcript.py"))
+        with patch.object(git_layout, "validate_config_feed_layout", None), \
+                redirect_stdout(io.StringIO()) as output:
+            exec(script, {})
+        self.assertIn("knowledge Git layout preflight is unavailable", output.getvalue())
+        self.assertTrue(output.getvalue().startswith("MISSING:"))
+
+    def test_summary_scratch_contract_is_required_before_install(self):
+        from mindie_knowledge.loop import summary_scratch
+
+        script = runtime_probe.build_probe_script(str(SCRIPTS / "transcript.py"))
+        for name, value, message in (
+            ("create_profile", None, "summary scratch profile API is unavailable"),
+            ("create_profile", lambda: None, "summary scratch profile API is unavailable"),
+            ("ENVIRONMENT_KEY", "", "summary scratch profile API is unavailable"),
+            ("ScratchOwnershipError", ValueError,
+             "summary scratch ownership failure contract is unavailable"),
+        ):
+            with self.subTest(name=name, value=value), \
+                    patch.object(summary_scratch, name, value), \
+                    redirect_stdout(io.StringIO()) as output:
+                exec(script, {})
+            self.assertIn(message, output.getvalue())
+            self.assertTrue(output.getvalue().startswith("MISSING:"))
+
+    def test_service_launch_apis_are_required_before_install(self):
+        from mindie_knowledge.loop import cli, service_context
+
+        script = runtime_probe.build_probe_script(str(SCRIPTS / "transcript.py"))
+        for module, name, message in (
+            (cli, "prepare_service", "service lifecycle is unavailable"),
+            (cli, "ensure_service", "service lifecycle is unavailable"),
+            (service_context, "validate", "service launch context validation is unavailable"),
+        ):
+            with self.subTest(name=name), patch.object(module, name, None), \
+                    redirect_stdout(io.StringIO()) as output:
+                exec(script, {})
+            self.assertIn(message, output.getvalue())
+            self.assertTrue(output.getvalue().startswith("MISSING:"))
+
+    def test_probe_does_not_require_retired_fts_capability(self):
+        script = runtime_probe.build_probe_script(str(SCRIPTS / "transcript.py"))
+        self.assertNotIn("contentless_delete", script)
+        self.assertNotIn("fts5", script.lower())
+        self.assertIn("usage_totals", script)
+        self.assertIn("validate_identity", script)
+        self.assertIn("validate_outcome", script)
+
+    def test_current_core_satisfies_worker_probe(self):
+        script = runtime_probe.build_probe_script(str(SCRIPTS / "transcript.py"))
+        completed = _run(CURRENT, script)
+        self.assertEqual(completed.returncode, 0, completed.stderr[-500:])
+        self.assertEqual(completed.stdout.strip(), "OK")
+
+    def test_old_core_is_not_accepted_as_worker_compatible(self):
+        script = runtime_probe.build_probe_script(str(SCRIPTS / "transcript.py"))
         with tempfile.TemporaryDirectory() as tmp:
-            completed = _run(child, tmp)
-            self.assertEqual(completed.returncode, 0, completed.stderr)
-            self.assertEqual(completed.stdout.strip(), "OK")
-            self.assertEqual(list(Path(tmp).iterdir()), [])
-
-    def test_unsupported_error_names_actual_version_and_closes(self):
-        fake = _Unsupported()
-
-        def connect(name, *args, **kwargs):
-            self.assertEqual(name, ":memory:")
-            return fake
-
-        namespace = {"missing": ["x" * 500]}
-        _exec(setup._FTS_PROBE, connect, namespace)
-        self.assertTrue(fake.closed)
-        text = namespace["missing"][0]
-        self.assertTrue(text.startswith("sqlite " + sqlite3.sqlite_version + " lacks "))
-        self.assertIn(CAPABILITY, text[:200])
-        self.assertIn(sqlite3.sqlite_version, text[:200])
-        self.assertIn("OperationalError", text)
-        shown = ("MISSING: " + "; ".join(namespace["missing"])).strip()[:300]
-        self.assertIn(sqlite3.sqlite_version, shown)
-        self.assertIn(CAPABILITY, shown)
+            completed = _run(CURRENT, "import sys;sys.path.insert(0," + repr(str(_missing_contract(tmp))) + ")\n" + script)
+        self.assertNotEqual(completed.stdout.strip(), "OK")
+        self.assertIn("MISSING:", completed.stdout)
 
     def test_exit1_after_ok_is_rejected_before_writes(self):
         fault = "print('OK', flush=True)\nraise SystemExit(1)\n"
         continued = []
-        with tempfile.TemporaryDirectory() as tmp:
-            direct = _run(fault, tmp)
-            self.assertEqual(direct.returncode, 1)
-            self.assertEqual(direct.stdout, "OK\n")
-            with patch.object(setup, "PROBE_SCRIPT", fault):
-                with self.assertRaises(SystemExit) as caught:
-                    kwargs = {}
-                    declared = explicit_local_candidate_args()
-                    if declared and "local_candidates" in inspect.signature(setup.probe_runtime).parameters:
-                        kwargs["local_candidates"] = {
-                            "mindie-knowledge": declared[-1].split("=", 1)[1]
-                        }
-                    setup.probe_runtime(sys.executable, **kwargs)
-                    continued.append("write")
+        with patch.object(candidate_validate, "build_probe_script", return_value=fault):
+            with self.assertRaises(SystemExit) as caught:
+                candidate_validate.runtime_check(SCRIPTS)
+                continued.append("write")
+        self.assertEqual(caught.exception.code, 1)
         self.assertEqual(continued, [])
-        self.assertIn("knowledge runtime probe failed", str(caught.exception.code))
 
 
 if __name__ == "__main__":

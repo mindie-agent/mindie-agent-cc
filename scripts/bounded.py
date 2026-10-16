@@ -1,4 +1,4 @@
-"""One attempt with an absolute deadline and bounded output; own the child tree.
+"""One owned attempt with bounded output; a deadline only when the caller asks.
 
 POSIX reads pipes with a selector and kills the owned process group. Windows
 cannot select() process pipes, so it uses two daemon reader threads and an
@@ -8,26 +8,40 @@ cleanup still owns descendants after their leader exits.
 When this process is already the leader of an owned process group
 (MINDIE_MAINTENANCE_GROUP=1 set by the outer core), POSIX spawns stay in that
 group instead of a new session: the outer core owns whole-group terminal
-cleanup, so this module only kills the direct child, never the group.
+cleanup, so this module only kills the direct child, never the group. A
+summary call that has validated shared scratch ownership passes core_managed;
+the shared core is its sole lifetime authority. Other callers retain the
+existing maintenance-owner check before spawn and during the wait.
 
 Final cleanup closes a standalone owned tree; managed descendants are closed
-by the outer core when the organizer returns.
+by the outer core when the worker returns. Cleanup failures use the caller's
+receipt, or an exception preserving completed stdout when no receipt exists.
 Stdin is a temporary file, never a blocking pipe write: a child that does not
 read cannot hang the parent past the deadline.
 
 An optional cancel Event is checked before spawn, while draining/waiting
 (including after the child has closed its pipes), and before returning a
-result. Stderr bytes count toward the output bound and are then discarded.
-Updater transport commands may attach a static failure category; raw
-stderr, argv and URLs are not retained. This call does not retry.
+result. An optional terminal predicate over accumulated stdout bytes ends the
+read early when the caller's protocol has terminal evidence; the owned tree
+is still reaped, and a late nonzero exit is cleanup evidence, never a second
+business result. A child that has exited is evidence; silence from an
+inherited pipe holder is not. Stderr bytes count toward the output bound and
+are then discarded. Updater transport commands may attach a static failure
+category; raw stderr, argv and URLs are not retained. This call does not retry.
 """
 
 from __future__ import annotations
 
 import atexit
+from contextlib import contextmanager
+from contextvars import ContextVar
+import math
 import os
+from pathlib import Path
 import re
+import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -40,10 +54,38 @@ if POSIX:
 
 MAX_OUTPUT = 256 * 1024
 _CHUNK = 8192
+_OPERATION = ContextVar("bounded_operation", default=None)
+
+
+@contextmanager
+def operation(cancel=None, *, signals=False, guard_owner=True):
+    """One caller's cancellation and process ownership, shared by nested calls."""
+    cancel = cancel if cancel is not None else threading.Event()
+    token = _OPERATION.set((cancel, guard_owner))
+    handlers = {}
+    if signals and threading.current_thread() is threading.main_thread():
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            handlers[signum] = signal.signal(signum, lambda *_: cancel.set())
+    try:
+        yield cancel
+    finally:
+        for signum, handler in handlers.items():
+            signal.signal(signum, handler)
+        _OPERATION.reset(token)
+
+
+def check_cancelled():
+    active = _OPERATION.get()
+    if active is not None and active[0].is_set():
+        raise CommandCancelled("command cancelled")
 
 
 class CommandCancelled(RuntimeError):
     """The caller cancelled this attempt; owned children are reaped."""
+
+
+class OwnerExited(RuntimeError):
+    """The owning maintenance core exited; its work is not continued."""
 
 
 class CommandTimedOut(RuntimeError):
@@ -59,7 +101,42 @@ class OutputLimitExceeded(ValueError, RuntimeError):
     """Captured output grew past the configured byte bound."""
 
 
-def _own_windows_tree(process):
+class CommandCleanupError(RuntimeError):
+    """Execution ended; cleanup failed without erasing the observed output."""
+
+    def __init__(self, stdout, receipt):
+        self.stdout = stdout
+        self.operation_completed = True
+        self.cleanup_failed = True
+        self.cleanup = receipt.get("cleanup", [])
+        stages = ", ".join(item["stage"] for item in self.cleanup)
+        super().__init__("command execution completed but owned-process cleanup failed"
+                         + (f" ({stages})" if stages else "") + "; do not repeat the operation")
+
+
+def _maintenance_owner():
+    """The owning core's pid when this process is an owned maintenance worker.
+
+    Present only under the outer core's maintenance-group contract; a malformed
+    owner value fails closed rather than disabling the liveness check.
+    """
+    if os.environ.get("MINDIE_MAINTENANCE_GROUP") != "1":
+        return None
+    owner = os.environ.get("MINDIE_MAINTENANCE_OWNER")
+    if owner is None:
+        return None
+    if not owner.isdecimal():
+        raise OwnerExited("maintenance owner identity is invalid")
+    return int(owner)
+
+
+def _owner_exited(owner) -> bool:
+    # getppid changes once the owning core is gone (POSIX). On Windows the
+    # value can go stale; the owning Job still bounds the tree there.
+    return owner is not None and os.getppid() != owner
+
+
+def _own_windows_tree(process, *, allow_service=False):
     """Keep descendant ownership after the process group leader exits.
 
     A taskkill PID traversal cannot find a tree whose root has already exited.
@@ -105,6 +182,10 @@ def _own_windows_tree(process):
     job = kernel.CreateJobObjectW(None, None)
     limits = Extended()
     limits.BasicLimitInformation.LimitFlags = 0x2000  # KILL_ON_JOB_CLOSE
+    if allow_service:
+        # Only explicit service launchers request CREATE_BREAKAWAY_FROM_JOB.
+        # Ordinary children still inherit this Job and remain caller-owned.
+        limits.BasicLimitInformation.LimitFlags |= 0x800  # BREAKAWAY_OK
     if (not job or not kernel.SetInformationJobObject(
             job, 9, ctypes.byref(limits), ctypes.sizeof(limits))
             or not kernel.AssignProcessToJobObject(job, int(process._handle))):
@@ -115,7 +196,7 @@ def _own_windows_tree(process):
     process._mindie_windows_job = (kernel, job)
 
 
-def _spawn(command, stdin, env, cwd):
+def _spawn(command, stdin, env, cwd, *, allow_service=False):
     inherited = (
         POSIX
         and os.environ.get("MINDIE_MAINTENANCE_GROUP") == "1"
@@ -135,11 +216,31 @@ def _spawn(command, stdin, env, cwd):
         # Assign ownership before the child can create descendants. Attaching
         # a Job to an already-running process races fast child startup.
         kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW | 0x4  # CREATE_SUSPENDED
-    process = subprocess.Popen(**kwargs)
+    active = _OPERATION.get()
+    owner_fds = None
+    if POSIX and not inherited and active is not None and active[1]:
+        owner_read, owner_write = os.pipe()
+        owner_fds = owner_read, owner_write
+        kwargs["args"] = [
+            sys.executable, str(Path(__file__).with_name("owned_process.py")),
+            str(os.getpid()), str(owner_read), *command,
+        ]
+        kwargs["pass_fds"] = (owner_read,)
+    try:
+        process = subprocess.Popen(**kwargs)
+    except BaseException:
+        if owner_fds is not None:
+            os.close(owner_fds[1])
+        raise
+    finally:
+        if owner_fds is not None:
+            os.close(owner_fds[0])
+    if owner_fds is not None:
+        process._mindie_owner_fd = owner_fds[1]
     process._mindie_inherited_group = inherited
     if not POSIX:
         try:
-            _own_windows_tree(process)
+            _own_windows_tree(process, allow_service=allow_service)
             _resume_windows_process(process)
         except OSError:
             # Do not continue an operation without the promised ownership.
@@ -173,30 +274,81 @@ def _resume_windows_process(process):
         raise ctypes.WinError(convert(status))
 
 
+def exec_or_wait(command, env):
+    """Keep a native entry alive until its selected interpreter actually exits."""
+    if POSIX:
+        os.execve(command[0], command, env)
+    process = subprocess.Popen(
+        command, env=env,
+        stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr,
+        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW | 0x4,
+    )
+    failure = None
+    returncode = None
+    try:
+        _own_windows_tree(process, allow_service=True)
+        _resume_windows_process(process)
+        returncode = process.wait()
+    except BaseException as exc:
+        failure = exc
+    for stage, cleanup in (
+        ("terminate_owned_tree", lambda: _kill_tree(process)),
+        ("reap_entry_child", lambda: process.wait(timeout=5)),
+    ):
+        try:
+            cleanup()
+        except BaseException as exc:
+            if failure is None:
+                failure = exc
+                if returncode is not None:
+                    failure.add_note(f"The entry child already exited with code {returncode}.")
+            else:
+                failure.add_note(f"Entry cleanup failed at {stage}: {type(exc).__name__}")
+    if failure is not None:
+        raise failure
+    raise SystemExit(returncode)
+
+
 def _kill_tree(process, pgid=None):
     if POSIX:
+        if getattr(process, "_mindie_tree_terminated", False):
+            # A repeated signal can hit a reaped/reused group or macOS zombies
+            # after the first successful kill; that repeat is not a failure.
+            return
         if getattr(process, "_mindie_inherited_group", False):
-            # Killing the shared group here would kill this organizer before
+            # Killing the shared group here would kill this worker before
             # it can report its result. Core owns the entire group on exit.
             if process.poll() is None:
                 try:
                     process.kill()
                 except ProcessLookupError:
                     pass
+            process._mindie_tree_terminated = True
             return
         try:
             os.killpg(pgid if pgid is not None else process.pid, signal.SIGKILL)
-        except (OSError, ProcessLookupError):
+        except ProcessLookupError:
             pass
+        # Other OSErrors (for example a stale macOS group PermissionError)
+        # reach the caller's cleanup receipt; they are never retried here.
+        process._mindie_tree_terminated = True
         return
     owned = getattr(process, "_mindie_windows_job", None)
     if owned is not None:
         process._mindie_windows_job = None
         kernel, job = owned
-        try:
-            kernel.TerminateJobObject(job, 1)
-        finally:
-            kernel.CloseHandle(job)
+        import ctypes
+        error = None
+        if not kernel.TerminateJobObject(job, 1):
+            error = ctypes.WinError(ctypes.get_last_error())
+        if not kernel.CloseHandle(job):
+            close_error = ctypes.WinError(ctypes.get_last_error())
+            if error is None:
+                error = close_error
+            else:
+                error.add_note("Closing the owned Windows Job also failed: " + str(close_error))
+        if error is not None:
+            raise error
         return
     # Fallback is used only when initial Job assignment failed.
     if process.poll() is None:
@@ -414,14 +566,25 @@ def _attach_transport(exc, stdout, stderr, *, timed_out):
         exc.category = "temporary_network"
 
 
-def _run_posix(process, timeout, max_output, pgid, check, cancel, transport=False):
+def _cleanup_step(receipt, operation, stage):
+    try:
+        operation()
+        return False
+    except Exception as exc:
+        receipt["cleanup_failed"] = True
+        receipt.setdefault("cleanup", []).append(dict(stage=stage, error_type=type(exc).__name__))
+        return True
+
+
+def _run_posix(process, timeout, max_output, pgid, check, cancel, transport=False, owner=None, receipt=None, terminal=None):
     selector = selectors.DefaultSelector()
     selector.register(process.stdout, selectors.EVENT_READ, "out")
     selector.register(process.stderr, selectors.EVENT_READ, "err")
-    deadline = time.monotonic() + timeout
+    deadline = None if timeout is None else time.monotonic() + timeout
     output = bytearray()
     errors = bytearray() if transport else None
     cap = _Cap(max_output)
+    terminated = False
 
     def timeout_error():
         err = TimeoutError("deadline exceeded")
@@ -431,6 +594,8 @@ def _run_posix(process, timeout, max_output, pgid, check, cancel, transport=Fals
 
     def failed_error():
         err = RuntimeError(f"command failed ({process.returncode})")
+        err.mindie_output = bytes(output).decode("utf-8", "replace")
+        err.returncode = process.returncode
         if transport:
             _attach_transport(err, output, errors, timed_out=False)
         return err
@@ -439,14 +604,21 @@ def _run_posix(process, timeout, max_output, pgid, check, cancel, transport=Fals
         while True:
             if _cancelled(cancel):
                 raise CommandCancelled("command cancelled")
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
+            if _owner_exited(owner):
+                raise OwnerExited("maintenance owner exited")
+            remaining = None if deadline is None else deadline - time.monotonic()
+            if remaining is not None and remaining <= 0:
                 raise timeout_error()
             alive = process.poll() is None
             if not alive and not selector.get_map():
                 break
             if selector.get_map():
-                for key, _ in selector.select(min(0.05, remaining)):
+                events = selector.select(0.05 if remaining is None else min(0.05, remaining))
+                if not events and not alive:
+                    # The child exited; silence from an inherited pipe holder
+                    # is not evidence of remaining work.
+                    break
+                for key, _ in events:
                     chunk = os.read(key.fileobj.fileno(), _CHUNK)
                     if not chunk:
                         selector.unregister(key.fileobj)
@@ -454,65 +626,92 @@ def _run_posix(process, timeout, max_output, pgid, check, cancel, transport=Fals
                     cap.add(chunk)
                     if key.data == "out":
                         output.extend(chunk)
+                        if terminal is not None and terminal(bytes(output)):
+                            # Terminal evidence closes the business operation;
+                            # reaping below has its own small cleanup wait.
+                            terminated = True
                     elif errors is not None:
                         errors.extend(chunk)
+                if terminated:
+                    break
                 continue
             # Pipes closed while the child is still running.
             try:
-                process.wait(timeout=min(0.05, remaining))
+                process.wait(timeout=0.05 if remaining is None else min(0.05, remaining))
             except subprocess.TimeoutExpired:
                 continue
             break
         if _cancelled(cancel):
             raise CommandCancelled("command cancelled")
+        if _owner_exited(owner):
+            raise OwnerExited("maintenance owner exited")
         if process.poll() is None:
-            try:
-                process.wait(timeout=max(0.01, deadline - time.monotonic()))
-            except subprocess.TimeoutExpired:
-                err = timeout_error()
-                if transport:
-                    raise err from None
-                raise err
+            if terminated:
+                # Terminal evidence closed the operation; the finally below
+                # owns and reaps the tree instead of waiting on the child.
+                pass
+            elif deadline is None:
+                # The loop above only exits on observed termination, so this
+                # returns at once; it is a reap, never a business deadline.
+                process.wait()
+            else:
+                try:
+                    process.wait(timeout=max(0.01, deadline - time.monotonic()))
+                except subprocess.TimeoutExpired:
+                    err = timeout_error()
+                    if transport:
+                        raise err from None
+                    raise err
         if _cancelled(cancel):
             raise CommandCancelled("command cancelled")
-        if check and process.returncode:
+        if not terminated and check and process.returncode:
             raise failed_error()
+        if terminated and process.returncode:
+            # The terminal envelope was already delivered; a late nonzero exit
+            # is cleanup evidence, never a second business result.
+            if receipt is not None:
+                receipt["cleanup_failed"] = True
         return output.decode("utf-8", "replace")
+    except CommandCancelled as exc:
+        exc.mindie_output = bytes(output).decode("utf-8", "replace")
+        exc.returncode = process.poll()
+        raise
     finally:
-        _kill_tree(process, pgid)
-        try:
-            process.wait(timeout=1)
-        except subprocess.TimeoutExpired:
-            _kill_tree(process, pgid)
+        # Cleanup never masks the business result; failures land on the receipt.
+        _cleanup_step(receipt, lambda: _kill_tree(process, pgid), "terminate_owned_tree")
+        def reap():
             try:
                 process.wait(timeout=1)
             except subprocess.TimeoutExpired:
-                pass
-        selector.close()
-        process.stdout.close()
-        process.stderr.close()
+                _kill_tree(process, pgid)
+                process.wait(timeout=1)
+        _cleanup_step(receipt, reap, "reap_process")
+        _cleanup_step(receipt, selector.close, "close_selector")
+        _cleanup_step(receipt, process.stdout.close, "close_stdout")
+        _cleanup_step(receipt, process.stderr.close, "close_stderr")
 
 
-def _run_windows(process, timeout, max_output, pgid, check, cancel, transport=False):
+def _run_windows(process, timeout, max_output, pgid, check, cancel, transport=False, owner=None, receipt=None, terminal=None):
     # Windows reader threads drain the pipes; the Job owns all pipe holders.
-    deadline = time.monotonic() + timeout
+    deadline = None if timeout is None else time.monotonic() + timeout
     output = bytearray()
     errors = bytearray() if transport else None
     cap = _Cap(max_output)
     lock = threading.Lock()
     failure = []
+    terminated = False
 
     def reader(stream, dest):
         try:
             while True:
-                chunk = stream.read(_CHUNK)
+                chunk = stream.read1(_CHUNK)
                 if not chunk:
                     return
                 with lock:
                     cap.add(chunk)
                     if dest is not None:
                         dest.extend(chunk)
-        except (ValueError, OutputLimitExceeded) as exc:
+        except (OSError, ValueError) as exc:
             failure.append(exc)
 
     threads = [
@@ -522,71 +721,132 @@ def _run_windows(process, timeout, max_output, pgid, check, cancel, transport=Fa
     for thread in threads:
         thread.start()
     try:
+        drain_until = None
         while any(thread.is_alive() for thread in threads) or process.poll() is None:
             if _cancelled(cancel):
                 raise CommandCancelled("command cancelled")
-            if time.monotonic() >= deadline:
+            if _owner_exited(owner):
+                raise OwnerExited("maintenance owner exited")
+            if deadline is not None and time.monotonic() >= deadline:
                 err = TimeoutError("deadline exceeded")
                 if transport:
                     _attach_transport(err, output, errors, timed_out=True)
                 raise err
             if failure:
                 raise failure[0]
-            if process.poll() is not None and not any(
-                thread.is_alive() for thread in threads
-            ):
+            with lock:
+                snapshot = bytes(output)
+            if terminal is not None and snapshot and terminal(snapshot):
+                terminated = True
                 break
+            if process.poll() is not None:
+                if not any(thread.is_alive() for thread in threads):
+                    break
+                # The child exited; an inherited pipe holder is not remaining
+                # work. One short drain window, then the operation closes.
+                if drain_until is None:
+                    drain_until = time.monotonic() + 0.2
+                elif time.monotonic() >= drain_until:
+                    break
             time.sleep(0.02)
         if failure:
             raise failure[0]
-        if process.poll() is None:
-            process.wait(timeout=max(0.01, deadline - time.monotonic()))
+        # A fast native child can finish between samples. Its final buffered
+        # envelope still owns the outcome, including a reported error + exit 1.
+        with lock:
+            snapshot = bytes(output)
+        if terminal is not None and snapshot and terminal(snapshot):
+            terminated = True
+        if process.poll() is None and not terminated:
+            process.wait(None if deadline is None else max(0.01, deadline - time.monotonic()))
         if _cancelled(cancel):
             raise CommandCancelled("command cancelled")
-        if check and process.returncode:
+        if _owner_exited(owner):
+            raise OwnerExited("maintenance owner exited")
+        if not terminated and check and process.returncode:
             err = RuntimeError(f"command failed ({process.returncode})")
+            err.mindie_output = bytes(output).decode("utf-8", "replace")
+            err.returncode = process.returncode
             if transport:
                 _attach_transport(err, output, errors, timed_out=False)
             raise err
+        if terminated and process.returncode:
+            if receipt is not None:
+                receipt["cleanup_failed"] = True
         return bytes(output).decode("utf-8", "replace")
+    except CommandCancelled as exc:
+        with lock:
+            exc.mindie_output = bytes(output).decode("utf-8", "replace")
+        exc.returncode = process.poll()
+        raise
     finally:
-        _kill_tree(process, pgid)
-        try:
-            process.wait(timeout=1)
-        except subprocess.TimeoutExpired:
-            pass
+        # Cleanup never masks the business result; failures land on the receipt.
+        _cleanup_step(receipt, lambda: _kill_tree(process, pgid), "terminate_owned_tree")
+        _cleanup_step(receipt, lambda: process.wait(timeout=1), "reap_process")
         for thread in threads:
-            thread.join(timeout=1)
-        process.stdout.close()
-        process.stderr.close()
+            _cleanup_step(receipt, lambda thread=thread: thread.join(timeout=1), "join_reader")
+        for thread, stream in zip(threads, (process.stdout, process.stderr)):
+            if thread.is_alive():
+                receipt["cleanup_failed"] = True
+                receipt.setdefault("cleanup", []).append(dict(stage="join_reader", error_type="ReaderStillRunning"))
+                # Closing a BufferedReader held by a blocked reader would
+                # block this cleanup indefinitely after an ownership failure.
+                continue
+            _cleanup_step(receipt, stream.close, "close_pipe")
 
 
 def run(
     argv,
     stdin="",
     *,
-    timeout,
+    timeout=None,
     env=None,
     cwd=None,
     max_output=MAX_OUTPUT,
     check=True,
     cancel=None,
     transport=False,
+    receipt=None,
+    terminal=None,
+    allow_service=False,
+    core_managed=False,
 ):
+    active = _OPERATION.get()
+    if cancel is None and active is not None:
+        cancel = active[0]
     if (not isinstance(argv, (list, tuple)) or not argv
             or not isinstance(argv[0], str) or not argv[0]
             or not all(isinstance(item, str) for item in argv)):
         raise ValueError("command must be a nonempty argv list")
-    if timeout is None or timeout <= 0:
-        raise ValueError("timeout must be positive")
+    if timeout is not None and (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
+                                or not math.isfinite(timeout) or timeout <= 0):
+        raise ValueError("an explicit execution timeout must be a positive finite number")
+    if terminal is not None and not callable(terminal):
+        raise ValueError("terminal must be a predicate over accumulated stdout bytes")
+    if type(core_managed) is not bool:
+        raise ValueError("core_managed must be the shared scratch ownership result")
+    explicit_receipt = receipt is not None
+    receipt = receipt if explicit_receipt else {}
+    receipt["started"] = False
+    receipt["cleanup_failed"] = False
+    receipt["cleanup"] = []
     if _cancelled(cancel):
         raise CommandCancelled("command cancelled")
+    # The shared scratch contract proves managed ownership. Its core owns
+    # lifetime across redirectors and worker exit; a second PPID test disagrees
+    # with that authority. Other callers retain their existing owner checks.
+    owner = None if core_managed else _maintenance_owner()
+    if _owner_exited(owner):
+        # Never start an unobserved (possibly billed) child for a dead owner.
+        raise OwnerExited("maintenance owner exited")
     data = stdin.encode() if isinstance(stdin, str) else (stdin or b"")
     with tempfile.TemporaryFile() as stream:
         if data:
             stream.write(data)
             stream.seek(0)
-        process = _spawn(argv, stream, env, cwd)
+        process = _spawn(argv, stream, env, cwd, allow_service=allow_service)
+        if receipt is not None:
+            receipt["started"] = True
         pgid = None
         if POSIX:
             try:
@@ -595,37 +855,69 @@ def run(
                 pgid = process.pid
 
         def cleanup():
-            _kill_tree(process, pgid)
+            try:
+                _kill_tree(process, pgid)
+            except OSError:
+                # Interpreter-exit best effort has no receipt channel.
+                pass
 
         atexit.register(cleanup)
         try:
             if POSIX:
                 result = _run_posix(
-                    process, timeout, max_output, pgid, check, cancel, transport
+                    process, timeout, max_output, pgid, check, cancel, transport,
+                    owner=owner, receipt=receipt, terminal=terminal,
                 )
             else:
                 result = _run_windows(
-                    process, timeout, max_output, pgid, check, cancel, transport
+                    process, timeout, max_output, pgid, check, cancel, transport,
+                    owner=owner, receipt=receipt, terminal=terminal,
                 )
+            receipt["completed"] = True
+            receipt["returncode"] = process.returncode
+            owner_fd = getattr(process, "_mindie_owner_fd", None)
+            if owner_fd is not None:
+                process._mindie_owner_fd = None
+                _cleanup_step(receipt, lambda: os.close(owner_fd), "close_owner_pipe")
             if _cancelled(cancel):
-                raise CommandCancelled("command cancelled")
+                receipt["cancelled_after_completion"] = True
+                error = CommandCancelled("command cancelled after execution completed")
+                error.mindie_output = result
+                error.stdout = result
+                error.returncode = process.returncode
+                error.operation_completed = True
+                raise error
+            if receipt["cleanup_failed"] and not explicit_receipt:
+                raise CommandCleanupError(result, receipt)
             return result
-        except CommandCancelled:
-            raise
-        except OutputLimitExceeded:
-            raise
         except (TimeoutError, subprocess.TimeoutExpired) as exc:
+            if timeout is None:
+                exc.cleanup_failed = receipt["cleanup_failed"]
+                exc.cleanup = receipt["cleanup"]
+                raise
             message = f"command timed out after {timeout}s"
             category = getattr(exc, "category", None)
             retry_after = getattr(exc, "retry_after", None)
             if transport and category is None:
                 category = "temporary_network"
             if category:
-                raise CommandTimedOut(
+                failure = CommandTimedOut(
                     message, category=category, retry_after=retry_after
-                ) from None
-            raise CommandTimedOut(message) from exc
+                )
+            else:
+                failure = CommandTimedOut(message)
+            failure.cleanup_failed = receipt["cleanup_failed"]
+            failure.cleanup = receipt["cleanup"]
+            raise failure from exc
+        except BaseException as exc:
+            exc.cleanup_failed = receipt["cleanup_failed"]
+            exc.cleanup = receipt["cleanup"]
+            raise
         finally:
+            owner_fd = getattr(process, "_mindie_owner_fd", None)
+            if owner_fd is not None:
+                process._mindie_owner_fd = None
+                _cleanup_step(receipt, lambda: os.close(owner_fd), "close_owner_pipe")
             try:
                 atexit.unregister(cleanup)
             except Exception:

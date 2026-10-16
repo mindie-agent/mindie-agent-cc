@@ -1,3 +1,6 @@
+> Historical evidence at the commits stated below. Current 0.0.1 candidates run
+> diagnostic maintenance at native SessionStart; the code-update scheduler was removed.
+
 # Fault diagnostics — 2026-09-22
 
 Own-tool failures now preserve the original result and attach a bounded local

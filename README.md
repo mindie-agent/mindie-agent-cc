@@ -17,59 +17,107 @@ initialization are optional; reuse the user's existing choices. See
 Current capture uses the harness's public transcript projection followed by
 local deterministic redaction. Complete user and visible assistant messages
 are saved without tool payloads or a body-writing model. Setup and updates
-automatically install the scanner and metadata worker. The optional metadata
-worker can return only title and summary; failure leaves a source excerpt.
-Its model policy belongs to the adapter, with minimal/disabled thinking, and
-does not add user configuration. Native model acceptance is separate from
-the component tests of this path.
+automatically install the scanner and required block-index worker. The worker
+returns bounded navigation metadata, never a replacement body. A failed or
+uncertain indexing attempt remains visible with its execution and usage receipt;
+an excerpt is not substituted for a completed index. The isolated worker uses
+the selected native Claude model profile. Native model acceptance is separate
+from the component tests of this path.
 
 
-Claude Code adapter for MindIE Agent. This repository owns the native plugin entry, task identity, hooks, transcript parsing, installation and runtime switching. Shared knowledge and remote development stay in their own repositories.
+Claude Code adapter for MindIE Agent. Claude owns native plugin installation,
+updates and removal. This repository owns native task identity, hooks,
+transcript parsing and a fixed Python runtime for each installed release.
+Shared knowledge, publication and remote development remain independent packages.
 
-Development is in progress. This is not a released or fully accepted implementation.
+Version `0.0.1` / `v0.0.1` is the first internal release, distributed as an
+ordinary GitHub Release without a beta suffix or prerelease flag. Benchmark
+work is separate. See the [current acceptance checkpoint](docs/acceptance.md)
+for the tested source identities and remaining scope limits. Claude Code on
+macOS, native Windows and WSL are separate acceptance environments.
 
-MindIE Agent inherits all nine [VAWS design principles](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.md). See the [Harness boundary and lifecycle contract](https://github.com/mindie-agent/mindie-agent/blob/main/docs/harness-boundary-and-lifecycle.md).
+MindIE Agent inherits all nine [design principles](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.md).
 
-Acceptance requires actual local Claude Code runs and observed external outcomes. Passing unit tests or fabricated hook input does not establish native acceptance. macOS is the first real host; Windows desktop acceptance remains pending.
+## Install
 
-## Install on macOS
+Install `uv`, Git, and an authenticated Claude Code with native plugin support.
+The native plugin requires `CLAUDE_PLUGIN_DATA` for its persistent entry. On
+Windows, Git for Windows also supplies the SSH implementation used by remote
+operations. Existing SSH and model settings are preserved.
 
-Requires Python 3.11+, Git and an installed, authenticated Claude Code with
-native plugin support. The installer creates its own pinned persistent runtime,
-retains the plugin source, installs and reads back the native package, and
-registers model-free update checks. Community contribution stays off.
+Inside WSL, use Linux-native Claude, Git and uv, and keep the profile, SQLite
+state and runtime on the Linux filesystem. On Linux and WSL, service-backed
+knowledge reads and automatic capture/indexing require a reachable systemd
+user manager, systemd 254 or newer, and a unified cgroup hierarchy. This also
+applies to knowledge reads with contribution off; independent remote-dev
+operations do not use that knowledge service. A missing manager, unsupported
+version or unverified containment is a service error, with no unprotected
+fallback. Check the user manager with
+`systemctl --user show --property=Version`.
 
-The knowledge interpreter also needs SQLite 3.43.0 or newer with FTS5 and
-`contentless_delete` support. Installation checks the actual SQLite library;
-the Python version alone does not establish this capability.
+Use Claude's Git marketplace with the immutable `v0.0.1` tag. Confirm the
+release is available in [GitHub Releases](https://github.com/mindie-agent/mindie-agent-cc/releases)
+before installing:
 
-```bash
-git clone https://github.com/mindie-agent/mindie-agent-cc.git
-cd mindie-agent-cc
-python3 scripts/setup.py
-```
+Run these commands in a macOS/WSL shell or native Windows PowerShell, using the
+same Claude profile throughout:
 
-After setup succeeds, the downloaded source can be moved or removed. Keep the
-runtime and launchers under `${XDG_DATA_HOME:-$HOME/.local/share}/mindie-agent/cc`.
-Configuration is `${XDG_CONFIG_HOME:-$HOME/.config}/mindie-agent/cc.json`.
-
-For isolated development only, setup accepts `--config`, `--root`,
-`--claude-config-dir` and `--no-schedule`. `--knowledge-python` is an operator
-override; an interpreter inside a disposable checkout is unsuitable for a
-persistent install. `--no-native-install` writes MindIE files only.
-The normal installer already performs these native installation operations:
-
-```bash
-claude plugin marketplace add /path/to/host-package
-claude plugin install mindie-agent@mindie-agent-cc --json -y
+```sh
+git --version
+uv --version
+claude --version
+claude plugin marketplace add "https://github.com/mindie-agent/mindie-agent-cc.git#v0.0.1"
+claude plugin install mindie-agent@mindie-agent-cc --scope user
+claude --init-only
 claude plugin list --json
+claude mcp list
 ```
 
-Explicit task entry is the mindie-agent skill (Claude Code may show it bare or
-namespaced; `/mindie-agent:init` is its alias). First use offers recommended
-the missing public contribution destination and project scope. There
-is no default consent; the selected choice persists for the installation and
-is never re-asked, including after restarts, upgrades or failures. Contribution
+Release `0.0.1` declares exactly Claude Code `2.1.269` and `2.1.299`,
+not every version between them. Check the actual CLI version and confirm that
+the native installed record reports `mindie-agent@mindie-agent-cc`, version
+`0.0.1`, enabled with user scope in the intended profile.
+
+Each Release declares the Claude Code versions and native interfaces it supports.
+The shared Release selector chooses the highest compatible official Release;
+Claude's native Git marketplace and installer own its download and installation
+records. This marketplace's unconditional native auto-update is disabled so it
+cannot bypass that selection. Other marketplaces and native settings are preserved.
+The native `--init-only` command completes installation through SessionStart and
+exits without starting a conversation or calling a model. Check that both MindIE
+MCP servers report `Connected` before treating installation as complete.
+Claude starts MCP connections concurrently with SessionStart in an ordinary
+session; its connection window may expire before a cold dependency build finishes.
+The explicit native initialization stage prepares Python 3.13 through uv and
+installs the complete `uv.lock` with `uv sync --locked
+--no-editable`. The adapter itself is installed into that runtime; it does not
+import executable code from a disposable checkout or native plugin cache.
+The cold installation requires network access to the declared dependencies.
+
+Runtime directories are keyed by package source, lock, Python ABI and platform.
+On Windows they live under `%LOCALAPPDATA%/mindie-agent/runtimes/cc`; on macOS
+and WSL under `${XDG_DATA_HOME:-$HOME/.local/share}/mindie-agent/runtimes/cc`.
+The completed environment is immutable. Damage is reported instead of repaired
+in place while an old session may still use it.
+
+The native `CLAUDE_PLUGIN_DATA/releases/0.0.1/entry.py` binds one exact installed
+facade and profile. Each operation reads the selected complete helper, interpreter
+and engine from that profile. SessionStart, MCP and Stop use this entry before
+consulting the cache. Hot Hooks run uv offline with Python downloads disabled;
+Stop never installs a runtime, syncs a feed or invokes the business model.
+
+Shared business configuration remains at
+`${XDG_CONFIG_HOME:-$HOME/.config}/mindie-agent/cc.json`. It records the selected installation binding. Contribution scope and consent
+remain separate user data; changing code or reloading the native host never
+authorizes resetting or asking again for those choices. Bodies, cursors, usage
+and uncertain results remain in their existing locations.
+
+The mindie-agent skill describes available capabilities; `/mindie-agent:init`
+is an optional configuration/status entry. Ordinary tasks do not need a
+per-task activation command. During first setup, choose the public contribution
+destination and project scope, or leave contribution off. There is no default
+consent; the selected choice persists for the installation and is never
+re-asked after restarts, upgrades or failures. Contribution
 needs explicit repository, account, project root and public visibility, named
 in the same entry invocation:
 
@@ -81,22 +129,24 @@ The first setup also offers the independent reporting choice once
 (`/mindie-agent reporting-enable`, `reporting-disable` or `reporting-later`);
 any recorded decision persists.
 
-For reproducible component checks, use the installed pinned runtime and the
-committed Kimi peer fixture:
+For reproducible component checks:
 
 ```sh
+uv sync --locked --no-editable --group test
 MINDIE_TEST_KIMI_SCRIPTS="$PWD/tests/fixtures/kimi-86de2c3/scripts" \
-MINDIE_TEST_KNOWLEDGE_CHECKOUT=/absolute/path/to/mindie-knowledge-pin \
-python -m unittest discover -s tests -v
+MINDIE_TEST_KNOWLEDGE_CHECKOUT=/absolute/path/to/declared-knowledge-checkout \
+uv run --locked --no-editable --group test python -m pytest -q
 ```
 
-The knowledge path is an absolute checkout of the `mindie-knowledge` commit in
-`runtime-requirements.txt`. The interpreter must already provide those official
-pins and `hatchling`. See [framework stability](docs/framework-stability.md).
-These checks do not establish native host acceptance.
+The knowledge checkout must contain the complete exact Git commit declared in
+`uv.lock`. The frozen Kimi scripts are an independent parser fixture, not a
+runtime dependency. These checks do not establish native host acceptance.
 
 With contribution off there is no Stop transcript collection, capture or
-organizer call. Remote-dev works independently of knowledge activation.
+organizer call. With approved contribution, native Stop automatically associates
+its verified transcript within the approved project scope; explicit task
+deactivation remains authoritative. Public knowledge reads and remote-dev
+work independently of capture authorization.
 Knowledge is optional reference material; no task must query, write or vote.
 
 See [framework stability and verification](docs/framework-stability.md) for the
@@ -104,34 +154,50 @@ current behavior, reproducible checks and acceptance boundaries.
 
 ## Updates and maintenance
 
-The existing OS schedule checks remote main and the public knowledge feed
-every five minutes without a model. Pinned dependencies, source, interpreter
-and configuration switch together. An actual in-flight call defers switching;
-an idle task grant does not. Failures remain visible without replaying work.
+After more than 24 hours since a successful Release check, the next natural MCP
+use starts one asynchronous check. Ordinary tool calls use an in-process time
+comparison and do not wait for network, scan releases or hash the installation.
+A failed check preserves the last successful time and has a short retry backoff.
+No daemon, code-update timer or second package registry is installed. Stop never
+starts an update.
 
-Select a retained launcher from the installed configuration, then use it from
-any directory after the downloaded source is removed:
+The update prepares the selected native package and its complete immutable uv
+runtime outside operation admission. An already prepared candidate retries only
+the short activation control, without refetching Releases or reinstalling.
+In-flight calls hold shared admission; cancellation remains concurrent. Activation
+takes exclusive admission only when it is free, defers while the Core has work,
+retires the exact idle owner and observes the new owner ready before atomically
+publishing the canonical binding. The 30-second observation window is a control
+bound, not a deadline that kills useful work. Unknown installation effects and
+incomplete cleanup remain visible in local receipts and are not blindly replayed.
 
-```sh
-MINDIE_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/mindie-agent/cc.json"
-MINDIE_LAUNCHER=$(python3 - "$MINDIE_CONFIG" <<'PYCODE'
-import json, sys
-from pathlib import Path
-adapter = json.loads(Path(sys.argv[1]).read_text())
-update = Path(adapter["state_dir"]) / "update"
-current = json.loads((update / "current.json").read_text())
-print(update / "launch" / (current["sha"] or "bootstrap") / "mindie_launch.py")
-PYCODE
-)
-python3 "$MINDIE_LAUNCHER" --config "$MINDIE_CONFIG" updater status
-```
+Stop does not wait for this service-switch gate. It takes one complete helper
+snapshot and submits the authorized event to the existing durable capture
+queue. A retired helper cannot revive its old service; the new owner consumes
+the queued event. Explicit off and task revocation still prevent capture.
 
-Replace `status` with `check` to check main, or `uninstall-schedule` to stop
-automatic checks. `install-schedule` restores scheduling. A known temporary
-network or certificate-trust failure is retried by the next scheduled check
-when its recorded retry time is due. TLS validation stays enabled.
-`recover` is only for quarantined content or an unknown failure; status
-gives the absolute launcher command for that case.
+An existing native facade reads the new complete binding on its next operation.
+Updates require no approval, notification, reload command or renewed contribution
+authorization. Explicit plugin disable, contribution/reporting choices, project
+scope and durable outcomes remain authoritative. Old unsupported development
+profiles are rejected without automatic migration. Real storage formats and
+the facade/helper protocol determine compatibility; product version sorting
+only selects a Release.
+
+See [Harness interface evidence](docs/harness-interface-evidence.md) for the
+registered boundaries and the distinction between component tests, zero-model
+native experiments and completed business acceptance.
+
+SessionStart performs shared knowledge-feed interval/backoff maintenance and
+bounded diagnostic retention, including the existing reporter handoff contract.
+There is no periodic refresh during a long-running session. Feed results retain
+committed partial changes, cleanup failures and receipt failures. They are not
+turned into success because the process returned zero, and no automatic replay
+of unknown model or external effects is introduced.
+
+The native SessionStart command has a host admission timeout. The short Stop
+budget does not apply to feed sync or useful MCP work. Caller cancellation,
+owned-process cleanup and finite connection/lock waits remain separate.
 
 ## Optional product failure reporting
 
@@ -156,20 +222,16 @@ Cancellation, caller validation, inactive permissions, ordinary lock contention
 and business-command failures are not product bug reports. The original tool
 result and remote job reference stay available when a diagnostic reference is added.
 
-Updater checks perform bounded offline log maintenance even with reporting off.
-launchd output goes to the null device; updater state and bounded diagnostics carry
-failure evidence. No unbounded `scheduler.log` is created. Native-host/reporting
+SessionStart performs bounded offline log maintenance even with reporting off.
+The session-maintenance receipt and bounded diagnostics preserve failure evidence. Native-host/reporting
 acceptance is separate from component checks; see the acceptance documentation.
 
 ## Stop or uninstall
 
 `/mindie-agent:deactivate` ends the current task's knowledge access.
 `/mindie-agent:sharing-disable` stops contribution for the configured scope.
-These do not uninstall the plugin or stop automatic updates.
-
-Close tasks using the plugin. Run the retained launcher's `updater
-uninstall-schedule` first; cancellation failure preserves its plist and reports
-failure. Then use the native uninstall command:
+These do not uninstall the plugin. Close tasks using it, then use Claude's
+native uninstall command and retain data:
 
 ```sh
 claude plugin uninstall mindie-agent@mindie-agent-cc --scope user --keep-data --json
@@ -182,5 +244,5 @@ adapter does not disable the shared reporter; disable reporting separately
 only if you want that choice to apply across all adapters.
 
 See [native acceptance](docs/acceptance.md) for proven behavior and remaining
-limits. Windows real-machine acceptance follows on the user's dedicated machine
-after merge. Old business Skills and profiling remain deferred.
+limits. The macOS, native Windows and WSL cells require separate real-machine results.
+Old business Skills and profiling remain deferred.

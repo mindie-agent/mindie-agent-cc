@@ -20,24 +20,31 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v6
         with:
-          python-version: '3.11'
-      - name: Install the declared runtime
+          version: '0.10.8'
+          python-version: '3.13'
+      - name: Install the complete locked runtime and test tools
         env:
-          PIP_RETRIES: '0'
           GIT_TERMINAL_PROMPT: '0'
-        run: python -m pip install -r runtime-requirements.txt
-      - name: Install the local-candidate build backend
-        # hatchling builds the pinned knowledge tree. It is not a runtime pin.
-        env:
-          PIP_RETRIES: '0'
-        run: python -m pip install hatchling==1.32.4
+        run: uv sync --locked --no-editable --group test
+      - name: Read the locked knowledge commit
+        id: pins
+        shell: python
+        run: |
+          import os, sys
+          sys.path.insert(0, "scripts")
+          from product_contract import requirements
+          pin = requirements(".")[0]["mindie-knowledge"]
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write("knowledge=" + pin + "\n")
+      - name: Validate Harness interfaces and immutable release metadata
+        run: uv run --locked --no-editable --group test python scripts/harness.py --source . --tests tests --revision ${{ github.sha }}
       - name: Check out the declared knowledge commit
         uses: actions/checkout@v4
         with:
           repository: mindie-agent/knowledge
-          ref: 82f7d7dd4c52637e1448e3747262a20453f4bcb4
+          ref: ${{ steps.pins.outputs.knowledge }}
           path: .ci/knowledge
           fetch-depth: 0
           persist-credentials: false
@@ -48,4 +55,4 @@ jobs:
           # Frozen peer scripts vendored at tests/fixtures/kimi-86de2c3.
           # PROVENANCE.json records the source revision and file hashes.
           MINDIE_TEST_KIMI_SCRIPTS: ${{ github.workspace }}/tests/fixtures/kimi-86de2c3/scripts
-        run: python -m unittest discover -s tests
+        run: uv run --locked --no-editable --group test python -m pytest -q

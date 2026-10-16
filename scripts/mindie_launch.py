@@ -1,95 +1,27 @@
 #!/usr/bin/env python3
-"""Stable MindIE launcher living outside any committed generation.
-
-Installed Claude plugin entries point command/args here.
-
-current.json is the atomic generation tuple
-{generation, python, adapter_config, sha}. Every tools/list and tools/call
-selects under the shared operation lock and holds it for the complete child.
-The child gets MINDIE_CC_CONFIG=current.adapter_config and no PYTHONPATH.
-
-- hook expansion: always runs (unconfigured first-use must still answer).
-- hook stop: sharing-off / unconfigured returns {} before waiting for
-  stdin and before any update.lock, state, or service.
-- hook pretool: bind native toolUseId; fail open.
-- mcp <surface>: long-lived thin stdlib front. initialize/ping locally;
-  every tools/list and tools/call is one bounded --once dispatch.
-- updater <op>: exec that generation's updater.py.
-
-Windows uses a real msvcrt byte lock; if no real lock can be taken the call
-fails closed — unprotected dispatch is never executed.
-"""
+"""Stable native facade; each operation dispatches the selected complete helper."""
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
 import re
-import stat
 import sys
 import threading
 import time
+from contextlib import nullcontext
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bounded
 
 
-def _bootstrap_diagnostics():
-    """Older packagers copy only this launcher and bounded.py.
-
-    Resolve the missing shim from this launcher's own completed generation,
-    never from the mutable current pointer or a caller-selected config.
-    """
-    here = Path(__file__).resolve().parent
-    local = here / "diagnostic_support.py"
-    if local.is_file() and local.resolve() == local:
-        return local
-    if here.parent.name != "launch" or not re.fullmatch(r"[0-9a-f]{40}", here.name):
-        return
-    generation = here.parent.parent / "generations" / here.name
-    descriptor = None
-    try:
-        marker = generation / ".mindie-generation-complete"
-        if marker.is_symlink():
-            return
-        flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
-        descriptor = os.open(marker, flags)
-        info = os.fstat(descriptor)
-        if not stat.S_ISREG(info.st_mode) or info.st_size > 42:
-            return
-        if os.read(descriptor, 43).decode().strip() != here.name:
-            return
-        scripts = generation / "scripts"
-        if scripts.resolve() != scripts or not (scripts / "diagnostic_support.py").is_file():
-            return
-        for name in ("diagnostic_support.py", "diagnostic_fallback.py"):
-            module = scripts / name
-            if not module.is_file() or module.resolve() != module:
-                return
-        sys.path.insert(1, str(scripts))
-        return scripts / "diagnostic_support.py"
-    except (OSError, UnicodeError):
-        return
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
-
-
-_diagnostic_path = _bootstrap_diagnostics()
-if _diagnostic_path is None:
-    raise ModuleNotFoundError("diagnostic support is absent from this completed generation")
-diagnostic_support = sys.modules.get("diagnostic_support")
-if getattr(diagnostic_support, "__file__", None) != str(_diagnostic_path):
-    _diagnostic_spec = importlib.util.spec_from_file_location("diagnostic_support", _diagnostic_path)
-    diagnostic_support = importlib.util.module_from_spec(_diagnostic_spec)
-    _diagnostic_spec.loader.exec_module(diagnostic_support)
-    sys.modules["diagnostic_support"] = diagnostic_support
+import diagnostic_support
+from install_state import (
+    InstallationUnavailable, LockTimeout, binding_snapshot, installed_binding,
+)
 
 HOOK_TOTAL = 1.5
-HOOK_LOCK_BUDGET = 0.3
-CALL_LOCK_BUDGET = 5.0
-CALL_CHILD_BUDGET = 60.0
 # Knowledge stdout only. A legal maximum page measured 817407 bytes.
 KNOWLEDGE_MAX_OUTPUT = 1024 * 1024
 MAX_RPC_ID = 256
@@ -119,70 +51,44 @@ def _load_config():
     return data if isinstance(data, dict) else None
 
 
-def _state_dir(config=None) -> Path:
-    if config is None:
-        config = _load_config()
-    if isinstance(config, dict):
-        value = config.get("state_dir")
-        if isinstance(value, str) and os.path.isabs(value):
-            return Path(value)
-        engine = config.get("engine_config")
-        if isinstance(engine, str):
-            try:
-                root = json.loads(Path(engine).read_text(encoding="utf-8")).get("root")
-                if isinstance(root, str):
-                    return Path(root) / "cc-adapter"
-            except (OSError, ValueError):
-                pass
-    base = os.environ.get("XDG_CONFIG_HOME")
-    root = Path(base) if base else Path.home() / ".config"
-    return root / "mindie-agent" / "state-cc"
-
-
-def _record_hook(stage, category, op="stop"):
+def _record_hook(stage, category, op="stop", exception=None):
     """One static diagnostic for an outer entry failure. Genuine off stays quiet."""
     try:
         diagnostic_support.failure(
-            "hook", stage, category, reportable=(op != "stop"),
+            "hook", stage, category, exception=exception, reportable=(op != "stop"),
         )
     except Exception:
         pass
 
 
-def _sharing_enabled() -> bool:
+def _sharing_enabled(binding=None) -> bool:
     """True only when community sharing is explicitly enabled.
 
     A missing adapter or community file, or an explicit off, is quiet.
     An existing file that cannot be read or parsed is a configuration
     failure, not off.
     """
+    from entry import _read_regular_json
+
     path = _config_path()
-    if not path.is_file():
+    state, data = (None, binding) if binding is not None else _read_regular_json(path)
+    if state == "missing":
         return False
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        _record_hook("sharing-probe", "configuration")
-        return False
-    if not isinstance(data, dict):
-        _record_hook("sharing-probe", "configuration")
-        return False
+    if state is not None:
+        raise ValueError("adapter configuration is unavailable")
     community = data.get("community_config")
+    if community is None:
+        return False
     if not isinstance(community, str) or not os.path.isabs(community):
-        return False
-    community_path = Path(community)
-    if not community_path.is_file():
-        return False
-    try:
-        raw = json.loads(community_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        _record_hook("sharing-probe", "configuration")
-        return False
-    return isinstance(raw, dict) and raw.get("enabled") is True
+        raise ValueError("community configuration path is invalid")
+    from mindie_knowledge.loop.settings import load
 
-
-class LockUnavailable(RuntimeError):
-    pass
+    sharing = load(community)
+    if sharing.state == "missing":
+        return False
+    if sharing.state not in {"enabled", "disabled"}:
+        raise ValueError("community sharing configuration is invalid")
+    return sharing.enabled
 
 
 class DispatchFailure(RuntimeError):
@@ -207,90 +113,6 @@ def _dispatch_failure(current, stage, category, exc, started):
     return DispatchFailure(diagnostic, stage)
 
 
-def _try_lock_shared(descriptor) -> None:
-    if os.name == "nt":
-        import msvcrt
-
-        if os.fstat(descriptor).st_size == 0:
-            os.write(descriptor, b"\0")
-        os.lseek(descriptor, 0, os.SEEK_SET)
-        msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
-        return
-    import fcntl
-
-    fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
-
-
-def _unlock(descriptor) -> None:
-    try:
-        if os.name == "nt":
-            import msvcrt
-
-            os.lseek(descriptor, 0, os.SEEK_SET)
-            msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
-        else:
-            import fcntl
-
-            fcntl.flock(descriptor, fcntl.LOCK_UN)
-    except OSError:
-        pass
-
-
-def _shared_lock(state: Path, deadline: float, cancel=None):
-    lock_path = state / "update" / "operation.lock"
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
-    acquired = False
-    try:
-        while True:
-            if cancel is not None and cancel.is_set():
-                raise bounded.CommandCancelled("command cancelled")
-            try:
-                _try_lock_shared(descriptor)
-                acquired = True
-                return descriptor
-            except OSError:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise LockUnavailable("shared operation lock unavailable")
-                time.sleep(min(0.05, remaining))
-    finally:
-        if not acquired:
-            os.close(descriptor)
-
-
-def _release(descriptor) -> None:
-    _unlock(descriptor)
-    os.close(descriptor)
-
-
-def _current(state: Path) -> dict:
-    try:
-        data = json.loads((state / "update" / "current.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        data = None
-    if isinstance(data, dict):
-        generation = data.get("generation")
-        python = data.get("python")
-        adapter_config = data.get("adapter_config")
-        sha = data.get("sha")
-        if (
-            isinstance(generation, str)
-            and isinstance(python, str)
-            and isinstance(adapter_config, str)
-            and Path(generation).is_dir()
-            and Path(python).exists()
-            and Path(adapter_config).is_file()
-        ):
-            return {
-                "generation": generation,
-                "python": python,
-                "adapter_config": adapter_config,
-                "sha": sha if isinstance(sha, str) else None,
-            }
-    raise RuntimeError("no committed generation is available")
-
-
 def _child_env(current: dict) -> dict:
     env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
     env["PYTHONIOENCODING"] = "utf-8"
@@ -300,6 +122,19 @@ def _child_env(current: dict) -> dict:
 
 def _fail_open() -> int:
     print(json.dumps({}), flush=True)
+    return 0
+
+
+def _hook_warning(*, unavailable=False) -> int:
+    # Native user-visible warning; no blocking decision or extra model turn.
+    message = (
+        "MindIE is temporarily unavailable during installation. "
+        "Task completion is unaffected; existing choices and data are preserved."
+    ) if unavailable else (
+        "MindIE background capture encountered an error. "
+        "Task completion is unaffected; details are in MindIE diagnostics."
+    )
+    print(json.dumps({"systemMessage": message}), flush=True)
     return 0
 
 
@@ -363,149 +198,88 @@ def _read_hook_stdin(deadline):
         return bytes(buf)
 
 
+def _hook_can_start_service(op, raw):
+    if op == "stop":
+        return True
+    if op != "expansion":
+        return False
+    try:
+        event = json.loads(raw)
+    except (ValueError, UnicodeDecodeError):
+        return False
+    return (
+        isinstance(event, dict) and event.get("expansion_type") == "slash_command"
+        and event.get("command_source") == "plugin"
+        and event.get("command_name") in {
+            "mindie-agent", "mindie-agent:mindie-agent", "mindie-agent:init",
+            "mindie-agent:sharing-enable",
+        }
+    )
+
+
+def _runtime(binding):
+    return dict(python=binding["python"], scripts=binding["runtime_scripts"],
+                adapter_config=binding["adapter_config"])
+
+
+def _verify_installation(expected=None, *, timeout=5.0):
+    with installed_binding(expected, timeout=timeout) as value:
+        return value
+
+
 def _hook(op: str) -> int:
-    started = time.monotonic()
-    deadline = started + HOOK_TOTAL
-    if op == "stop" and not _sharing_enabled():
+    deadline = time.monotonic() + HOOK_TOTAL
+    if op == "stop" and not _config_path().exists():
         return _fail_open()
     raw = _read_hook_stdin(deadline)
-    if op == "expansion" and not _config_path().is_file():
-        script = Path(__file__).resolve().parent / "bridge.py"
-        if script.is_file():
-            try:
-                out = bounded.run(
-                    [sys.executable, str(script), op],
-                    raw,
-                    timeout=max(0.05, deadline - time.monotonic()),
-                    env={k: v for k, v in os.environ.items() if k != "PYTHONPATH"},
-                    cwd=str(script.parent.parent),
-                    check=False,
-                )
-                text = out.strip() or "{}"
-                value = json.loads(text.splitlines()[0])
-                if isinstance(value, dict):
-                    print(json.dumps(value, ensure_ascii=False), flush=True)
-                    return 0
-            except Exception as exc:
-                return _expansion_error(
-                    f"MindIE is not configured ({exc}). "
-                    "Run python3 scripts/setup.py. This hook does not install packages."
-                )
-        return _expansion_error(
-            "MindIE is not configured. Run python3 scripts/setup.py. "
-            "This hook does not install packages."
+    stage = "installation"
+    try:
+        admission = (
+            nullcontext(binding_snapshot()) if op == "stop"
+            else installed_binding(timeout=max(0, deadline - time.monotonic()))
         )
-    lock_deadline = min(deadline, time.monotonic() + HOOK_LOCK_BUDGET)
-    if lock_deadline <= time.monotonic():
-        if op == "expansion":
-            return _expansion_error(
-                "MindIE entry timed out waiting for the operation lock."
-            )
-        if _config_path().is_file():
-            _record_hook("entry", "deadline", op)
-        return _fail_open()
-    try:
-        state = _state_dir()
-        descriptor = _shared_lock(state, lock_deadline)
-    except Exception:
-        if op == "expansion":
-            return _expansion_error("MindIE entry could not take the operation lock.")
-        if _config_path().is_file():
-            _record_hook("entry", "lock-unavailable", op)
-        return _fail_open()
-    try:
-        try:
-            current = _current(state)
-        except Exception:
-            if op == "expansion":
-                return _expansion_error(
-                    "MindIE runtime is not configured. Run python3 scripts/setup.py. "
-                    "This hook does not install packages."
-                )
-            if _config_path().is_file():
-                _record_hook("entry", "generation-unavailable", op)
-            return _fail_open()
-        script = Path(current["generation"]) / "scripts" / "bridge.py"
-
-        def _hook_open(text=None):
-            if op == "expansion" and text:
-                return _expansion_error(text)
-            return _fail_open()
-
-        if not script.is_file():
-            diagnostic_support.failure(
-                "hook",
-                "helper_missing",
-                "missing_committed_file",
-                revision=current.get("sha"),
-                reportable=(op != "stop"),
-            )
-            return _hook_open("committed generation lacks bridge.py")
-        remaining = deadline - time.monotonic()
-        if remaining <= 0.05:
-            if op == "expansion":
-                return _expansion_error("MindIE entry deadline exhausted.")
-            if _config_path().is_file():
-                _record_hook("entry", "deadline", op)
-            return _fail_open()
-        started = time.monotonic()
-
-        def _hook_failure(stage, category, exc=None):
-            diagnostic_support.failure(
-                "hook",
-                stage,
-                category,
-                exception=exc,
-                revision=current.get("sha"),
-                reportable=(op != "stop"),
-                elapsed_ms=max(0, int((time.monotonic() - started) * 1000)),
-            )
-
-        try:
+        with admission as binding:
+            stage = "sharing-probe"
+            if op == "stop" and not _sharing_enabled(binding):
+                return _fail_open()
+            selected = _runtime(binding)
+            script = Path(selected["scripts"]) / "bridge.py"
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("hook input deadline exhausted")
+            stage = "helper_failed"
             out = bounded.run(
-                [current["python"], str(script), op],
-                raw,
-                timeout=remaining,
-                env=_child_env(current),
-                cwd=str(Path(current["generation"])),
-                check=True,
+                [selected["python"], str(script), op], raw, timeout=remaining,
+                env=_child_env(selected), cwd=str(script.parent), check=True,
+                allow_service=_hook_can_start_service(op, raw),
             )
-        except bounded.CommandTimedOut as exc:
-            _hook_failure("helper_deadline", "child_deadline", exc)
-            return _hook_open("MindIE entry child failed.")
-        except Exception as exc:
-            _hook_failure("helper_failed", "child_failure", exc)
-            return _hook_open("MindIE entry child failed.")
-        text = out.strip() or "{}"
-        try:
-            value = json.loads(text.splitlines()[0] if text else "{}")
-        except ValueError:
-            _hook_failure("helper_protocol", "protocol_mismatch")
-            return _hook_open("MindIE entry returned invalid JSON.")
+        value = json.loads(out.strip())
         if not isinstance(value, dict):
-            _hook_failure("helper_protocol", "protocol_mismatch")
-            return _hook_open("MindIE entry returned a non-object.")
+            raise ValueError("hook result must be one object")
         print(json.dumps(value, ensure_ascii=False), flush=True)
         return 0
-    except Exception:
+    except Exception as exc:
+        category = "child_failure" if stage == "helper_failed" else "configuration"
+        _record_hook(stage, category, op, exc)
+        if isinstance(exc, LockTimeout):
+            return _hook_warning(unavailable=True)
         if op == "expansion":
-            return _expansion_error("MindIE entry failed.")
-        return _fail_open()
-    finally:
-        _release(descriptor)
+            return _expansion_error("MindIE entry failed; inspect reporting-status.")
+        return _hook_warning()
 
 
 def _local_answer(message: dict):
     method = message.get("method")
     ident = message.get("id")
     if method == "initialize":
+        from product_contract import installed_version
         return dict(
             jsonrpc="2.0",
             id=ident,
             result=dict(
                 protocolVersion="2025-11-25",
                 capabilities={"tools": {}},
-                serverInfo={"name": "mindie-cc-front", "version": "0.1.0"},
+                serverInfo={"name": "mindie-cc-front", "version": installed_version()},
             ),
         )
     if method == "ping":
@@ -553,7 +327,10 @@ def _front_reject(ident, text: str):
 def _stage_error(ident, message, stage: str, surface: str):
     structured = {"stage": stage}
     text = f"Unavailable ({stage}). Continue independently."
-    if surface == "remote":
+    if stage == "installation_unavailable":
+        structured["execution"] = "not_started"
+        text = "MindIE is temporarily unavailable during installation; this request was not started."
+    elif surface == "remote":
         structured["remote_outcome"] = "unconfirmed"
         key, value = _validated_remote_ref(message)
         name = _local_tool_name(message)
@@ -579,67 +356,44 @@ def _stage_error(ident, message, stage: str, surface: str):
     )
 
 
-def _dispatch(surface: str, raw: bytes, ident, cancel=None):
+def _dispatch(surface: str, raw: bytes, ident, cancel=None, *, binding=None):
     if cancel is not None and cancel.is_set():
         raise bounded.CommandCancelled("command cancelled")
-    state = _state_dir()
-    deadline = time.monotonic() + CALL_LOCK_BUDGET
-    descriptor = _shared_lock(state, deadline, cancel=cancel)
+    selected = {}
+    started = time.monotonic()
+    payload = raw if raw.endswith(b"\n") else raw + b"\n"
+    message = json.loads(raw)
+    allow_service = (surface == "knowledge" and message.get("method") == "tools/call"
+                     and _local_tool_name(message) in {
+                         "knowledge_query", "knowledge_explain", "knowledge_feedback"})
     try:
-        if cancel is not None and cancel.is_set():
-            raise bounded.CommandCancelled("command cancelled")
-        current = _current(state)
-        started = time.monotonic()
-        script = Path(current["generation"]) / "scripts" / "mcp_server.py"
-        if not script.is_file():
-            raise _dispatch_failure(
-                current, "helper_missing", "missing_committed_file", None, started
-            )
-        payload = raw if raw.endswith(b"\n") else raw + b"\n"
-        try:
+        # All operations, including cancellation/status tools, take a shared
+        # OS lock. Activation never interrupts a helper admitted here.
+        with installed_binding(binding) as current:
+            selected = _runtime(current)
+            script = Path(selected["scripts"]) / "mcp_server.py"
             out = bounded.run(
-                [current["python"], str(script), surface, "--once"],
-                payload,
-                timeout=CALL_CHILD_BUDGET,
-                env=_child_env(current),
-                cwd=str(Path(current["generation"])),
-                cancel=cancel,
-                **(
-                    {"max_output": KNOWLEDGE_MAX_OUTPUT}
-                    if surface == "knowledge"
-                    else {}
-                ),
+                [selected["python"], str(script), surface, "--once"], payload,
+                env=_child_env(selected), cwd=str(script.parent), cancel=cancel,
+                allow_service=allow_service,
+                **({"max_output": KNOWLEDGE_MAX_OUTPUT} if surface == "knowledge" else {}),
             )
-        except bounded.CommandCancelled:
-            raise
-        except bounded.CommandTimedOut as exc:
-            raise _dispatch_failure(
-                current, "helper_deadline", "child_deadline", exc, started
-            ) from None
-        except Exception as exc:
-            raise _dispatch_failure(
-                current, "helper_failed", "child_failure", exc, started
-            ) from None
-        if cancel is not None and cancel.is_set():
-            raise bounded.CommandCancelled("command cancelled")
-        lines = [line for line in out.splitlines() if line.strip()]
-        if len(lines) != 1:
-            raise _dispatch_failure(
-                current, "helper_protocol", "protocol_mismatch", None, started
-            )
-        try:
-            response = json.loads(lines[0])
-        except ValueError:
-            raise _dispatch_failure(
-                current, "helper_protocol", "protocol_mismatch", None, started
-            ) from None
-        if not isinstance(response, dict) or response.get("id") != ident:
-            raise _dispatch_failure(
-                current, "helper_protocol", "protocol_mismatch", None, started
-            )
-        return response
-    finally:
-        _release(descriptor)
+    except bounded.CommandCancelled:
+        raise
+    except (InstallationUnavailable, LockTimeout) as exc:
+        raise _dispatch_failure(selected, "installation_unavailable", "configuration",
+                                exc, started) from None
+    except Exception as exc:
+        raise _dispatch_failure(selected, "helper_failed", "child_failure", exc, started) from None
+    if cancel is not None and cancel.is_set():
+        raise bounded.CommandCancelled("command cancelled")
+    try:
+        response = json.loads(out)
+    except ValueError:
+        raise _dispatch_failure(selected, "helper_protocol", "protocol_mismatch", None, started) from None
+    if not isinstance(response, dict) or response.get("id") != ident:
+        raise _dispatch_failure(selected, "helper_protocol", "protocol_mismatch", None, started)
+    return response
 
 
 def _read_mcp_line(stdin):
@@ -648,6 +402,11 @@ def _read_mcp_line(stdin):
 
 
 def _mcp(surface: str) -> int:
+    binding = _verify_installation()
+    from harness import require_binding_support
+    require_binding_support(binding)
+    from release_update import BackgroundCheck
+    update = BackgroundCheck(lambda: _verify_installation(binding, timeout=0))
     output_fd = sys.stdout.fileno()
     if os.name == "posix":
         os.set_blocking(output_fd, False)
@@ -696,7 +455,7 @@ def _mcp(surface: str) -> int:
             try:
                 if cancel.is_set():
                     raise bounded.CommandCancelled("command cancelled")
-                response = _dispatch(surface, raw, ident, cancel=cancel)
+                response = _dispatch(surface, raw, ident, cancel=cancel, binding=binding)
             except bounded.CommandCancelled:
                 response = _stage_error(ident, message, "cancelled", surface)
             except DispatchFailure as exc:
@@ -704,7 +463,7 @@ def _mcp(surface: str) -> int:
                 response["result"] = diagnostic_support.attach(
                     response["result"], exc.diagnostic
                 )
-            except (bounded.CommandTimedOut, LockUnavailable):
+            except bounded.CommandTimedOut:
                 response = _stage_error(ident, message, "deadline", surface)
             except Exception:
                 response = _stage_error(ident, message, "helper_failed", surface)
@@ -731,6 +490,7 @@ def _mcp(surface: str) -> int:
                     active_work -= 1
 
     try:
+        update.start_if_due()
         while not transport_closed.is_set():
             raw = _read_mcp_line(stdin)
             if raw is False:
@@ -769,6 +529,11 @@ def _mcp(surface: str) -> int:
                     )
                 )
                 continue
+            try:
+                _verify_installation(binding)
+            except (InstallationUnavailable, LockTimeout):
+                send(_stage_error(ident, message, "installation_unavailable", surface))
+                continue
             local = _local_answer(message)
             if local is not None:
                 with pending_lock:
@@ -787,6 +552,8 @@ def _mcp(surface: str) -> int:
                     )
                 )
                 continue
+            if method == "tools/call":
+                update.start_if_due()
             is_control = (
                 method == "tools/call" and _local_tool_name(message) in CONTROL_TOOLS
             )
@@ -832,6 +599,7 @@ def _mcp(surface: str) -> int:
             events = list(pending.values())
         for event in events:
             event.set()
+        update.close()
         deadline = time.monotonic() + EOF_JOIN
         for thread in list(workers):
             remaining = deadline - time.monotonic()
@@ -841,57 +609,49 @@ def _mcp(surface: str) -> int:
     return 0
 
 
-def _updater(rest) -> int:
-    try:
-        current = _current(_state_dir())
-    except Exception as exc:
-        print(f"no committed generation: {exc}"[:400], file=sys.stderr)
-        return 2
-    script = Path(current["generation"]) / "scripts" / "updater.py"
-    if not script.is_file():
-        diagnostic_support.failure(
-            "updater",
-            "helper_missing",
-            "missing_committed_file",
-            revision=current.get("sha"),
-        )
-        print("committed generation lacks updater.py", file=sys.stderr)
-        return 2
-    try:
-        os.execve(
-            current["python"],
-            [current["python"], str(script), *rest],
-            _child_env(current),
-        )
-    except OSError:
-        diagnostic_support.failure(
-            "updater",
-            "helper_failed",
-            "child_failure",
-            revision=current.get("sha"),
-        )
-        print("committed generation updater could not start", file=sys.stderr)
-        return 2
-    return 2
-
-
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    if argv and argv[0] == "--config" and len(argv) > 1:
+    if argv[:1] == ["--source"]:
+        source = Path(argv[1])
+        argv = argv[2:]
+        from setup import prepare_binding, publish_entry
+        prepared = prepare_binding(source)
+        os.environ[CONFIG_ENV] = prepared["config"]
+        data = os.environ.get("CLAUDE_PLUGIN_DATA")
+        if not data or not Path(data).is_absolute():
+            raise ValueError("native CLAUDE_PLUGIN_DATA is required for the persistent release entry")
+        version = json.loads((source / ".claude-plugin/plugin.json").read_text(encoding="utf-8"))["version"]
+        publish_entry(Path(data) / "releases" / version / "entry.py", prepared["config"])
+    if argv[:1] == ["--config"] and len(argv) > 1:
         os.environ[CONFIG_ENV] = str(Path(argv[1]).expanduser())
         argv = argv[2:]
-    elif argv and argv[0].startswith("--config="):
-        os.environ[CONFIG_ENV] = str(Path(argv[0].split("=", 1)[1]).expanduser())
-        argv = argv[1:]
     kind = argv[0] if argv else ""
     name = argv[1] if len(argv) > 1 else ""
+    if kind == "hook" and name == "session-start":
+        event = _read_hook_stdin(time.monotonic() + HOOK_TOTAL)
+        if not event:
+            _record_hook("input", "missing_identity", op="session-start")
+            return _hook_warning()
+        try:
+            with installed_binding() as binding:
+                from harness import require_binding_support
+                require_binding_support(binding)
+                selected = _runtime(binding)
+                script = Path(selected["scripts"]) / "maintenance.py"
+                raw = bounded.run([selected["python"], str(script)], event,
+                                  env=_child_env(selected), cwd=str(script.parent))
+            result = json.loads(raw)
+        except (InstallationUnavailable, LockTimeout):
+            return _hook_warning(unavailable=True)
+        if result["status"] != "ready":
+            print(json.dumps({"systemMessage": "MindIE startup maintenance is incomplete."}))
+            return 0
+        return _fail_open()
     if kind == "hook" and name in {"expansion", "pretool", "stop"}:
         return _hook(name)
     if kind == "mcp" and name in {"knowledge", "remote"}:
         return _mcp(name)
-    if kind == "updater":
-        return _updater(argv[1:])
-    print("usage: mindie_launch.py hook|mcp|updater ...", file=sys.stderr)
+    print("usage: mindie_launch.py hook|mcp ...", file=sys.stderr)
     return 2
 
 

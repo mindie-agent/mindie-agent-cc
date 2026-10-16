@@ -1,7 +1,9 @@
 """Thin wrapper: shared Admission only. No local lease or attempt SQL.
 
 The lease is the internal per-task identity binding established by the
-entry; it is never a consent prompt and never failure-paused.
+entry or by an authorized in-scope Stop association; it is never a consent
+prompt and never failure-paused. An explicit deactivate is a revocation that
+an ordinary event never undoes.
 """
 
 from __future__ import annotations
@@ -22,6 +24,19 @@ def activate(session, *, project_root, root_session=None, engine=None):
         session,
         project_root=str(Path(project_root).resolve()),
         root_session=root_session,
+    )
+
+
+def associate(session, *, project_root, not_before, engine=None):
+    """Bind a verified host event to its existing authorization.
+
+    The association boundary is the authorized task creation time, never the
+    Stop or binding time; a revoked task is never reactivated here.
+    """
+    return gate(engine).associate(
+        session,
+        project_root=str(Path(project_root).resolve()),
+        not_before=not_before,
     )
 
 

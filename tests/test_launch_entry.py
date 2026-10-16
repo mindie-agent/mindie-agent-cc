@@ -4,15 +4,87 @@ import json
 import os
 import subprocess
 import sys
+import threading
+from contextlib import nullcontext
 from pathlib import Path
+from unittest.mock import patch
 
-from support import env_for, make_config
+from support import SCRIPTS, env_for, make_config
 
 ROOT = Path(__file__).resolve().parents[1]
 LAUNCH = ROOT / "scripts" / "mindie_launch.py"
 
 
-def _run(tmp, env, payload=b""):
+def test_mcp_dispatch_has_no_total_deadline_and_keeps_caller_cancel(tmp_path):
+    sys.path.insert(0, str(SCRIPTS))
+    import mindie_launch
+
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "mcp_server.py").touch()
+    current = dict(scripts=str(scripts), python=sys.executable,
+                   adapter_config=str(tmp_path / "adapter.json"))
+    response = dict(jsonrpc="2.0", id="slow-read", result={"content": []})
+    raw = json.dumps(dict(jsonrpc="2.0", id="slow-read", method="tools/call")).encode()
+    cancel = threading.Event()
+    for surface in ("knowledge", "remote"):
+        with patch.object(mindie_launch, "_runtime", return_value=current), \
+                patch.object(mindie_launch, "installed_binding", return_value=nullcontext({})), \
+                patch.object(mindie_launch.bounded, "run",
+                             return_value=json.dumps(response)) as runner:
+            assert mindie_launch._dispatch(surface, raw, "slow-read", cancel) == response
+        assert runner.call_args.kwargs.get("timeout") is None
+        assert runner.call_args.kwargs["cancel"] is cancel
+        assert runner.call_args.args[0][-2:] == [surface, "--once"]
+        if surface == "knowledge":
+            assert runner.call_args.kwargs["max_output"] == mindie_launch.KNOWLEDGE_MAX_OUTPUT
+
+
+def test_only_knowledge_business_calls_can_transfer_service_ownership(tmp_path):
+    sys.path.insert(0, str(SCRIPTS))
+    import mindie_launch
+
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "mcp_server.py").touch()
+    current = dict(scripts=str(scripts), python=sys.executable,
+                   adapter_config=str(tmp_path / "adapter.json"))
+    response = dict(jsonrpc="2.0", id="ownership", result={"content": []})
+    cases = [
+        ("knowledge", "tools/call", "knowledge_query", True),
+        ("knowledge", "tools/call", "knowledge_explain", True),
+        ("knowledge", "tools/call", "knowledge_feedback", True),
+        ("knowledge", "tools/call", "mindie_status", False),
+        ("knowledge", "tools/list", None, False),
+        ("remote", "tools/call", "remote_bash", False),
+    ]
+    for surface, method, name, expected in cases:
+        raw = json.dumps(dict(jsonrpc="2.0", id="ownership", method=method,
+                              params=dict(name=name))).encode()
+        with patch.object(mindie_launch, "_runtime", return_value=current), \
+                patch.object(mindie_launch, "installed_binding", return_value=nullcontext({})), \
+                patch.object(mindie_launch.bounded, "run",
+                             return_value=json.dumps(response)) as runner:
+            mindie_launch._dispatch(surface, raw, "ownership")
+        assert runner.call_args.kwargs["allow_service"] is expected
+
+
+def test_only_stop_and_explicit_contribution_entries_allow_service_transfer():
+    import mindie_launch
+    assert mindie_launch._hook_can_start_service("stop", b"{}") is True
+    for command, expected in (
+        ("mindie-agent", True), ("mindie-agent:init", True),
+        ("mindie-agent:sharing-enable", True), ("mindie-agent:status", False),
+        ("mindie-agent:reporting-enable", False), ("mindie-agent:deactivate", False),
+    ):
+        event = dict(expansion_type="slash_command", command_source="plugin", command_name=command)
+        raw = json.dumps(event).encode()
+        assert mindie_launch._hook_can_start_service("expansion", raw) is expected
+        assert mindie_launch._hook_can_start_service("pretool", raw) is False
+        event["command_source"] = "user"
+        assert mindie_launch._hook_can_start_service("expansion", json.dumps(event).encode()) is False
+
+def _run(tmp, env, payload=b"", *, warning=False):
     env = dict(env)
     env["MINDIE_DIAGNOSTICS_ROOT"] = str(tmp / "diag")
     proc = subprocess.run(
@@ -24,7 +96,13 @@ def _run(tmp, env, payload=b""):
         timeout=5,
     )
     assert proc.returncode == 0, proc.stderr.decode()
-    assert json.loads(proc.stdout.decode() or "{}") == {}
+    value = json.loads(proc.stdout.decode() or "{}")
+    if warning:
+        assert set(value) == {"systemMessage"}
+        assert "encountered an error" in value["systemMessage"]
+        assert "decision" not in value and "continue" not in value
+    else:
+        assert value == {}
     events = list((tmp / "diag").rglob("*.jsonl"))
     return "\n".join(path.read_text(encoding="utf-8") for path in events)
 
@@ -40,16 +118,137 @@ def test_missing_config_and_explicit_off_stay_quiet(tmp_path):
     assert _run(tmp_path / "off", env_for(config)) == ""
 
 
-def test_existing_bad_community_and_missing_generation_are_recorded(tmp_path):
+def test_existing_bad_community_is_recorded_and_user_visible(tmp_path):
     bad = tmp_path / "bad"
     config = make_config(bad, sharing=True)
     (bad / "cc.community.json").write_text("{", encoding="utf-8")
-    text = _run(bad, env_for(config))
+    text = _run(bad, env_for(config), warning=True)
     assert "configuration" in text
     assert "forwarded" not in text
 
-    armed = tmp_path / "armed"
-    config = make_config(armed, sharing=True)
-    text = _run(armed, env_for(config))
-    assert "generation-unavailable" in text
-    assert "forwarded" not in text
+
+def test_invalid_community_is_not_explicit_off(tmp_path):
+    for name, value in (
+        ("missing-enabled", {}),
+        ("wrong-schema", {"schema": "unsupported", "enabled": False}),
+        ("invalid-idle", {"schema": "mindie-community-config/1",
+                          "enabled": False, "idle_seconds": 1}),
+    ):
+        root = tmp_path / name
+        config = make_config(root, sharing=False)
+        (root / "cc.community.json").write_text(json.dumps(value), encoding="utf-8")
+        assert "configuration" in _run(root, env_for(config), warning=True)
+
+
+def test_bad_adapter_configuration_has_nonblocking_warning(tmp_path):
+    config = make_config(tmp_path, sharing=False)
+    config.write_text('{"PRIVATE_SENTINEL":', encoding="utf-8")
+    text = _run(tmp_path, env_for(config), warning=True)
+    assert "configuration" in text
+    assert "PRIVATE_SENTINEL" not in text
+
+
+def test_nonregular_sharing_metadata_never_waits_for_a_writer(tmp_path):
+    if not hasattr(os, "mkfifo"):
+        import pytest
+        pytest.skip("FIFO is POSIX-only; directory refusal is platform independent")
+    config = make_config(tmp_path, sharing=True)
+    community = tmp_path / "cc.community.json"
+    community.unlink()
+    os.mkfifo(community)
+    assert "configuration" in _run(tmp_path, env_for(config), warning=True)
+
+
+def test_helper_failure_keeps_visible_warning_even_if_diagnostic_write_fails(capsys):
+    import mindie_launch
+
+    with patch.object(mindie_launch, "_sharing_enabled", return_value=True), \
+            patch.object(mindie_launch, "binding_snapshot", return_value={
+                "python": sys.executable, "runtime_scripts": str(SCRIPTS),
+                "adapter_config": "fixture",
+            }), \
+            patch.object(mindie_launch.Path, "exists", return_value=True), \
+            patch.object(mindie_launch, "_read_hook_stdin", return_value=b"{}"), \
+            patch.object(mindie_launch.bounded, "run", side_effect=RuntimeError("PRIVATE_SENTINEL")), \
+            patch.object(mindie_launch.diagnostic_support, "failure", side_effect=OSError("full")):
+        assert mindie_launch._hook("stop") == 0
+    output = capsys.readouterr()
+    assert set(json.loads(output.out)) == {"systemMessage"}
+    assert "PRIVATE_SENTINEL" not in output.out
+
+
+def test_initialize_reports_cached_installed_distribution_version():
+    import mindie_launch
+    import product_contract
+
+    product_contract.installed_version.cache_clear()
+    try:
+        with patch.object(product_contract.metadata, "version", return_value="0.0.2") as version:
+            for _ in range(2):
+                response = mindie_launch._local_answer(
+                    {"jsonrpc": "2.0", "id": "init", "method": "initialize"})
+                assert response["result"]["serverInfo"]["version"] == "0.0.2"
+        version.assert_called_once_with("mindie-agent-cc")
+    finally:
+        product_contract.installed_version.cache_clear()
+
+
+def test_incomplete_first_start_does_not_claim_an_available_old_owner(capsys):
+    import mindie_launch
+    with patch("harness.require_binding_support", return_value="2.1.269"), \
+            patch.object(mindie_launch, "_read_hook_stdin",
+                         return_value=b'{"hook_event_name":"SessionStart","source":"startup"}'), \
+            patch.object(mindie_launch, "installed_binding", return_value=nullcontext({
+            "python": sys.executable, "runtime_scripts": str(SCRIPTS),
+            "adapter_config": "fixture",
+    })), patch.object(mindie_launch.bounded, "run",
+                     return_value='{"status":"incomplete"}'):
+        assert mindie_launch.main(["hook", "session-start"]) == 0
+    message = json.loads(capsys.readouterr().out)["systemMessage"]
+    assert message == "MindIE startup maintenance is incomplete."
+
+
+def test_session_start_forwards_native_fork_payload_to_selected_maintenance(capsys):
+    import mindie_launch
+    payload = b'{"hook_event_name":"SessionStart","source":"fork","session_id":"native-child"}'
+    with patch("harness.require_binding_support", return_value="2.1.299"), \
+            patch.object(mindie_launch, "_read_hook_stdin", return_value=payload), \
+            patch.object(mindie_launch, "installed_binding", return_value=nullcontext({
+                "python": sys.executable, "runtime_scripts": str(SCRIPTS),
+                "adapter_config": "fixture",
+            })), patch.object(mindie_launch.bounded, "run",
+                              return_value='{"status":"ready"}') as runner:
+        assert mindie_launch.main(["hook", "session-start"]) == 0
+    assert runner.call_args.args[1] == payload
+    assert Path(runner.call_args.args[0][-1]).name == "maintenance.py"
+    assert json.loads(capsys.readouterr().out) == {}
+
+
+def test_missing_session_start_payload_warns_without_reporting_ready(capsys):
+    import mindie_launch
+    with patch.object(mindie_launch, "_read_hook_stdin", return_value=b""), \
+            patch.object(mindie_launch, "_record_hook"), \
+            patch.object(mindie_launch.bounded, "run") as runner:
+        assert mindie_launch.main(["hook", "session-start"]) == 0
+    assert set(json.loads(capsys.readouterr().out)) == {"systemMessage"}
+    runner.assert_not_called()
+
+
+def test_each_mcp_request_selects_current_complete_helper_without_old_entry_reselecting(tmp_path):
+    import mindie_launch
+    config = make_config(tmp_path)
+    fixed = json.loads(config.read_text(encoding="utf-8"))
+    raw = b'{"jsonrpc":"2.0","id":"one","method":"tools/call","params":{"name":"remote_bash"}}'
+    response = '{"jsonrpc":"2.0","id":"one","result":{"content":[]}}'
+    with patch.dict(os.environ, {"MINDIE_CC_CONFIG": str(config)}), \
+            patch.object(mindie_launch.bounded, "run", return_value=response) as runner:
+        assert mindie_launch._dispatch("remote", raw, "one", binding=fixed)["id"] == "one"
+        runner.reset_mock()
+        selected = dict(fixed, engine_config=str(tmp_path / "other.engine.json"),
+                        runtime_scripts=str(tmp_path / "new-scripts"),
+                        python=str(tmp_path / "new-python"))
+        config.write_text(json.dumps(selected), encoding="utf-8")
+        assert mindie_launch._dispatch("remote", raw, "one", binding=fixed)["id"] == "one"
+        assert runner.call_args.args[0][:2] == [
+            selected["python"], str(Path(selected["runtime_scripts"]) / "mcp_server.py")]
+        assert json.loads(config.read_text(encoding="utf-8")) == selected

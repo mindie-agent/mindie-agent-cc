@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import transcript  # noqa: E402
@@ -47,21 +48,35 @@ class TranscriptTests(unittest.TestCase):
         result = transcript.read_material(str(other), 0, session_id=SESSION)
         self.assertEqual(result["status"], "wrong-task")
 
-    def test_real_probe_public_blocks_only(self):
-        path = (
-            Path.home()
-            / ".claude/projects/-Users-maoxx241-code-mindie-lifecycle-20260920-acceptance-cc-probe"
-            / "645fae2e-ef23-4e7d-9559-f4dd0cb9db6a.jsonl"
+    def test_profile_configuration_error_never_selects_another_profile(self):
+        with patch("paths.load_adapter_config", side_effect=ValueError("fixture damaged config")):
+            with self.assertRaisesRegex(ValueError, "damaged config"):
+                transcript.native_config_dir()
+        with patch("paths.load_adapter_config", return_value={"claude_config_dir": "relative-profile"}):
+            with self.assertRaisesRegex(ValueError, "absolute"):
+                transcript.native_config_dir()
+
+    def test_public_blocks_exclude_native_tool_payloads(self):
+        public = "The echo request completed; its reported result still needs review."
+        records = [
+            {"type": "assistant", "sessionId": SESSION, "message": {"content": [
+                {"type": "thinking", "thinking": "PRIVATE_THINKING", "signature": "PRIVATE_SIGNATURE"},
+                {"type": "tool_use", "id": "PRIVATE_CALL", "name": "mcp__mindie_probe__echo",
+                 "input": {"value": "PRIVATE_INPUT"}},
+                {"type": "text", "text": public},
+            ]}},
+            {"type": "user", "sessionId": SESSION, "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "PRIVATE_CALL", "content": "PRIVATE_OUTPUT"},
+            ]}},
+        ]
+        self.path.write_text(
+            "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
         )
-        if not path.is_file():
-            self.skipTest("root probe transcript is not present")
-        result = transcript.read_material(
-            str(path), 0, session_id="645fae2e-ef23-4e7d-9559-f4dd0cb9db6a"
-        )
+        result = transcript.read_material(str(self.path), 0, session_id=SESSION)
         self.assertEqual(result["status"], "ok")
-        self.assertGreater(result["records"], 0)
-        self.assertIn("mcp__mindie_probe__echo", result["text"])
-        self.assertNotIn("signature", result["text"])
+        self.assertIn(public, result["text"])
+        self.assertNotIn("PRIVATE_", result["text"])
+        self.assertNotIn("mcp__mindie_probe__echo", result["text"])
 
     def test_established_session_file_keeps_an_unrecognized_page(self):
         path = self.tmp / f"{SESSION}.jsonl"
