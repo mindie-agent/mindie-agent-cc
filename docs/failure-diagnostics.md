@@ -1,84 +1,47 @@
-# Failure diagnosis and local cancellation
+# Failure Diagnostics & Local Cancellation
 
-English | [中文](failure-diagnostics.zh.md)
+<a href="failure-diagnostics.zh.md">中文</a> | <b>English</b> · <a href="README.en.md">Documentation Index</a>
 
-Native status reports existing knowledge configuration, service/storage health,
-this task's binding and diagnostic failure counter, and the latest five captures
-and contribution batches associated with the bound task. An absent identity
-returns no task records. A transient local or network failure is recovered by the existing worker; status is how that problem is seen. Failed batch IDs can be inspected with the optional recover command;
-unknown publication results must be reconciled before any explicit retry.
+Following Principle 9 of the [MindIE Agent Engineering Design Principles](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.en.md) (*observable, diagnosable tools; never hide errors*), `mindie-agent-cc` exposes clear read-only diagnostics, deterministic local process cancellation, and an independent opt-in channel for sanitized product fault reporting.
 
-Status does not initialize databases, start models/services, bind a task,
-reset failure counters, or replay consumed input. SQLite read-only access may create normal
-WAL reader sidecars; it does not change business records. Failure projections omit
-raw provider stderr, transcript text, tokens and other task identities. Existing
-formed or malformed adapter settings produce a diagnostic instead of first-use choices when corrupted.
-Native shell/SSH and independent remote-dev remain available when knowledge is down.
+---
 
-The stdio front keeps input responsive while bounded tool requests run. Cancel and
-EOF clean up only owned local processes; a cancelled observation does not establish
-remote job termination. Responses preserve the original job reference and delivery
-certainty. Explicitly inspect or stop that job before a new submission. Remote poll
-waiting is capped at 30 seconds without changing the remote workload timeout.
+## 1. Read-Only Status Inspection (`/mindie-agent:status`)
 
-Actual macOS evidence includes task-isolated SQLite diagnostics, paused state with
-unchanged counters, corrupt config, child/grandchild cancellation, ping while busy,
-EOF, output backpressure, update-lock cancellation and safe remote exception
-classification. Development checks protect those contracts. Controlled native
-identity/helper seams are not evidence that the host UI emitted a cancel event,
-that a remote job stopped, or that a full contribution loop completed.
+- **What It Reports**: Current knowledge configuration, background service and storage health, the active task's binding state and diagnostic failure counter, and the latest 5 captures and contribution batches associated with the bound task.
+- **Strictly Read-Only**: Calling `status` never initializes databases, starts models or background services, binds an unbound task, resets failure counters, or replays consumed inputs.
+- **Corrupt Config Detection**: If an existing adapter configuration file is corrupted or malformed, `status` reports an explicit configuration diagnostic rather than treating the corruption as a "first-time install" and re-running onboarding.
+- **Decoupled Remote Execution**: Even if the local knowledge service is unavailable, native shell/SSH and the `remote-dev` MCP server remain fully operational.
 
-Windows remains unverified on hardware. Its blocking pipe-write and process-tree
-cleanup behavior requires separate acceptance. No new retry or background service
-is introduced by these changes.
+---
 
-## Automatic product-fault reports
+## 2. Local Cancellation vs. Remote Ascend Jobs
 
-The adapter inherits the existing shared diagnostics reporter. Confirmed product
-faults produce bounded local diagnostic records; after the independent saved
-reporting choice and one-time reporter setup, the worker automatically prepares
-redacted GitHub Issues without a model call or a per-task prompt. Ordinary
-business-command failures are not automatically asserted to be product defects.
+- **Responsive Stdio Frontend**: The MCP stdio frontend remains responsive to control messages (`ping`, cancellation, and `EOF`) while tool requests are running.
+- **Local Process Cleanup**: Cancelling a tool call or closing stdin immediately terminates the local helper process tree owned by that specific request.
+- **Durable Remote Job Separation**: Cancelling a local observation or polling call does **not** mean a remote compilation or test job on the Ascend server has stopped. The response preserves the original remote job ID and delivery certainty so you can explicitly inspect or stop the remote job before starting a new one. Single remote poll requests wait up to 30 seconds without altering the remote workload's own timeout.
 
-The public payload contains only allowed product code metadata. It excludes
-task text, raw exceptions, credentials, commands, paths and local incident IDs.
-Duplicate faults share a fingerprint; an unknown Issue creation result is
-reconciled before any further action and never blindly posted again.
-Logging/reporting failure cannot replace the original business result.
+---
 
-Failed native summaries retain a bounded `mindie-cc-native-failure/1` projection
-in the existing private outcome receipt's `raw_result` field. It contains only
-known native subtype/terminal enums, validated turn and HTTP-status numbers,
-and the shape/count of error or result fields. It never retains provider/model
-free text, unknown labels, session IDs, prompts or credentials. Unknown native
-values remain explicitly unknown. The original usage, billing state and failed
-outcome remain authoritative; no additional model invocation is made.
+## 3. Sanitized Native Organizer Diagnostics
 
-Native turn-limit, cost-budget and structured-output exhaustion have separate
-static shared failure reasons, so the caller's summary detail identifies the
-failed boundary. The enum source was verified in the installed Claude Code
-2.1.269 result schema and terminal constructors. This does not identify the
-subtype of an older failure whose original envelope was already discarded.
-Scratch deletion remains required after owned-process cleanup.
+When an isolated native Claude call for block-index generation fails, the adapter records a bounded `mindie-cc-native-failure/1` diagnostic projection inside the private outcome receipt:
+- **Included**: Known native terminal/subtype enums (such as turn-limit, cost-budget, or structured-output retry exhaustion), validated turn counts, HTTP status codes, and field counts.
+- **Excluded**: Provider or model free text, prompts, session IDs, unknown labels, and credentials.
+- **No Silent Replay**: The original token usage and failed outcome remain authoritative; failed or uncertain paid calls are never automatically re-invoked.
 
-The failure-projection change was reviewed against all nine design principles
-(design-principles blob `62cdd5ae40553df2f0f7f7d022141123792d2944`): it addresses
-an observed inability to diagnose a paid failure without another invocation (1);
-uses a finite projection in the existing receipt and caller failure contract
-(2, 4); adds no settings or user workflow (3, 5, 7); does not promote summaries
-to evidence or alter body authority (6); reuses the ledger, usage accounting,
-scratch owner and valid prior native reads (8); and preserves specific failures,
-known usage, secrecy and no-replay behavior (9). Synthetic tests cover all
-three limits, untrusted free text/types and a terminal failure followed by a
-nonzero process exit. The original paid failure is preserved, not retried.
+---
 
-Reporting enable saves the explicit preference before changing its policy.
-Unreadable or damaged consent leaves the real policy unchanged. A policy and
-saved choice that disagree are exposed as `consent_mismatch`, including the
-actual `policy_enabled` fact. Existing choices are not asked again in later
-tasks. The returned setup `command` is an argv array; `command_line` declares
-`command_shell` and uses PowerShell quoting on Windows.
+## 4. Opt-In Product Fault Reporting (`/mindie-agent:reporting-*`)
 
-The synthetic adapter/log/outbox/mock-Issue checks and actual Windows process
-identity checks are recorded in the `mindie-agent/diagnostics` repository. They do not demonstrate
-native Claude event delivery, scheduled-task setup or a public Issue write.
+`mindie-agent-cc` integrates with the shared `mindie-diagnostics` reporter:
+- **Independent Opt-In**: Product fault reporting is off by default and completely separate from community knowledge sharing. Saving `/mindie-agent:reporting-enable` records your preference and returns a one-time terminal setup command.
+- **Sanitized Public Payload**: Confirmed product defects generate local diagnostic records and—when reporting is enabled—submit redacted GitHub Issues containing **only** static product stages, error categories, and installed code versions. Task prompts, transcripts, raw stack traces, commands, file paths, and credentials are never included.
+- **Deduplication & Reconciliation**: Duplicate faults share a fingerprint, and any uncertain GitHub Issue creation attempt is reconciled before retrying so duplicates are never spammed.
+
+---
+
+## 5. Verification Scope
+
+- **macOS & Component Verification**: Covered task-isolated SQLite diagnostics, corrupt config detection, child/grandchild process tree cancellation, busy-state `ping`, `EOF` handling, output backpressure, and all three native organizer terminal limits.
+- **Windows Hardware Boundary**: Synthetic log/outbox/Issue checks and Windows process-identity checks are verified in `mindie-agent/diagnostics`; native Windows pipe-write backpressure and full host UI cancellation remain separate hardware acceptance items.

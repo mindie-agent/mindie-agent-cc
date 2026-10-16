@@ -1,38 +1,57 @@
-# Claude Code native boundary
+# Native Plugin & Runtime Boundary
 
-[中文](native-boundary.zh.md) | English · [Documentation Index](README.en.md)
+<a href="native-boundary.zh.md">中文</a> | <b>English</b> · <a href="README.en.md">Documentation Index</a>
 
-Status: the framework stability implementation passed local review on 2026-09-28. The normal generated package, pinned interpreter and two native read-only entries were verified in an isolated macOS profile. Full contribution and Windows host acceptance remain separate; see [framework stability](framework-stability.md).
+`mindie-agent-cc` follows the [MindIE Agent Engineering Design Principles](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.en.md) as a thin native Claude Code adapter. It translates Claude Code's native plugin lifecycle, hooks, and transcripts into the shared MindIE runtime without duplicating the knowledge engine or maintaining a separate state store.
 
-This adapter inherits all nine [VAWS design principles](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.md). It translates native events into the shared runtime; it does not add a second knowledge engine or harness.
+---
 
-## Entry and identity
+## 1. Entrypoints & Task Identity Binding
 
-The mindie-agent entry (bare or namespaced; `/mindie-agent:init` is its alias) provides explicit setup and status. Its `UserPromptExpansion` event supplies the current task and working directory. Ordinary tasks do not need an entry invocation: knowledge reads use the native tool binding below, while approved capture associates an eligible Stop internally.
+### On-Demand Daily Usage
+Ordinary development tasks do not require an explicit activation command:
+- **Knowledge retrieval (`mindie-knowledge`)** binds to the active Claude Code task automatically via native hook and MCP metadata.
+- **Remote Ascend execution (`remote-dev`)** operates independently and does not require knowledge activation or community sharing consent.
+- **Explicit configuration (`/mindie-agent` or `/mindie-agent:init`)** provides an interactive setup and status entry. Its `UserPromptExpansion` event supplies the current task identity and working directory, reusing previously saved choices and prompting only when public contribution parameters (repository, account, or project root) are missing.
 
-Before a tool call, Claude's `PreToolUse` event supplies the native `tool_use_id`, task, tool name and input. The ensuing MCP request carries the same ID in `_meta["claudecode/toolUseId"]`. The adapter binds a call to its native task without asking the model to create identity parameters. The binding is consumed once and covers the exact tool and argument digest. Missing or mismatched bindings fail closed. New tasks and forks receive their own bindings and never inherit a parent task's capability, job ownership or collectable history.
+### Automatic `PreToolUse` → MCP Call Binding
+Before a tool call executes, Claude Code triggers the `PreToolUse` hook with the native `tool_use_id`, session identity, tool name, and arguments. The subsequent MCP request carries that same ID in `_meta["claudecode/toolUseId"]`:
+- The adapter binds the MCP tool call to its native task automatically—the model never needs to invent or pass session tokens.
+- Each binding is single-use and verified against the exact tool name and argument digest; missing or mismatched bindings fail closed.
+- New sessions and `--fork-session` branches receive independent bindings and never inherit a parent task's job ownership or collectable history.
 
-The explicit entry reuses approved configuration and reports only missing
-public destination, account and project scope. It does not offer read-only or
-later product modes. Task binding alone does not establish capture readiness;
-actual processing is evidenced by capture and contribution receipts. Explicit
-disable and saved legacy declines remain disabled until changed. Failures never
-revoke binding.
+---
 
-## Stop and records
+## 2. `Stop` Hook & Public Transcript Extraction
 
-The Stop hook returns silently within its short handoff budget. It never returns a continuation request to the business model. With sharing disabled, it performs no transcript read, capture-store creation or organizer call. An eligible Stop verifies the named task file inside the selected Claude profile, derives scope and creation time from that artifact, checks saved contribution authority, and associates the task without undoing an explicit deactivation. Shared admission and deduplication govern collection. The background worker owns indexing; captured material is not evidence that indexing or publication completed, and uncertain model calls are never silently replayed.
+### Fast, Non-Blocking `Stop` Handoff
+The `Stop` hook completes within a short local handoff budget and returns a neutral response so it never forces the model to continue running:
+- **When community sharing is disabled**: `Stop` performs no transcript reads, creates no capture records, and makes no organizer model calls.
+- **When community sharing is enabled for the current project**: `Stop` verifies the session file inside the active Claude profile, checks the saved contribution scope, and enqueues the capture reference for the background worker.
+- Enqueuing a capture record only confirms local admission; actual block indexing and GitHub PR publication are tracked by separate receipts in the background worker. Uncertain or failed model calls are never silently replayed.
 
-Only visible current-task user and assistant text is eligible. Claude records use `sessionId`, timestamps and public content blocks. Thinking blocks, tool payloads, injected `isMeta` messages, attachments, system records and sidechains are excluded. The capture boundary is no earlier than both the task creation time and the saved contribution enablement time.
+### Deterministic Public Message Filtering
+Only visible user and assistant messages from the current task are eligible for capture:
+- The parser reads `sessionId`, timestamps, and public text blocks.
+- Internal thinking blocks, tool call inputs/outputs, injected `isMeta` messages, attachments, system records, and sidechain turns are strictly excluded.
+- The capture window never starts earlier than either the task creation timestamp or the timestamp when contribution was enabled.
 
-## Shared behavior and updates
+---
 
-The shared knowledge component owns retrieval, redaction, organization reservations, feedback, publication receipts and cleanup after exact GitHub confirmation. The adapter owns Claude invocation, transcript translation and native installation. Remote development stays usable without knowledge activation.
+## 3. Division of Responsibilities & Updates
 
-An update selects one complete source/interpreter/config generation. Active operations finish under their generation lock before switching. Idle task authorizations are preserved and do not block updates. Failed candidates keep the previous generation; the same failed candidate is not repeatedly installed by the timer. Native plugin installation and readback determine installation state; private Claude registries and trust state are never forged.
+| Layer | Responsibility |
+|---|---|
+| **Claude Code Host** | Native plugin marketplace catalog, installation/uninstallation records, Hook event dispatch, and MCP stdio transport. |
+| **`mindie-agent-cc` (Adapter)** | Plugin manifests (`.claude-plugin/`, `.mcp.json`, `hooks/`, `skills/`), task identity correlation, public transcript parsing, and fixed Python 3.13 runtime management under `CLAUDE_PLUGIN_DATA`. |
+| **Shared Components** | `mindie-knowledge` (search, deterministic redaction, indexing queue, PR publication), `remote-dev` (SSH execution & job polling), and `mindie-diagnostics` (local receipts & opt-in fault reporting). |
 
-## Native evidence
+During updates, each release prepares a complete immutable runtime (source, lockfile, Python interpreter, and configuration). In-flight operations finish under a shared lock before the binding switches atomically while idle. Failed update candidates leave the existing runtime untouched and are not repeatedly retried in a tight loop.
 
-The initial capability probe used a real local Claude Code 2.1.269 process, configured model `deepseek-flash`, effort `high`, task `645fae2e-ef23-4e7d-9559-f4dd0cb9db6a`. It completed in 2.8 seconds with no retries. UserPromptExpansion, PreToolUse, MCP metadata correlation and a single silent Stop were observed. This establishes the host integration seam only; it is not a completed knowledge or update loop.
+---
 
-Official references: [hooks](https://code.claude.com/docs/en/hooks), [plugins](https://code.claude.com/docs/en/plugins-reference), [Skills](https://code.claude.com/docs/en/skills).
+## 4. Verification Scope
+
+- **Verified**: Native capability probes on Claude Code `2.1.269` (`deepseek-flash`, macOS isolated profile) confirmed `UserPromptExpansion`, `PreToolUse` → `_meta["claudecode/toolUseId"]` correlation, and silent `Stop` completion without retries.
+- **Boundary**: Host hook correlation tests verify the adapter integration seam; full end-to-end contribution publication and native Windows host acceptance are tracked separately (see [Framework Stability & Testing](framework-stability.md)).
+- **Official Claude Code References**: [Hooks](https://code.claude.com/docs/en/hooks) · [Plugins](https://code.claude.com/docs/en/plugins-reference) · [Skills](https://code.claude.com/docs/en/skills)

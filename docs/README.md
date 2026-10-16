@@ -1,15 +1,15 @@
-# MindIE Agent Claude Code 插件文档索引
+# MindIE Agent for Claude Code · 技术文档索引
 
-中文 | [English](README.en.md) · [返回仓库首页](../README.md)
+<b>中文</b> | <a href="README.en.md">English</a> · <a href="../README.md">返回仓库首页</a>
 
-本目录汇总 `mindie-agent-cc`（Claude Code 原生插件）的架构边界、宿主接口证据、服务连续性、故障诊断与框架稳定性规范。所有文档均提供中英双语版本。
+本目录提供 `mindie-agent-cc`（Claude Code 原生插件）的架构设计、宿主接口验证、服务连续性、故障诊断与测试规范文档。所有文档均提供结构对称的中英双语版本。
 
-## 核心技术文档
+## 核心文档列表
 
-| 中文文档 | English | 说明 |
+| 中文文档 | English | 内容概要 |
 |---|---|---|
-| [原生插件与运行时边界](native-boundary.zh.md) | [Native Plugin & Runtime Boundary](native-boundary.md) | 宿主插件清单、`CLAUDE_PLUGIN_DATA` 隔离运行时、Hook 入队与 MCP 接线边界 |
-| [Harness 接口兼容性证据](harness-interface-evidence.zh.md) | [Harness Interface Evidence](harness-interface-evidence.md) | `harness-compatibility.json` 登记的 Claude Code 接口、支持版本区间与实机核对依据 |
-| [服务连续性与空闲切换](service-continuity.zh.md) | [Service Continuity](service-continuity.md) | 后台知识服务归属、配置指纹校验、原生小模型整理与更新连续性边界 |
-| [故障诊断与自动上报](failure-diagnostics.zh.md) | [Failure Diagnostics](failure-diagnostics.md) | 本地结构化故障日志、诊断关联 ID 与独立授权的 GitHub Issue 上报 |
-| [框架稳定性与测试契约](framework-stability.zh.md) | [Framework Stability](framework-stability.md) | 持久配置原子读写、锁定依赖校验与集成测试边界 |
+| [原生插件与运行时边界](native-boundary.zh.md) | [Native Plugin & Runtime Boundary](native-boundary.md) | 任务身份绑定、`PreToolUse` / `Stop` Hook 工作机制、公开对话提取规则与共享组件职责划分 |
+| [Harness 接口兼容性与验证证据](harness-interface-evidence.zh.md) | [Harness Interface Evidence](harness-interface-evidence.md) | `harness-compatibility.json` 登记的 Claude Code 接口、结构化输出重试边界与 `--fork-session` 会话归属 |
+| [服务连续性与平滑更新](service-continuity.zh.md) | [Service Continuity & Updates](service-continuity.md) | 不可变 `uv` 运行时准备、并发锁保护、空闲服务切换与 `Stop` 采集队列可靠性 |
+| [故障诊断与本地进程取消](failure-diagnostics.zh.md) | [Failure Diagnostics & Cancellation](failure-diagnostics.md) | 只读状态诊断、本地进程取消边界、失败原因脱敏投影与可选产品故障上报 |
+| [框架稳定性与测试契约](framework-stability.zh.md) | [Framework Stability & Testing](framework-stability.md) | 日常无感使用保障、Windows 原子配置读写、组件测试复现与验收边界说明 |

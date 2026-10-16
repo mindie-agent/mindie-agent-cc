@@ -5,6 +5,11 @@
 <h1 align="center">MindIE Agent for Claude Code</h1>
 
 <p align="center">
+  <b>Native Claude Code Plugin for Ascend Inference & Operator Engineering</b><br/>
+  <sub>On-Demand Domain Knowledge · SSH Remote NPU Development · Privacy-Gated Experience Loop</sub>
+</p>
+
+<p align="center">
   <a href="https://github.com/mindie-agent/mindie-agent-cc/releases"><img src="https://img.shields.io/badge/release-v0.0.1-0F766E.svg" alt="Release v0.0.1"></a>
   <a href="harness-compatibility.json"><img src="https://img.shields.io/badge/Claude_Code-2.1.269_%7C_2.1.299-D97757.svg" alt="Claude Code 2.1.269 | 2.1.299"></a>
   <a href="pyproject.toml"><img src="https://img.shields.io/badge/python-3.13-3776AB.svg" alt="Python 3.13"></a>
@@ -12,118 +17,161 @@
 </p>
 
 <p align="center">
-  <a href="README.md">中文</a> | English
+  <a href="README.md">中文</a> | <b>English</b> ·
+  <a href="#quick-start">Quick Start</a> ·
+  <a href="#why-use-this-plugin">What Can It Do?</a> ·
+  <a href="#everyday-usage--command-reference">Commands</a> ·
+  <a href="#architecture--component-map">Architecture</a> ·
+  <a href="docs/README.en.md">Documentation</a>
 </p>
-
-**MindIE Agent for Claude Code** (`mindie-agent-cc`) is the native Claude Code plugin adapter for [MindIE Agent](https://github.com/mindie-agent/mindie-agent), providing Ascend inference engineering workflows with on-demand domain knowledge retrieval, a local experience loop with privacy-gated community sharing, SSH remote Ascend development, and structured fault diagnostics.
-
-This repository inherits all nine [MindIE Agent design principles](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.md). Claude Code owns native plugin installation, updates, and removal records; this repository owns native task identity, hooks, public transcript parsing, and a fixed Python 3.13 runtime for each installed release; shared knowledge, publication, remote development, and fault diagnostics live in independent packages.
 
 ---
 
-## Key Features
+**MindIE Agent for Claude Code** (`mindie-agent-cc`) is the official native Claude Code plugin for [MindIE Agent](https://github.com/mindie-agent/mindie-agent). It equips your everyday Claude Code sessions with **`vLLM-Ascend` domain knowledge search**, **SSH remote Ascend NPU execution**, and a **privacy-gated local experience loop**.
 
-- **On-Demand Domain Knowledge Retrieval (`mindie-knowledge`)**: Query verified Ascend inference engineering knowledge (such as `vllm-ascend`) through native MCP tools. Knowledge is optional reference material that retains applicability conditions, evidence, and uncertainty; ordinary tasks never require mandatory queries, writes, or voting workflows.
-- **Local Experience Loop & Privacy-Gated Community Sharing**:
-  - Only when explicitly enabled by the user (opt-in) for a public repository and approved project root, native `Stop` events automatically associate the current task's public transcript projection followed by local deterministic redaction. Complete user and visible assistant messages are saved without tool payloads or a body-writing model.
-  - Setup and updates automatically install the scanner and isolated block-index worker (using the selected native Claude model profile to produce bounded navigation metadata, never a replacement body; failed or uncertain indexing attempts remain visible with their execution and usage receipts, without silent retries or excerpt substitution).
-  - Read the **[User & Contribution Notice](skills/mindie-agent/references/user-notice.md)** for sharing scope, redaction limits, model-provider processing, and public Git history. After presenting the user notice during setup, see **[Workspace Setup](skills/mindie-agent/references/workspace-setup.md)** for optionally creating and initializing [mindie-agent/vllm-ascend-workspace](https://github.com/mindie-agent/vllm-ascend-workspace.git) (both creation and initialization are optional and reuse existing user choices).
-- **SSH Remote Ascend Development (`remote-dev`)**: Execute builds, tests, and debugging workflows on remote Ascend servers via the independent `remote-dev` MCP server. Remote development operates independently of knowledge service availability and contribution authorization.
-- **Structured Fault Diagnostics & Optional Reporting (`mindie-diagnostics`)**: Errors remain visible to the caller, explicitly distinguishing completed work, failures, and uncertain external effects without silent fallbacks. Supports an independent opt-in choice for sanitized product fault reporting containing only static product stages, error types, and installed code versions.
+Built on the [MindIE Agent Engineering Design Principles](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.en.md), the plugin works on demand with **zero per-task activation ceremony**—and surfaces every failure or uncertain external state transparently without silent fallbacks.
+
+---
+
+## Why Use This Plugin?
+
+Here are three concrete ways `mindie-agent-cc` helps during daily Ascend inference and operator development:
+
+### Scenario 1: Troubleshoot `vLLM-Ascend` Issues with Verified Engineering Cases (`mindie-knowledge`)
+> **The Problem**: When you hit an `HCCL` communication timeout, an `ACL` operator failure, a Graph Mode compilation error, or numerical drift, digging through scattered GitHub Issues and chat logs takes hours.  
+> **How It Helps**: Paste the traceback or symptom directly into Claude Code. The plugin queries locally synced [`knowledge-vllm-ascend`](https://github.com/mindie-agent/knowledge-vllm-ascend) packages on demand and returns real troubleshooting cases complete with **applicable environments, verification evidence, and known caveats**—as reference material rather than a rigid checklist.
+
+### Scenario 2: Edit Locally, Build & Debug on Remote Ascend NPU Servers (`remote-dev`)
+> **The Problem**: Your daily machine is a macOS or Windows laptop, while the Ascend NPU cards live on a remote Linux server. Manually syncing patches and tailing long build logs breaks your flow.  
+> **How It Helps**: Ask Claude to *"sync my local patch to the remote Ascend server, run the operator unit tests, and watch the log."* The built-in `remote-dev` MCP server handles remote file reads/writes, patch application, managed background jobs, and live log polling over SSH. It works completely independently, even if the knowledge service or community sharing is turned off.
+
+### Scenario 3: Turn Hard-Won Debugging Sessions into Sanitized Community Knowledge (Opt-In)
+> **The Problem**: After spending half a day root-causing a subtle NPU issue, that insight usually disappears when you close the terminal—yet sharing raw transcripts risks leaking internal IPs, tokens, or file paths.  
+> **How It Helps**: Community contribution is **off by default**. Only when you explicitly opt in for a public repository and approved project path does the `Stop` hook extract public user/assistant messages, run local deterministic redaction and Gitleaks scanning, generate navigation metadata, and open a sanitized knowledge PR.
+> - Read the **[User & Contribution Notice](skills/mindie-agent/references/user-notice.md)** for full details on sharing scope, redaction limits, and public Git history.
+> - To set up a multi-task Git worktree layout for `vllm` and `vllm-ascend`, see **[Workspace Setup](skills/mindie-agent/references/workspace-setup.md)** and [vllm-ascend-workspace](https://github.com/mindie-agent/vllm-ascend-workspace.git).
 
 ---
 
 ## Quick Start
 
-### 1. Prerequisites
+### Option 1: One-Sentence Install via Your AI Agent (Recommended)
 
-Install `uv`, `git`, and an authenticated Claude Code with native plugin support (`CLAUDE_PLUGIN_DATA` is required for the persistent release entry):
+Copy and paste the following prompt directly to Claude Code (or any terminal-capable AI Agent) and let it install and verify the plugin for you:
 
-- **Supported Claude Code Versions**: Release `0.0.1` (`v0.0.1`) declares support for exact tested versions `2.1.269` and `2.1.299` (see [`harness-compatibility.json`](harness-compatibility.json)), not every version between them.
-- **Windows**: Git for Windows supplies the SSH implementation used by remote operations. Existing SSH and model settings are preserved.
-- **Linux & WSL**: Inside WSL, use Linux-native Claude, Git, and `uv`, keeping the profile, SQLite state, and runtime on the Linux filesystem. On Linux and WSL, service-backed knowledge reads and automatic capture/indexing require a reachable `systemd` user manager (`systemd >= 254`, check via `systemctl --user show --property=Version`) and a unified cgroup hierarchy. A missing manager, unsupported version, or unverified containment is reported as an explicit service error with no unprotected fallback. Independent `remote-dev` operations do not use the knowledge service.
+```text
+Please install https://github.com/mindie-agent/mindie-agent-cc for me
+```
 
-### 2. One-Line Install & Initialization (Release `v0.0.1`)
+<details open>
+<summary>🤖 <b>Automated Installation Protocol for AI Agents (Instructions for AI Agents)</b></summary>
 
-Confirm that release `v0.0.1` is available in [GitHub Releases](https://github.com/mindie-agent/mindie-agent-cc/releases), then run the following commands in a macOS/Linux/WSL shell or native Windows PowerShell using the same Claude profile throughout:
+If you are an AI Agent asked by the user to install this plugin, run the following deterministic steps directly in the terminal **without asking the user to read the documentation manually**:
+
+1. **Check prerequisites and host version**:
+   ```sh
+   git --version
+   uv --version
+   claude --version
+   ```
+   - Verify `claude --version` matches one of the exact versions supported by release `v0.0.1`: `2.1.269` or `2.1.299` (declared in [`harness-compatibility.json`](harness-compatibility.json)).
+   - On **Linux or Windows WSL**, if the background knowledge service will be used, also run `systemctl --user show --property=Version` to verify `systemd >= 254` is reachable (inside WSL, use Linux-native `claude`, `git`, and `uv`).
+
+2. **Add the marketplace, install the plugin, and initialize the locked runtime**:
+   ```sh
+   claude plugin marketplace add "https://github.com/mindie-agent/mindie-agent-cc.git#v0.0.1"
+   claude plugin install mindie-agent@mindie-agent-cc --scope user
+   claude --init-only
+   ```
+   > Note: `claude --init-only` runs `SessionStart` without starting a conversation or calling a model, allowing `uv` to provision Python 3.13 and install the locked runtime ahead of time.
+
+3. **Verify installation and MCP server health**:
+   ```sh
+   claude plugin list --json
+   claude mcp list
+   ```
+   - Confirm `claude plugin list --json` shows `mindie-agent@mindie-agent-cc` (`0.0.1`) enabled with `user` scope.
+   - Confirm `claude mcp list` reports both `mindie-knowledge` and `remote-dev` as `Connected`, then report completion to the user.
+
+</details>
+
+### Option 2: One-Line Terminal Install (Manual)
+
+To install manually from a macOS / Linux / WSL shell or native Windows PowerShell:
 
 ```sh
-git --version
-uv --version
-claude --version
-claude plugin marketplace add "https://github.com/mindie-agent/mindie-agent-cc.git#v0.0.1"
-claude plugin install mindie-agent@mindie-agent-cc --scope user
-claude --init-only
-claude plugin list --json
+claude plugin marketplace add "https://github.com/mindie-agent/mindie-agent-cc.git#v0.0.1" && \
+claude plugin install mindie-agent@mindie-agent-cc --scope user && \
+claude --init-only && \
 claude mcp list
 ```
 
-**Verification notes**:
-1. `claude --init-only` completes installation through `SessionStart` and exits without starting a conversation or calling a model. It prepares Python 3.13 through `uv` and installs the complete `uv.lock` with `uv sync --locked --no-editable` (cold installation requires network access to declared dependencies).
-2. Confirm `claude plugin list --json` reports `mindie-agent@mindie-agent-cc`, version `0.0.1`, enabled with `user` scope in the target profile.
-3. Confirm `claude mcp list` shows both MindIE MCP servers (`mindie-knowledge` and `remote-dev`) as `Connected`. Running `--init-only` first ensures cold dependency installation finishes before ordinary MCP connection timeouts.
+#### Environment Notes
+- **Prerequisites**: `git`, `uv`, and an authenticated Claude Code (`v0.0.1` is verified against Claude Code `2.1.269` and `2.1.299`; see [`harness-compatibility.json`](harness-compatibility.json)).
+- **Native Windows**: Git for Windows provides the SSH client used by `remote-dev`, preserving your existing SSH and model settings.
+- **Linux & WSL**: Inside WSL, use Linux-native `claude`, `git`, and `uv` with your profile and runtime stored on the Linux filesystem. Service-backed knowledge operations on Linux/WSL require a reachable `systemd --user` manager (`systemd >= 254` with unified cgroup v2); if unavailable, the knowledge service reports an explicit error rather than running unprotected, while `remote-dev` continues to work normally.
 
-### 3. Optional Initialization & Slash Commands
+---
 
-Ordinary tasks do **not** need a per-task activation command—knowledge reads and `remote-dev` work on demand. Use the following slash commands when inspecting status or updating preferences:
+## Everyday Usage & Command Reference
 
-| Command | Description |
+Once installed, **ordinary tasks require no activation command**—knowledge search and `remote-dev` tools are available on demand. Use the slash commands below whenever you want to inspect status or update your preferences:
+
+| Slash Command | Description |
 |---|---|
-| `/mindie-agent` or `/mindie-agent:init` | Optional configuration and status entry. Saved choices persist across sessions, forks, restarts, upgrades, and failures without re-prompting. |
-| `/mindie-agent:status` | Read-only status reporting existing knowledge configuration, service/storage health, bound task state, failure counters, and the latest 5 captures and contribution batches. |
-| `/mindie-agent contribute --repository owner/repo --account USER --project-root /absolute/path --visibility public` | Explicitly configure opt-in public knowledge contribution (no default consent; repository, account, project root, and public visibility must be specified together). |
-| `/mindie-agent:sharing-enable` / `/mindie-agent:sharing-disable` | Enable or stop knowledge contribution for the configured scope (with contribution off, `Stop` performs no transcript collection, capture, or organizer call). |
-| `/mindie-agent:deactivate` | End the current task's knowledge access without uninstalling the plugin. |
-| `/mindie-agent:recover` | Inspect failed batch IDs or trigger recovery (unknown publication effects must be reconciled before any explicit retry). |
-| `/mindie-agent:reporting-status` | Read the independent product failure reporting setting and reporter readiness. |
-| `/mindie-agent:reporting-enable` / `/mindie-agent:reporting-disable` | Enable or revoke sanitized product fault reporting to `mindie-agent/mindie-agent` (`reporting-enable` returns a one-time preparation command to run outside the hook; verify both runtime ready and worker healthy). |
+| `/mindie-agent` or `/mindie-agent:init` | Optional setup guide and status entry. Saved preferences persist across sessions, forks, restarts, and updates without re-prompting. |
+| `/mindie-agent:status` | **Read-only status check**: inspect knowledge configuration, service/storage health, bound task state, diagnostic counters, and the latest 5 captures and contribution batches. |
+| `/mindie-agent contribute --repository owner/repo --account USER --project-root /absolute/path --visibility public` | Explicitly configure opt-in public knowledge contribution (off by default; repository, account, project root, and public visibility must be provided together). |
+| `/mindie-agent:sharing-enable` / `/mindie-agent:sharing-disable` | Enable or pause knowledge sharing for the configured scope (when disabled, `Stop` performs no transcript read, capture, or indexing call). |
+| `/mindie-agent:deactivate` | Unbind knowledge access for the current task without uninstalling the plugin. |
+| `/mindie-agent:recover` | Inspect or recover failed contribution batches (reconciles any uncertain remote PR state before retrying). |
+| `/mindie-agent:reporting-status` | Check the independent product fault reporting switch and reporter readiness. |
+| `/mindie-agent:reporting-enable` / `/mindie-agent:reporting-disable` | Enable or disable sanitized product fault reporting to `mindie-agent/mindie-agent` (`reporting-enable` prints a one-time setup command to run in your terminal). |
 
-### 4. Updates & Uninstall
+### Silent Updates & Safe Uninstall
 
-- **Silent Compatible Updates**: After more than 24 hours since a successful Release check, the next natural MCP tool call starts one asynchronous check (ordinary calls perform an in-process timestamp comparison only). The shared Release selector chooses the highest compatible official Release declared in [`harness-compatibility.json`](harness-compatibility.json), builds the immutable `uv` runtime outside operation admission, and switches atomically when Core admission is free (the 30-second observation window is a control bound and never kills active work).
-- **Safe Uninstall**: Close tasks using the plugin, then run Claude's native uninstall command under the same profile while retaining data:
-
-```sh
-claude plugin uninstall mindie-agent@mindie-agent-cc --scope user --keep-data --json
-```
-
-> **Note**: Keep runtime data, receipts, and retained launchers while existing tasks may still use them. Uninstalling this adapter does not disable the shared fault reporter across other adapters; run `/mindie-agent:reporting-disable` separately if desired.
+- **Silent Compatible Updates**: More than 24 hours after the last successful check, the next natural MCP tool call triggers a non-blocking background check for the highest compatible Release declared in [`harness-compatibility.json`](harness-compatibility.json). The new `uv` runtime is built in isolation and switched atomically when the service is idle, preserving all user preferences.
+- **Safe Uninstall**: Close active sessions using the plugin, then uninstall via Claude Code while keeping persistent runtime data for clean shutdown:
+  ```sh
+  claude plugin uninstall mindie-agent@mindie-agent-cc --scope user --keep-data --json
+  ```
+  > Tip: Uninstalling this adapter does not alter the shared fault-reporting preference across other adapters; run `/mindie-agent:reporting-disable` first if you wish to turn it off globally.
 
 ---
 
 ## Architecture & Component Map
 
-`mindie-agent-cc` maintains a strict thin-adapter boundary without duplicating the knowledge engine or introducing a second state store:
+`mindie-agent-cc` is designed as a **thin native adapter**: it handles Claude Code plugin manifests, hook bridging, public transcript extraction, and the immutable Python 3.13 runtime lifecycle, while delegating domain knowledge, remote execution, and diagnostics to shared components.
 
 ```mermaid
 flowchart LR
-  CC["Claude Code Host<br/>(Hooks / MCP stdio / Plugin CLI)"] --> Entry["mindie-agent-cc<br/>(Immutable Entry & Bridge)"]
-  Entry --> Knowledge["mindie-agent/knowledge<br/>(Retrieval, Redaction, Capture & Loop)"]
-  Knowledge --> Feed["mindie-agent/knowledge-vllm-ascend<br/>(Domain Knowledge Feed)"]
-  Entry --> RemoteDev["mindie-agent/remote-dev<br/>(SSH Remote Ascend Execution)"]
-  Entry --> Diagnostics["mindie-agent/diagnostics<br/>(Local Receipts & Fault Reporter)"]
+  CC["Claude Code Host<br/>(Hooks / MCP stdio / Plugin CLI)"] --> Entry["mindie-agent-cc<br/>(Native Bridge & Locked Runtime Entry)"]
+  Entry --> Knowledge["mindie-agent/knowledge<br/>(Search, Redaction, Capture & PR Loop)"]
+  Knowledge --> Feed["mindie-agent/knowledge-vllm-ascend<br/>(vLLM-Ascend Knowledge Feed)"]
+  Entry --> RemoteDev["mindie-agent/remote-dev<br/>(SSH Remote Ascend Build, Test & Poll)"]
+  Entry --> Diagnostics["mindie-agent/diagnostics<br/>(Local Receipts & Opt-In Fault Reporter)"]
 ```
 
 | Repository / Component | Responsibility |
 |---|---|
-| [`mindie-agent/mindie-agent`](https://github.com/mindie-agent/mindie-agent) | Architecture, nine design principles, domain boundaries, and paired-release governance. |
+| [`mindie-agent/mindie-agent`](https://github.com/mindie-agent/mindie-agent) | Top-level architecture, MindIE Agent Engineering Design Principles, domain boundaries, and paired-release governance. |
 | `mindie-agent/mindie-agent-cc` (this repo) | Claude Code native plugin manifest (`.claude-plugin/`, `.mcp.json`, `hooks/`, `skills/`), task identity bridge, public transcript parser, and immutable runtime lifecycle (`scripts/`). |
-| [`mindie-agent/knowledge`](https://github.com/mindie-agent/knowledge) | Shared knowledge core: local SQLite/FTS retrieval, deterministic redaction, capture queue, block-index scheduling, PR publication receipts, and release compatibility validation. |
+| [`mindie-agent/knowledge`](https://github.com/mindie-agent/knowledge) | Shared knowledge core: local SQLite/FTS5 search, deterministic redaction, capture queue, block-index scheduling, and GitHub PR publication reconciliation. |
 | [`mindie-agent/knowledge-vllm-ascend`](https://github.com/mindie-agent/knowledge-vllm-ascend) | Curated `vllm-ascend` domain knowledge feed (pinned by contract SHA-256 and verified commit in [`product-contract.json`](product-contract.json)). |
-| [`mindie-agent/remote-dev`](https://github.com/mindie-agent/remote-dev) | Bounded remote command execution, workspace synchronization, and long-job polling over SSH for Ascend servers. |
+| [`mindie-agent/remote-dev`](https://github.com/mindie-agent/remote-dev) | Bounded remote command execution, workspace synchronization, and background job polling over SSH for Ascend servers. |
 | [`mindie-agent/diagnostics`](https://github.com/mindie-agent/diagnostics) | Bounded local diagnostic retention and optional sanitized GitHub Issue fault reporting. |
 
 ### Local Storage Layout
 
-- **Immutable Runtime Directories**: `${XDG_DATA_HOME:-$HOME/.local/share}/mindie-agent/runtimes/cc` on macOS/Linux/WSL, or `%LOCALAPPDATA%/mindie-agent/runtimes/cc` on Windows (keyed by package source, lock, Python ABI, and platform; damage is reported rather than repaired in place).
-- **Persistent Release Entry**: `CLAUDE_PLUGIN_DATA/releases/0.0.1/entry.py` (binds one exact installed facade and profile; hot hooks run `uv` offline with Python downloads disabled).
-- **Shared Business Configuration**: `${XDG_CONFIG_HOME:-$HOME/.config}/mindie-agent/cc.json` (records the installation binding; contribution scope and user consent remain separate persistent user data).
+- **Immutable Runtime Directory**: `${XDG_DATA_HOME:-$HOME/.local/share}/mindie-agent/runtimes/cc` on macOS/Linux/WSL, or `%LOCALAPPDATA%/mindie-agent/runtimes/cc` on Windows (indexed by source, lockfile, Python ABI, and platform).
+- **Persistent Release Entry**: `CLAUDE_PLUGIN_DATA/releases/0.0.1/entry.py` (decoupled from volatile plugin caches so long-lived sessions remain stable).
+- **Adapter Configuration**: `${XDG_CONFIG_HOME:-$HOME/.config}/mindie-agent/cc.json` (records the active installation binding; user consent and contribution scope are stored separately as persistent user data).
 
 ---
 
-## Reproducible Component Verification
+## Developer Verification
 
-Run the locked component test suite from the repository root (requires a local checkout of `mindie-agent/knowledge` at the exact commit declared in [`uv.lock`](uv.lock)):
+To run the locked component test suite from the repository root (requires a local checkout of `mindie-agent/knowledge` at the exact commit pinned in [`uv.lock`](uv.lock)):
 
 ```sh
 uv sync --locked --no-editable --group test
@@ -132,7 +180,7 @@ MINDIE_TEST_KNOWLEDGE_CHECKOUT=/absolute/path/to/declared-knowledge-checkout \
 uv run --locked --no-editable --group test python -m pytest -q
 ```
 
-Verify the product contract and Harness interface registry:
+Validate the product contract and Harness interface registry:
 
 ```sh
 uv run --locked --no-editable --group test python scripts/product_contract.py --source .
@@ -143,14 +191,14 @@ uv run --locked --no-editable --group test python scripts/harness.py --source . 
 
 ## Documentation Index
 
-Detailed architecture and contract documentation is available in [`docs/`](docs/README.en.md) in both Chinese and English:
+Detailed engineering guides and verification specifications are available in [`docs/`](docs/README.en.md) in both English and Chinese:
 
 - **[Documentation Index (English)](docs/README.en.md)** | **[文档索引（中文）](docs/README.md)**
-- **Claude Code Native Boundary**: [English](docs/native-boundary.md) | [中文](docs/native-boundary.zh.md) — Task identity binding, `PreToolUse`/`Stop` hook behavior, and shared runtime division of responsibilities.
-- **Harness Interface Evidence & Fork Attribution**: [English](docs/harness-interface-evidence.md) | [中文](docs/harness-interface-evidence.zh.md) — Declared Claude Code interface support, structured-output retry boundaries, and `--fork-session` attribution.
-- **Fixed-Runtime Service Continuity**: [English](docs/service-continuity.md) | [中文](docs/service-continuity.zh.md) — Immutable `uv` runtime preparation, shared/exclusive admission control, seamless owner handoff, and `Stop` queue durability.
-- **Failure Diagnosis & Local Cancellation**: [English](docs/failure-diagnostics.md) | [中文](docs/failure-diagnostics.zh.md) — Read-only status semantics, local process cancellation bounds, native failure projection, and automatic product fault reports.
-- **Framework Stability & Verification Boundaries**: [English](docs/framework-stability.md) | [中文](docs/framework-stability.zh.md) — Everyday usage invariants, Windows atomic configuration reads/writes, and reproducible test contracts.
+- **Claude Code Native Boundary**: [English](docs/native-boundary.md) | [中文](docs/native-boundary.zh.md) — Task identity binding, `PreToolUse` / `Stop` hook mechanics, and shared component boundaries.
+- **Harness Interface Evidence & Fork Attribution**: [English](docs/harness-interface-evidence.md) | [中文](docs/harness-interface-evidence.zh.md) — Verified Claude Code interfaces, structured-output retry boundaries, and `--fork-session` attribution.
+- **Service Continuity & Smooth Updates**: [English](docs/service-continuity.md) | [中文](docs/service-continuity.zh.md) — Immutable `uv` runtime preparation, shared/exclusive locking, idle service handoff, and `Stop` queue durability.
+- **Failure Diagnostics & Local Cancellation**: [English](docs/failure-diagnostics.md) | [中文](docs/failure-diagnostics.zh.md) — Read-only status checks, local process cleanup on cancel, and opt-in product fault reporting.
+- **Framework Stability & Test Contracts**: [English](docs/framework-stability.md) | [中文](docs/framework-stability.zh.md) — Persistent user preferences, Windows atomic config I/O, and reproducible test boundaries.
 
 ---
 
