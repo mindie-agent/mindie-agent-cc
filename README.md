@@ -45,17 +45,38 @@ The native plugin requires `CLAUDE_PLUGIN_DATA` for its persistent entry. On
 Windows, Git for Windows also supplies the SSH implementation used by remote
 operations. Existing SSH and model settings are preserved.
 
-Use Claude's Git marketplace for the published release source. Until the
-Release exists, use an explicitly reviewed candidate source; do not interpret
-these candidate instructions as a published `v0.0.1`:
+Inside WSL, use Linux-native Claude, Git and uv, and keep the profile, SQLite
+state and runtime on the Linux filesystem. On Linux and WSL, service-backed
+knowledge reads and automatic capture/indexing require a reachable systemd
+user manager, systemd 254 or newer, and a unified cgroup hierarchy. This also
+applies to knowledge reads with contribution off; independent remote-dev
+operations do not use that knowledge service. A missing manager, unsupported
+version or unverified containment is a service error, with no unprotected
+fallback. Check the user manager with
+`systemctl --user show --property=Version`.
+
+Use Claude's Git marketplace for the published release source. The following
+`v0.0.1` commands become usable only after the Release exists. Until then, use
+an explicitly reviewed candidate source:
+
+Run these commands in a macOS/WSL shell or native Windows PowerShell, using the
+same Claude profile throughout:
 
 ```sh
-claude plugin marketplace add https://github.com/mindie-agent/mindie-agent-cc.git#v0.0.1
+git --version
+uv --version
+claude --version
+claude plugin marketplace add "https://github.com/mindie-agent/mindie-agent-cc.git#v0.0.1"
 claude plugin install mindie-agent@mindie-agent-cc --scope user
 claude --init-only
 claude plugin list --json
 claude mcp list
 ```
+
+The current candidate declares exactly Claude Code `2.1.269` and `2.1.299`,
+not every version between them. Check the actual CLI version and confirm that
+the native installed record reports `mindie-agent@mindie-agent-cc`, version
+`0.0.1`, enabled with user scope in the intended profile.
 
 Each Release declares the Claude Code versions and native interfaces it supports.
 The shared Release selector chooses the highest compatible official Release;
