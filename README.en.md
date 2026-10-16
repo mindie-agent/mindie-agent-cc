@@ -37,10 +37,11 @@ Built on the [MindIE Agent Engineering Design Principles](https://github.com/min
 
 MindIE Agent uses a two-mode trigger model—**manual on-demand activation for domain knowledge & skills** plus **default automatic triggering for remote NPU execution**:
 
-| Capability | Trigger Mode | When to Use | How to Trigger |
+| Capability | Trigger Mode | When to Use | How to Use |
 | :--- | :--- | :--- | :--- |
-| **Experience, Knowledge & Skill System**<br/>(`mindie-knowledge` + `mindie-agent` Skill) | **🎯 Manual Trigger** | When troubleshooting Ascend / `vLLM-Ascend` errors, adapting operators, debugging Graph Mode failures, or tuning performance/accuracy and you want historical experience, domain knowledge, and Skill guidance | Explicitly type **`/mindie-agent` + your problem description** |
+| **Experience, Knowledge & Skill System**<br/>(`mindie-knowledge` + `mindie-agent` Skill) | **🎯 Manual Trigger** | When troubleshooting Ascend / `vLLM-Ascend` errors, adapting operators, debugging Graph Mode failures, or tuning performance/accuracy and you want historical experience, domain knowledge, and Skill guidance | Explicitly type **`/mindie-agent` + your problem description** (all setup and status actions are also wrapped inside `/mindie-agent`) |
 | **Remote Ascend NPU Development**<br/>(`remote-dev` MCP toolset) | **⚡ Default Auto-Trigger** | When syncing local edits to a remote Ascend server/container, running NPU builds/tests, checking `npu-smi`, or tailing long job logs | **No slash command needed**—just describe the remote task in natural language |
+| **Community Experience Contribution Loop**<br/>(`Stop` Auto-Capture + Gitleaks Redaction) | **🔄 Default Auto-Trigger After Opt-In** | Once you enable community contribution during installation or initial setup | **No need to mention in prompts**—every session is automatically redacted and packaged into a knowledge PR in the background when the task ends |
 
 ### Scenario 1: Type `/mindie-agent` to Invoke Experience, Knowledge & Skills (Manual Trigger)
 > **The Problem**: When you hit an `HCCL` communication timeout, an `ACL` operator failure, a Graph Mode compilation error, or numerical drift, digging through scattered GitHub Issues and chat logs takes hours.  
@@ -58,13 +59,13 @@ MindIE Agent uses a two-mode trigger model—**manual on-demand activation for d
 > ```
 > **What Happens**: The built-in `remote-dev` MCP server is always on and **triggers automatically by default** whenever your prompt involves remote servers, containers, or NPU commands—handling remote file reads/writes, patch application, managed background jobs, and live log polling over SSH. It works completely independently, even if the knowledge service or community sharing is turned off.
 
-### Scenario 3: Invoke `/mindie-agent` & Turn Debugging Sessions into Sanitized Community Knowledge (Opt-In)
+### Scenario 3: Opt In Once, and Every Debugging Session Is Automatically Sanitized & Contributed in the Background
 > **The Problem**: After spending half a day root-causing a subtle NPU issue, that insight usually disappears when you close the terminal—yet sharing raw transcripts risks leaking internal IPs, tokens, or file paths.  
-> **Copy-Paste Example**:
+> **Copy-Paste Example (just ask your technical question normally—no need to ask the Agent to "save the experience")**:
 > ```text
-> /mindie-agent Help me diagnose this custom Ascend operator build failure using the knowledge base and our remote NPU container, and let's capture the sanitized takeaways once the test passes.
+> /mindie-agent Help me diagnose this custom Ascend operator build failure using the knowledge base and our remote NPU container, and verify the fix with unit tests.
 > ```
-> **What Happens**: Community contribution is **off by default**. Only when you explicitly opt in for a public repository and approved project path does the `Stop` hook extract public user/assistant messages, run local deterministic redaction and Gitleaks scanning, generate navigation metadata, and open a sanitized knowledge PR.
+> **What Happens**: Community contribution is **off by default**. Once you opt in during setup, **you never need to ask the Agent to capture your experience in each prompt**—every time a task finishes (`Stop`), the plugin automatically extracts public user/assistant messages in the background, runs local deterministic redaction and Gitleaks scanning, generates navigation metadata, and opens a sanitized knowledge PR.
 > - Read the **[User & Contribution Notice](skills/mindie-agent/references/user-notice.md)** for full details on sharing scope, redaction limits, and public Git history.
 > - To set up a multi-task Git worktree layout for `vllm` and `vllm-ascend`, see **[Workspace Setup](skills/mindie-agent/references/workspace-setup.md)** and [vllm-ascend-workspace](https://github.com/mindie-agent/vllm-ascend-workspace.git).
 
@@ -130,20 +131,15 @@ claude mcp list
 
 ---
 
-## Everyday Usage & Command Reference
+## Everyday Usage & Command Reference (One Unified `/mindie-agent` Entry)
 
-Once installed, **`remote-dev` remote NPU tools trigger automatically by default** in everyday conversation. Whenever you want to invoke historical Ascend experience, domain knowledge, and the Skill system—or inspect status and update preferences—use the slash commands below:
+To keep daily engineering effortless, MindIE Agent wraps all interactions into **a single unified entrypoint: `/mindie-agent`**. You **never need to memorize internal subcommands or flags**—operational context is progressively disclosed only to the Agent when needed:
 
-| Slash Command | Description |
-|---|---|
-| `/mindie-agent <problem description>` | **Manual trigger entry**: type `/mindie-agent` followed by your question to invoke Ascend domain knowledge, historical experience, and the Skill system on demand; typing `/mindie-agent` (or `/mindie-agent:init`) alone opens the setup guide. |
-| `/mindie-agent:status` | **Read-only status check**: inspect knowledge configuration, service/storage health, bound task state, diagnostic counters, and the latest 5 captures and contribution batches. |
-| `/mindie-agent contribute --repository owner/repo --account USER --project-root /absolute/path --visibility public` | Explicitly configure opt-in public knowledge contribution (off by default; repository, account, project root, and public visibility must be provided together). |
-| `/mindie-agent:sharing-enable` / `/mindie-agent:sharing-disable` | Enable or pause knowledge sharing for the configured scope (when disabled, `Stop` performs no transcript read, capture, or indexing call). |
-| `/mindie-agent:deactivate` | Unbind knowledge access for the current task without uninstalling the plugin. |
-| `/mindie-agent:recover` | Inspect or recover failed contribution batches (reconciles any uncertain remote PR state before retrying). |
-| `/mindie-agent:reporting-status` | Check the independent product fault reporting switch and reporter readiness. |
-| `/mindie-agent:reporting-enable` / `/mindie-agent:reporting-disable` | Enable or disable sanitized product fault reporting to `mindie-agent/mindie-agent` (`reporting-enable` prints a one-time setup command to run in your terminal). |
+| Scenario | What You Type | What Happens Behind the Scenes |
+|---|---|---|
+| **Ascend Troubleshooting, Operator Adaptation & Tuning** | `/mindie-agent <your problem description>` | Activates Ascend Skill guidance and local `mindie-knowledge` search, working alongside `remote-dev` to diagnose and verify fixes |
+| **First-Time Setup, Checking Status, or Changing Sharing Settings** | `/mindie-agent` (or `/mindie-agent check status`, `/mindie-agent enable/disable community sharing`) | Your Agent reads the progressively disclosed context to display status or update preferences; saved choices persist across sessions and updates |
+| **Everyday Remote Ascend Server / Container Work** | **No slash command needed**—just use natural language | Always-on `remote-dev` MCP tools trigger automatically to read/edit remote files, apply patches, and poll background jobs |
 
 ### Silent Updates & Safe Uninstall
 
@@ -152,7 +148,6 @@ Once installed, **`remote-dev` remote NPU tools trigger automatically by default
   ```sh
   claude plugin uninstall mindie-agent@mindie-agent-cc --scope user --keep-data --json
   ```
-  > Tip: Uninstalling this adapter does not alter the shared fault-reporting preference across other adapters; run `/mindie-agent:reporting-disable` first if you wish to turn it off globally.
 
 ---
 

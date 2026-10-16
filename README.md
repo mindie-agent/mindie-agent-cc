@@ -37,10 +37,11 @@
 
 MindIE Agent 采用**「知识与 Skill 手动按需触发 + 远端执行工具默认常驻触发」**的双模式设计：
 
-| 能力模块 | 触发方式 | 什么时候用？ | 怎么触发？ |
+| 能力模块 | 触发方式 | 什么时候用？ | 怎么用？ |
 | :--- | :--- | :--- | :--- |
-| **经验、知识库与 Skill 系统**<br/>（`mindie-knowledge` + `mindie-agent` Skill） | **🎯 手动触发** | 遇到昇腾 / `vLLM-Ascend` 报错排障、算子适配、图模式编译异常、精度/性能调优，需要调取历史踩坑经验、领域知识库与专业 Skill 引导时 | 在输入框中显式输入 **`/mindie-agent` + 你的问题描述** |
+| **经验、知识库与 Skill 系统**<br/>（`mindie-knowledge` + `mindie-agent` Skill） | **🎯 手动触发** | 遇到昇腾 / `vLLM-Ascend` 报错排障、算子适配、图模式编译异常、精度/性能调优，需要调取历史踩坑经验、领域知识库与专业 Skill 引导时 | 在输入框中显式输入 **`/mindie-agent` + 你的问题描述**（所有配置与状态管理也统一包在 `/mindie-agent` 内） |
 | **远端昇腾 NPU 开发与执行**<br/>（`remote-dev` MCP 工具集） | **⚡ 默认自动触发** | 日常需要将本地改动同步到远端昇腾服务器/容器、在 NPU 上跑编译/测试、查看 `npu-smi` 或实时轮询长日志时 | **无需输入任何斜杠命令**，直接用自然语言描述远端操作即可 |
+| **社区经验脱敏沉淀闭环**<br/>（`Stop` 后台采集 + Gitleaks 脱敏） | **🔄 开启后每次默认自动触发** | 安装或首次配置时选择开启社区贡献后 | **无需在对话中特意提及**——每次排障对话结束时后台全自动完成脱敏与知识 PR 沉淀 |
 
 ### 场景 1：输入 `/mindie-agent` 唤醒经验、知识库与 Skill 排障（手动触发）
 > **痛点**：遇到 `HCCL` 通信超时、`ACL` 算子报错、图模式（Graph Mode）编译失败或精度偏差时，翻遍历史 Issue 和聊天记录也很难找齐适用条件。  
@@ -58,13 +59,13 @@ MindIE Agent 采用**「知识与 Skill 手动按需触发 + 远端执行工具�
 > ```
 > **会发生什么**：内置的 `remote-dev` MCP 服务作为常驻工具集，会在识别到远端开发意图时**默认自动触发**，完成文件读写、补丁同步、长耗时编译/测试后台托管与实时日志轮询。即使不开启知识库服务或社区贡献，`remote-dev` 也能完全独立工作。
 
-### 场景 3：唤醒 `/mindie-agent` 攻坚并沉淀脱敏经验回开源社区（可选 Opt-in）
+### 场景 3：开启一次社区贡献，后续每次排障经验后台全自动脱敏沉淀（无需每次说明）
 > **痛点**：花了大半天定位出一个棘手的算子兼容或性能问题，关掉终端后经验就散落了；想分享又担心泄露机器 IP、Token 或私有路径。  
-> **用法示例（直接复制发给 Claude Code）**：
+> **用法示例（平时正常提问排障即可，无需在对话里叮嘱“帮我把经验沉淀下来”）**：
 > ```text
-> /mindie-agent 帮我结合知识库和远端 NPU 容器定位一下当前 vllm-ascend 自定义算子编译失败的问题，修好跑通单测后我们把这次排障经验沉淀下来。
+> /mindie-agent 帮我结合知识库和远端 NPU 容器定位一下当前 vllm-ascend 自定义算子编译失败的问题，并跑通对应的单测。
 > ```
-> **会发生什么**：社区共享**默认关闭**。仅在你显式对某个开源仓库开启贡献后，每次任务结束（`Stop`）时插件会自动提取可见对话，在本地通过确定性规则与 Gitleaks 完成脱敏，生成检索索引并整理为开源知识 PR。
+> **会发生什么**：社区共享**默认关闭**。只要你在安装后首次配置时选择开启了社区贡献，**后续每次任务结束（`Stop`）时都不需要你多说一句话**，插件就会在后台默认自动提取公开可见对话，通过本地确定性规则与 Gitleaks 完成脱敏，生成检索索引并整理为开源知识 PR。
 > - 关于共享范围、本地脱敏边界与公开 Git 历史的详细说明，请参阅 **[用户须知](skills/mindie-agent/references/user-notice.md)**。
 > - 如需在本地快速搭建 `vllm` + `vllm-ascend` 多任务 Git Worktree 协同目录，可参考 **[工作区配置指南](skills/mindie-agent/references/workspace-setup.md)** 按需初始化 [vllm-ascend-workspace](https://github.com/mindie-agent/vllm-ascend-workspace.git)。
 
@@ -130,20 +131,15 @@ claude mcp list
 
 ---
 
-## 日常使用与命令参考
+## 日常使用与命令参考（极简单一入口 `/mindie-agent`）
 
-安装完成后，**`remote-dev` 远端开发工具在日常对话中默认自动触发**；而当你需要调取昇腾历史经验、领域知识库与 Skill 系统，或者需要查看状态、配置社区知识共享时，可在 Claude Code 中使用以下斜杠命令：
+为了将易用性做到极致，MindIE Agent 将所有交互能力全部收敛到了 **`/mindie-agent` 这一个统一入口**中。你**不需要记忆或感知任何复杂的子命令或参数**，底层操作上下文只在 Agent 需要时通过**渐进式披露（Progressive Disclosure）**按需向 Agent 展开：
 
-| 斜杠命令 | 用途说明 |
-|---|---|
-| `/mindie-agent <问题描述>` | **手动触发入口**：在需要排障、算子适配或性能调优时，输入 `/mindie-agent` 并阐述你的问题，即可唤醒昇腾领域知识库、历史经验与 Skill 系统；直接输入 `/mindie-agent`（或 `/mindie-agent:init`）也可打开配置向导。 |
-| `/mindie-agent:status` | **只读状态检查**：查看当前知识库配置、后台服务与存储健康度、当前任务绑定状态、诊断计数以及最近 5 次采集/贡献记录。 |
-| `/mindie-agent contribute --repository owner/repo --account USER --project-root /absolute/path --visibility public` | 显式配置公开知识贡献的目标仓库、GitHub 账号与本地项目根目录（默认关闭，需同时指定上述参数）。 |
-| `/mindie-agent:sharing-enable` / `/mindie-agent:sharing-disable` | 开启或暂停已配置项目范围内的知识共享（关闭后 `Stop` 阶段不读取对话、不采集、不调用整理器）。 |
-| `/mindie-agent:deactivate` | 解除当前会话任务的知识访问绑定（不卸载插件，也不影响全局配置）。 |
-| `/mindie-agent:recover` | 查看或恢复失败的贡献批次（若远端 PR 创建结果不确定，会先完成对账，绝不盲目重复提交）。 |
-| `/mindie-agent:reporting-status` | 查看产品自身故障上报开关及后台 Reporter 就绪状态。 |
-| `/mindie-agent:reporting-enable` / `/mindie-agent:reporting-disable` | 开启或关闭向 `mindie-agent/mindie-agent` 提交脱敏产品故障报告（开启后会返回一条一次性准备命令，在终端执行即可启用）。 |
+| 使用场景 | 你只需要输入 | 背后自动完成的事 |
+|---|---|---|
+| **日常昇腾排障、算子适配与调优** | `/mindie-agent <直接描述你的问题>` | 自动唤醒昇腾 Skill 引导与本地 `mindie-knowledge` 领域知识检索，配合 `remote-dev` 完成实机定位与验证 |
+| **首次初始化配置、查看状态或修改共享偏好** | `/mindie-agent`（或 `/mindie-agent 看下当前状态`、`/mindie-agent 开启/关闭社区经验共享`） | Agent 根据当前会话展开的上下文自动展示运行状态或引导完成配置，保存的选择跨会话与插件升级持久生效 |
+| **日常远端昇腾服务器/容器开发** | **无需任何斜杠命令**，直接用自然语言对话 | 常驻的 `remote-dev` MCP 工具集默认自动触发，完成远端文件读写、打补丁与后台作业轮询 |
 
 ### 自动更新与安全卸载
 
@@ -152,7 +148,6 @@ claude mcp list
   ```sh
   claude plugin uninstall mindie-agent@mindie-agent-cc --scope user --keep-data --json
   ```
-  > 提示：卸载插件不会自动修改跨插件共享的故障上报偏好；如需关闭，请在卸载前执行 `/mindie-agent:reporting-disable`。
 
 ---
 
