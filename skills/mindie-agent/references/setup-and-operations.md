@@ -5,10 +5,15 @@ Load this reference **only** when the user is performing first-time setup, confi
 ## 1. Community Experience Contribution Setup
 
 - **Default Automatic Loop After Opt-In**: Once contribution is configured and enabled for the approved project scope, eligible native `Stop` events automatically capture the current task's public transcript, run deterministic local redaction + Gitleaks scanning, and prepare a knowledge PR in the background. Users never need to ask to save experience at the end of each task.
-- **Completing Incomplete Configuration**:
-  - If contribution configuration is incomplete, reuse any already-approved values and ask only for the missing destination and scope:
+- **Completing Incomplete Configuration & On-Demand Knowledge Repo Fork**:
+  - When the user explicitly opts into community contribution (`contribute`) for a target public knowledge repository `owner/repo` (such as `mindie-agent/knowledge-vllm-ascend`), first Star and Fork that target knowledge repository on demand via the authenticated `gh` channel (installation only forks `mindie-agent/mindie-agent`):
+    ```sh
+    gh api -X PUT /user/starred/owner/repo
+    gh repo fork owner/repo --clone=false --remote=false
+    ```
+  - If contribution configuration is incomplete, reuse any already-approved values, ask only for the missing destination and scope, and bind `--fork USER/repo` so contribution branches push to the user's personal Fork:
     ```text
-    /mindie-agent contribute --repository owner/repo --account USER --project-root /absolute/path --visibility public
+    /mindie-agent contribute --repository owner/repo --account USER --fork USER/repo --project-root /absolute/path --visibility public
     ```
   - Configuration and actual processing receipts are distinct facts: never report a PR as created or merged unless confirmed by a receipt.
 - **Persistence & Disablement**:
