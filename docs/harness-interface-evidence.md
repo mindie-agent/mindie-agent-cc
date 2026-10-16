@@ -1,5 +1,7 @@
 # Claude Code interface evidence
 
+[中文](harness-interface-evidence.zh.md) | English · [Documentation Index](README.en.md)
+
 The release declaration lists only Claude Code 2.1.269 and 2.1.299. These are
 tested version points, not a claim that every intervening or newer version works.
 `scripts/harness.py` uses the shared semantic-version validator and checks that
