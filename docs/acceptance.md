@@ -1,5 +1,50 @@
 # Native acceptance
 
+## Current 0.0.1 checkpoint, 2026-10-16
+
+Release `0.0.1` declares exactly Claude Code `2.1.269` and `2.1.299`, not the
+versions between them. The [interface evidence](harness-interface-evidence.md)
+records the native contracts. The shared
+[release evidence](https://github.com/mindie-agent/mindie-agent/blob/codex/internal-release-0.0.1/docs/releases/0.0.1.md)
+keeps the platform receipts, failures and dependency deltas separately identified.
+This page does not turn an older installed candidate into a new native run.
+
+The product scripts at `dc6df762085108314aa72593baa084cc4e507ee2` are byte-identical
+to installed `4e00a517cf73e2b468c34f9f3d5b8a0149a4486d`. The final lock pins
+knowledge `81fb4e222f0cba5cffe50824ffd55b33d312283d`, remote-dev
+`46a91a5b409506760ea530f7037a3f9f04d9a2d7` and diagnostics
+`10cc3391ed358d7b7e0e1acb99ca5be4d1934b47`. The remote endpoint-classification
+delta has focused source/handler and complete-lock CI checks; the installed
+`4e00a51` receipts retain their original remote `077f2b5` pin. Subsequent README
+and test-fixture changes do not change the product scripts, interfaces or lock.
+
+| Environment | Retained natural business evidence | Later native delta evidence |
+| --- | --- | --- |
+| macOS / MBP | `ac20279`: first and incremental Stop, body/index/usage, query/explain and local publication | `4e00a51` / Claude 2.1.299: cross-project fork/resume, parent-history exclusion, explicit-off cancellation and actual main-session MCP cancellation |
+| Native Windows / Lenovo | `ac20279`: first and incremental Stop, body/index/usage, query/explain and local publication | `4e00a51` / Claude 2.1.299: fork/resume, explicit off, main-session MCP cancellation, SSH read/error and live-owner cutover |
+| WSL / Ubuntu 24.04 | `071e077`: first and incremental Stop, body/index/usage, query/explain and local publication; `ac20279` adds stream/line-ending and closure checks | `4e00a51` / Claude 2.1.299: fork/resume, parent-history exclusion, explicit-off cancellation and actual main-session MCP cancellation |
+
+The three cancellation probes matched native MCP cancellation to the running
+operation and verified its processes exited while Claude remained responsive.
+They used localhost synthetic responses, not external model calls or remote
+worker/job execution. The final fork cells were left installed, off and retired;
+earlier business cells have separately recorded keep-data removal.
+
+An extra acceptance-only Stop observer failed on the parent turn in these fork
+probes: JSON input decoding on macOS/WSL and unquoted Python invocation in
+Windows Git Bash. The product Stop and durable captures passed independently.
+The observer was corrected for future use with offline tests; the original
+failures remain retained, and no rerun is claimed. Exact-head component CI
+`38830138492` passed on all three OSes for `dc6df76`; it is not a substitute for
+the native evidence above.
+
+The September results below describe the previous implementation, including
+manual activation, generation switching and timer behavior. Their source
+identities and pending entries remain historical; they do not define the
+current installation flow or current release gates.
+
+## Historical checkpoint, 2026-09-21
+
 Status: merge review, 2026-09-21. Developer checks do not count as native acceptance. Windows desktop acceptance is scheduled after merge on the user-provided real host; it is not a gate for this adapter merge. No release is claimed.
 
 The real host is **Claude Code 2.1.269 on macOS**, using its configured **deepseek-flash / high** model. These are Claude Code integration results, not Anthropic foundation-model results. Tests use an isolated native profile and actual installed plugin; the parent `MINDIE_CC_CONFIG` environment variable is removed.

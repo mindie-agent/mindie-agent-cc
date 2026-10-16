@@ -30,11 +30,11 @@ updates and removal. This repository owns native task identity, hooks,
 transcript parsing and a fixed Python runtime for each installed release.
 Shared knowledge, publication and remote development remain independent packages.
 
-The first internal Release is being prepared as `0.0.1` / `v0.0.1`, without a
-beta suffix. The Release has not been published. Benchmark work is separate.
-Component tests and historical native evidence do not establish acceptance of
-this new installation path. Claude Code on macOS, native Windows and WSL are
-separate acceptance environments.
+Version `0.0.1` / `v0.0.1` is the first internal release, distributed as an
+ordinary GitHub Release without a beta suffix or prerelease flag. Benchmark
+work is separate. See the [current acceptance checkpoint](docs/acceptance.md)
+for the tested source identities and remaining scope limits. Claude Code on
+macOS, native Windows and WSL are separate acceptance environments.
 
 MindIE Agent inherits all nine [design principles](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.md).
 
@@ -55,9 +55,9 @@ version or unverified containment is a service error, with no unprotected
 fallback. Check the user manager with
 `systemctl --user show --property=Version`.
 
-Use Claude's Git marketplace for the published release source. The following
-`v0.0.1` commands become usable only after the Release exists. Until then, use
-an explicitly reviewed candidate source:
+Use Claude's Git marketplace with the immutable `v0.0.1` tag. Confirm the
+release is available in [GitHub Releases](https://github.com/mindie-agent/mindie-agent-cc/releases)
+before installing:
 
 Run these commands in a macOS/WSL shell or native Windows PowerShell, using the
 same Claude profile throughout:
@@ -73,7 +73,7 @@ claude plugin list --json
 claude mcp list
 ```
 
-The current candidate declares exactly Claude Code `2.1.269` and `2.1.299`,
+Release `0.0.1` declares exactly Claude Code `2.1.269` and `2.1.299`,
 not every version between them. Check the actual CLI version and confirm that
 the native installed record reports `mindie-agent@mindie-agent-cc`, version
 `0.0.1`, enabled with user scope in the intended profile.
