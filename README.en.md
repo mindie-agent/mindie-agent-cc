@@ -41,7 +41,7 @@ MindIE Agent uses a two-mode trigger model—**manual on-demand activation for d
 | :--- | :--- | :--- | :--- |
 | **Experience, Knowledge & Skill System**<br/>(`mindie-knowledge` + `mindie-agent` Skill) | **🎯 Manual Trigger** | When troubleshooting Ascend / `vLLM-Ascend` errors, adapting operators, debugging Graph Mode failures, or tuning performance/accuracy and you want historical experience, domain knowledge, and Skill guidance | Explicitly type **`/mindie-agent` + your problem description** (all setup and status actions are also wrapped inside `/mindie-agent`) |
 | **Remote Ascend NPU Development**<br/>(`remote-dev` MCP toolset) | **⚡ Default Auto-Trigger** | When syncing local edits to a remote Ascend server/container, running NPU builds/tests, checking `npu-smi`, or tailing long job logs | **No slash command needed**—just describe the remote task in natural language |
-| **Community Experience Contribution Loop**<br/>(`Stop` Auto-Capture + Gitleaks Redaction) | **🔄 Default Auto-Trigger After Opt-In** | Once you enable community contribution during installation or initial setup | **No need to mention in prompts**—every session is automatically redacted and packaged into a knowledge PR in the background when the task ends |
+| **Community Experience Loop**<br/>(`Stop` Auto-Capture + Gitleaks Redaction) | **🔄 Silent Background Run** | When contributing sanitized debugging takeaways back to the open-source knowledge base | **Set once, zero daily friction**—once enabled in setup, every session is automatically redacted and packaged into a knowledge PR in the background |
 
 ### Scenario 1: Type `/mindie-agent` to Invoke Experience, Knowledge & Skills (Manual Trigger)
 > **The Problem**: When you hit an `HCCL` communication timeout, an `ACL` operator failure, a Graph Mode compilation error, or numerical drift, digging through scattered GitHub Issues and chat logs takes hours.  
@@ -59,13 +59,13 @@ MindIE Agent uses a two-mode trigger model—**manual on-demand activation for d
 > ```
 > **What Happens**: The built-in `remote-dev` MCP server is always on and **triggers automatically by default** whenever your prompt involves remote servers, containers, or NPU commands—handling remote file reads/writes, patch application, managed background jobs, and live log polling over SSH. It works completely independently, even if the knowledge service or community sharing is turned off.
 
-### Scenario 3: Opt In Once, and Every Debugging Session Is Automatically Sanitized & Contributed in the Background
+### Scenario 3: Silent Background Experience Capture & Community Contribution (Set Once, Zero Friction)
 > **The Problem**: After spending half a day root-causing a subtle NPU issue, that insight usually disappears when you close the terminal—yet sharing raw transcripts risks leaking internal IPs, tokens, or file paths.  
-> **Copy-Paste Example (just ask your technical question normally—no need to ask the Agent to "save the experience")**:
+> **Copy-Paste Example (just ask your technical question normally)**:
 > ```text
 > /mindie-agent Help me diagnose this custom Ascend operator build failure using the knowledge base and our remote NPU container, and verify the fix with unit tests.
 > ```
-> **What Happens**: Community contribution is **off by default**. Once you opt in during setup, **you never need to ask the Agent to capture your experience in each prompt**—every time a task finishes (`Stop`), the plugin automatically extracts public user/assistant messages in the background, runs local deterministic redaction and Gitleaks scanning, generates navigation metadata, and opens a sanitized knowledge PR.
+> **What Happens**: Community contribution is **off by default**. Once you opt in during initial setup, every time a session finishes (`Stop`), the plugin silently extracts public user/assistant messages in the background, runs local deterministic redaction and Gitleaks scanning, generates navigation metadata, and opens a sanitized knowledge PR—with zero extra steps required during your daily work.
 > - Read the **[User & Contribution Notice](skills/mindie-agent/references/user-notice.md)** for full details on sharing scope, redaction limits, and public Git history.
 > - To set up a multi-task Git worktree layout for `vllm` and `vllm-ascend`, see **[Workspace Setup](skills/mindie-agent/references/workspace-setup.md)** and [vllm-ascend-workspace](https://github.com/mindie-agent/vllm-ascend-workspace.git).
 
@@ -81,8 +81,8 @@ Copy and paste the following prompt directly to Claude Code (or any terminal-cap
 Please install https://github.com/mindie-agent/mindie-agent-cc for me
 ```
 
-<details open>
-<summary>🤖 <b>Automated Installation Protocol for AI Agents (Instructions for AI Agents)</b></summary>
+<details>
+<summary>🤖 <b>Automated Installation Protocol for AI Agents (Click to expand / Automatically parsed by AI Agents)</b></summary>
 
 If you are an AI Agent asked by the user to install this plugin, run the following deterministic steps directly in the terminal **without asking the user to read the documentation manually**:
 
