@@ -29,25 +29,42 @@
 
 **MindIE Agent for Claude Code**（`mindie-agent-cc`）是 [MindIE Agent](https://github.com/mindie-agent/mindie-agent) 面向 Claude Code 打造的原厂插件。它把 **`vLLM-Ascend` 领域知识检索**、**SSH 远端昇腾 NPU 开发执行**以及**隐私受控的本地经验闭环**直接带进你的日常 Claude Code 会话中。
 
-项目设计遵循 [MindIE Agent 工程设计原则](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.md)：平时写代码、看仓库、跑测试**不需要任何前置激活步骤**，所有工具按需介入；报错信息真实透明，不搞静默降级或黑盒重试。
+项目设计遵循 [MindIE Agent 工程设计原则](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.md)：**领域知识与 Skill 体系通过 `/mindie-agent` 手动按需唤醒**，不干扰非昇腾常规任务；**`remote-dev` 远端昇腾开发工具默认常驻自动触发**；所有报错信息真实透明，不搞静默降级或黑盒重试。
 
 ---
 
-## 装上之后能做什么？
+## 装上之后能做什么？（触发方式与使用示例）
 
-在实际的昇腾推理与算子研发中，你可以直接用自然语言让 Claude Code 配合本插件完成以下典型工作：
+MindIE Agent 采用**「知识与 Skill 手动按需触发 + 远端执行工具默认常驻触发」**的双模式设计：
 
-### 场景 1：排障时按需查阅 `vLLM-Ascend` 实战经验（`mindie-knowledge`）
+| 能力模块 | 触发方式 | 什么时候用？ | 怎么触发？ |
+| :--- | :--- | :--- | :--- |
+| **经验、知识库与 Skill 系统**<br/>（`mindie-knowledge` + `mindie-agent` Skill） | **🎯 手动触发** | 遇到昇腾 / `vLLM-Ascend` 报错排障、算子适配、图模式编译异常、精度/性能调优，需要调取历史踩坑经验、领域知识库与专业 Skill 引导时 | 在输入框中显式输入 **`/mindie-agent` + 你的问题描述** |
+| **远端昇腾 NPU 开发与执行**<br/>（`remote-dev` MCP 工具集） | **⚡ 默认自动触发** | 日常需要将本地改动同步到远端昇腾服务器/容器、在 NPU 上跑编译/测试、查看 `npu-smi` 或实时轮询长日志时 | **无需输入任何斜杠命令**，直接用自然语言描述远端操作即可 |
+
+### 场景 1：输入 `/mindie-agent` 唤醒经验、知识库与 Skill 排障（手动触发）
 > **痛点**：遇到 `HCCL` 通信超时、`ACL` 算子报错、图模式（Graph Mode）编译失败或精度偏差时，翻遍历史 Issue 和聊天记录也很难找齐适用条件。  
-> **怎么做**：直接把报错日志贴给 Claude。插件会按需检索本地同步的 [`knowledge-vllm-ascend`](https://github.com/mindie-agent/knowledge-vllm-ascend) 知识包，返回带有**适用版本、验证证据和已知限制**的真实工程案例作为排障参考，不强制打断你的排障思路。
+> **用法示例（直接复制发给 Claude Code）**：
+> ```text
+> /mindie-agent 我在 8 卡 910B 上用 vllm-ascend 跑 DeepSeek-R1 推理时遇到 HCCL AllReduce timeout (hcclRet=4)，CANN 是 8.0.RC3，请结合历史经验帮我排查根因。
+> ```
+> **会发生什么**：输入 `/mindie-agent` 后，插件会唤醒 `mindie-agent` Skill 与本地同步的 [`knowledge-vllm-ascend`](https://github.com/mindie-agent/knowledge-vllm-ascend) 知识库，检索出带有**适用版本、验证证据和已知限制**的真实工程案例作为排障参考，不强制打断你的排障思路。
 
-### 场景 2：本地写代码，远端昇腾 NPU 服务器上跑编译与单测（`remote-dev`）
-> **痛点**：开发机是 Mac 或 Windows 笔记本，而昇腾 NPU 环境在远端服务器上，频繁手动同步补丁、看长任务日志非常繁琐。  
-> **怎么做**：直接告诉 Claude *“把当前改动同步到远端昇腾开发机，跑一下对应的单元测试并盯着日志”*。内置的 `remote-dev` MCP 服务支持文件读写、补丁同步、长耗时编译/测试后台托管与实时日志轮询。即使不开启知识库服务或社区贡献，`remote-dev` 也能完全独立工作。
+### 场景 2：日常对话直接操作远端昇腾 NPU 服务器与容器（`remote-dev` 默认自动触发）
+> **痛点**：开发机是 Mac 或 Windows 笔记本，而昇腾 NPU 环境在远端服务器或容器里，频繁手动同步补丁、看长任务日志非常繁琐。  
+> **用法示例（无需斜杠命令，直接用自然语言发给 Claude Code）**：
+> ```text
+> 帮我连上远端 910B 服务器的 vllm_dev 容器，看看当前 NPU 显存占用，然后把我本地改好的 rotary_embedding.py 同步过去跑一下对应的 pytest 单测。
+> ```
+> **会发生什么**：内置的 `remote-dev` MCP 服务作为常驻工具集，会在识别到远端开发意图时**默认自动触发**，完成文件读写、补丁同步、长耗时编译/测试后台托管与实时日志轮询。即使不开启知识库服务或社区贡献，`remote-dev` 也能完全独立工作。
 
-### 场景 3：将踩坑经验安全脱敏后沉淀回开源社区（可选 Opt-in）
+### 场景 3：唤醒 `/mindie-agent` 攻坚并沉淀脱敏经验回开源社区（可选 Opt-in）
 > **痛点**：花了大半天定位出一个棘手的算子兼容或性能问题，关掉终端后经验就散落了；想分享又担心泄露机器 IP、Token 或私有路径。  
-> **怎么做**：社区共享**默认关闭**。仅在你显式对某个开源仓库开启贡献后，每次任务结束（`Stop`）时插件会自动提取可见对话，在本地通过确定性规则与 Gitleaks 完成脱敏，生成检索索引并整理为开源知识 PR。
+> **用法示例（直接复制发给 Claude Code）**：
+> ```text
+> /mindie-agent 帮我结合知识库和远端 NPU 容器定位一下当前 vllm-ascend 自定义算子编译失败的问题，修好跑通单测后我们把这次排障经验沉淀下来。
+> ```
+> **会发生什么**：社区共享**默认关闭**。仅在你显式对某个开源仓库开启贡献后，每次任务结束（`Stop`）时插件会自动提取可见对话，在本地通过确定性规则与 Gitleaks 完成脱敏，生成检索索引并整理为开源知识 PR。
 > - 关于共享范围、本地脱敏边界与公开 Git 历史的详细说明，请参阅 **[用户须知](skills/mindie-agent/references/user-notice.md)**。
 > - 如需在本地快速搭建 `vllm` + `vllm-ascend` 多任务 Git Worktree 协同目录，可参考 **[工作区配置指南](skills/mindie-agent/references/workspace-setup.md)** 按需初始化 [vllm-ascend-workspace](https://github.com/mindie-agent/vllm-ascend-workspace.git)。
 
@@ -115,11 +132,11 @@ claude mcp list
 
 ## 日常使用与命令参考
 
-安装完成后，**日常编码、检索知识或执行远端命令无需运行任何激活指令**。当你需要查看插件状态、开启社区知识共享或调整故障上报开关时，可在 Claude Code 中使用以下斜杠命令：
+安装完成后，**`remote-dev` 远端开发工具在日常对话中默认自动触发**；而当你需要调取昇腾历史经验、领域知识库与 Skill 系统，或者需要查看状态、配置社区知识共享时，可在 Claude Code 中使用以下斜杠命令：
 
 | 斜杠命令 | 用途说明 |
 |---|---|
-| `/mindie-agent` 或 `/mindie-agent:init` | 首次配置向导与状态概览。保存的授权选择在跨会话、Fork、重启与插件升级后持久保留，不会重复打扰。 |
+| `/mindie-agent <问题描述>` | **手动触发入口**：在需要排障、算子适配或性能调优时，输入 `/mindie-agent` 并阐述你的问题，即可唤醒昇腾领域知识库、历史经验与 Skill 系统；直接输入 `/mindie-agent`（或 `/mindie-agent:init`）也可打开配置向导。 |
 | `/mindie-agent:status` | **只读状态检查**：查看当前知识库配置、后台服务与存储健康度、当前任务绑定状态、诊断计数以及最近 5 次采集/贡献记录。 |
 | `/mindie-agent contribute --repository owner/repo --account USER --project-root /absolute/path --visibility public` | 显式配置公开知识贡献的目标仓库、GitHub 账号与本地项目根目录（默认关闭，需同时指定上述参数）。 |
 | `/mindie-agent:sharing-enable` / `/mindie-agent:sharing-disable` | 开启或暂停已配置项目范围内的知识共享（关闭后 `Stop` 阶段不读取对话、不采集、不调用整理器）。 |
