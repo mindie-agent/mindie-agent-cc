@@ -88,7 +88,9 @@ def test_interrupted_cold_bootstrap_reaps_uv_tree_without_publishing_ready(tmp_p
     uv.write_text(
         "import json,os,subprocess,sys,time\n"
         "child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(30)'])\n"
-        f"open({str(marker)!r},'w').write(json.dumps([os.getpid(),child.pid]))\n"
+        f"with open({str(marker.with_suffix('.tmp'))!r},'w',encoding='utf-8') as output:\n"
+        "    output.write(json.dumps([os.getpid(),child.pid]))\n"
+        f"os.replace({str(marker.with_suffix('.tmp'))!r},{str(marker)!r})\n"
         "time.sleep(30)\n", encoding="utf-8")
     runtimes = tmp_path / "runtimes"
     program = (

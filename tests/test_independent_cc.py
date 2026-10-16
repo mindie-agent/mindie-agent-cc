@@ -168,6 +168,9 @@ def _file_url(path: Path) -> str:
 
 
 class LaneCase(unittest.TestCase):
+    # Subclasses that can start a knowledge service must opt into exact-root cleanup.
+    may_start_knowledge_service = False
+
     def setUp(self):
         LANE_STATE.mkdir(parents=True, exist_ok=True)
         self.tmp = Path(tempfile.mkdtemp(prefix="case-", dir=LANE_STATE))
@@ -198,7 +201,8 @@ class LaneCase(unittest.TestCase):
 
     def tearDown(self):
         try:
-            reap_services(self.tmp)
+            if self.may_start_knowledge_service:
+                reap_services(self.tmp)
         finally:
             shutil.rmtree(self.tmp, ignore_errors=True)
             for key, value in self._saved_env.items():
@@ -772,6 +776,8 @@ def _race_worker(config, home, scripts, kind, value, rounds, barrier):
 
 
 class StopGateTests(LaneCase):
+    may_start_knowledge_service = True
+
     def _arm(self, case: Path, *, sharing: bool, choice=None, corrupt=False, authority=None):
         import support
         from mindie_knowledge.loop.handoff import prepare_schema
@@ -1014,6 +1020,8 @@ class StopGateTests(LaneCase):
 
 
 class EntryContractTests(LaneCase):
+    may_start_knowledge_service = True
+
     def _config(self, sharing=False):
         import support
 
