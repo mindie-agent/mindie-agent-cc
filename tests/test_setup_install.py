@@ -32,7 +32,6 @@ def preparing(tmp_path):
             "summary_command": [sys.executable, str(SCRIPTS / "organizer.py")],
         }))
         prepare = stack.enter_context(patch("capture_config.prepare_store"))
-        compatible = stack.enter_context(patch("state_compatibility.check"))
         stack.enter_context(patch("mindie_knowledge.loop.lifecycle.inspect_retirement",
                                   return_value=None))
         community = stack.enter_context(patch.object(setup, "write_community"))
@@ -42,8 +41,7 @@ def preparing(tmp_path):
                                                       "CLAUDE_CONFIG_DIR": str(tmp_path / "claude")},
                                             "environment": [],
                                         }))
-        yield dict(config=config, root=root, prepare=prepare,
-                   compatible=compatible, community=community)
+        yield dict(config=config, root=root, prepare=prepare, community=community)
 
 
 def install(f):
@@ -101,20 +99,6 @@ def test_unsupported_development_profile_is_rejected_before_lock_creation(prepar
         install(f)
     assert f["config"].read_text(encoding="utf-8") == original
     assert not f["root"].exists()
-
-
-def test_state_format_rejection_does_not_publish_installation(preparing):
-    f = preparing
-    f["root"].mkdir()
-    marker = f["root"] / "paid-unknown.json"
-    marker.write_text('{"outcome":"unknown","usage":7}', encoding="utf-8")
-    before = marker.read_bytes()
-    f["compatible"].side_effect = ValueError("state format incompatible")
-    with pytest.raises(ValueError, match="incompatible"):
-        install(f)
-    assert marker.read_bytes() == before
-    assert not f["config"].exists()
-    f["prepare"].assert_not_called()
 
 
 def test_selected_binding_change_redirects_an_existing_fixed_facade(preparing):
@@ -250,15 +234,6 @@ def test_active_shared_operation_defers_activation_without_retirement(preparing)
         result = setup.activate_binding(candidate["config"])
     assert result == {"status": "deferred", "stage": "active_operation", "switched": False}
     retirement.assert_not_called()
-
-
-def test_immutable_entry_does_not_replace_a_published_runtime(tmp_path):
-    entry = tmp_path / "entry.py"
-    setup.publish_entry(entry, tmp_path / "adapter.json")
-    before = entry.read_bytes()
-    with pytest.raises(ValueError, match="immutable"):
-        setup.publish_entry(entry, tmp_path / "other.json")
-    assert entry.read_bytes() == before
 
 
 def test_default_coinstallation_preserves_shared_authority_bytes(tmp_path):

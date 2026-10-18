@@ -65,7 +65,6 @@ def adapter_check(source):
         "bounded.py",
         "owned_process.py",
         "mcp_server.py",
-        "state_compatibility.py",
         "receipt_layout.py",
         "candidate_validate.py",
         "product_contract.py",

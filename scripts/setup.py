@@ -101,7 +101,6 @@ def prepare_binding(source, config=None, *, root=None, domain="vllm-ascend",
     from bootstrap import runtime_key
     from capture_config import prepare, prepare_store
     from harness import require_engine_support
-    from state_compatibility import check
 
     source = Path(source).resolve()
     config = Path(config or default_config_path()).expanduser().resolve()
@@ -129,7 +128,6 @@ def prepare_binding(source, config=None, *, root=None, domain="vllm-ascend",
             raise InstallationUnavailable("prepared candidate identity differs")
         engine = _read(value["engine_config"])
         require_engine_support(engine, source=source)
-        check(engine, str(Path(value["state_dir"]) / "remote"))
     else:
         validation = validate_candidate(source)
         if selected is None:
@@ -137,7 +135,6 @@ def prepare_binding(source, config=None, *, root=None, domain="vllm-ascend",
                           admission_path=str(domain_root / "admission.sqlite3"))
         else:
             engine = _read(selected["engine_config"])
-        check(engine, str(Path(adapter["state_dir"]) / "remote"))
         engine.update(transcript_adapter=str(HERE / "transcript.py"),
                       **prepare(sys.executable, HERE),
                       community_config=adapter["community_config"],

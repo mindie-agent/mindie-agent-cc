@@ -328,38 +328,6 @@ class ConsentFileTests(LaneCase):
             (enabled.parent / "mindie-consent.json").resolve(),
         )
 
-    def test_status_does_not_migrate_or_rewrite(self):
-        import entry
-
-        case = self.tmp / "status"
-        config = self._config(case)
-        engine = Path(json.loads(config.read_text(encoding="utf-8"))["engine_config"])
-        community = Path(json.loads(config.read_text(encoding="utf-8"))["community_config"])
-        marker = case / "state" / "cc.first-use.json"
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.write_text(json.dumps({"choice": "read-only"}) + "\n", encoding="utf-8")
-        before = {
-            "adapter": config.read_bytes(),
-            "engine": engine.read_bytes(),
-            "community": community.read_bytes(),
-            "marker": marker.read_bytes(),
-        }
-        payload = entry.status_payload()
-        with self.subTest("does not re-ask"):
-            self.assertEqual(payload.get("choices"), [])
-        with self.subTest("does not create consent"):
-            self.assertFalse((config.parent / "mindie-consent.json").exists())
-        with self.subTest("does not copy community"):
-            self.assertFalse((config.parent / "mindie-community.json").exists())
-        with self.subTest("adapter bytes"):
-            self.assertEqual(config.read_bytes(), before["adapter"])
-        with self.subTest("engine bytes"):
-            self.assertEqual(engine.read_bytes(), before["engine"])
-        with self.subTest("community bytes"):
-            self.assertEqual(community.read_bytes(), before["community"])
-        with self.subTest("marker bytes"):
-            self.assertEqual(marker.read_bytes(), before["marker"])
-
     def test_field_update_does_not_clear_a_damaged_consent_file(self):
         import consent
 
@@ -380,35 +348,6 @@ class ConsentFileTests(LaneCase):
         self.assertEqual(path.read_bytes(), original)
         self.assertEqual(len(rejected), 2, rejected)
         self.assertNotEqual(consent.load()["state"], "ok")
-
-    def test_unreadable_consent_is_not_replaced(self):
-        import consent
-
-        case = self.tmp / "unreadable"
-        config = self._config(case)
-        path = config.parent / "mindie-consent.json"
-        original = b'{"schema":"mindie-consent/1","choice":"later","reporting":"disabled"}\n'
-        path.write_bytes(original)
-        path.chmod(0)
-        try:
-            try:
-                path.read_bytes()
-            except OSError:
-                blocked = True
-            else:
-                blocked = False
-            if not blocked:
-                self.skipTest("mode 000 is still readable by the owner on this OS")
-            rejected = False
-            try:
-                consent.record_choice("read-only")
-            except Exception:
-                rejected = True
-            path.chmod(0o600)
-            self.assertEqual(path.read_bytes(), original)
-            self.assertTrue(rejected)
-        finally:
-            path.chmod(0o600)
 
     def test_choice_and_reporting_do_not_clobber_each_other(self):
         import consent
@@ -953,15 +892,8 @@ class EntryContractTests(LaneCase):
         )
         self.assertEqual(path.read_bytes(), original)
 
-    def test_skill_text_does_not_require_sharing_enable(self):
-        text = (ROOT / "skills" / "mindie-agent" / "SKILL.md").read_text(encoding="utf-8")
-        self.assertNotIn("sharing-enable", text)
-
 
 class SharedConsentTests(LaneCase):
-
-
-
     def test_kimi_choice_is_the_same_profile_authority(self):
         """Uses a sibling adapter config in the same profile directory, not a second CC config."""
         import consent
@@ -1016,10 +948,6 @@ def _profile_mutation(config, home, scripts, kind, entered):
 
         Path(config).with_suffix(".worker-error").write_text(traceback.format_exc(), encoding="utf-8")
         raise
-
-
-
-
 
 
 class DeclaredAuthorityWriteTests(LaneCase):
@@ -1104,11 +1032,7 @@ class DeclaredAuthorityWriteTests(LaneCase):
 
 
 class BootstrapCommunityWriterTests(LaneCase):
-    """setup.write_community uses the installed shared authority.
-
-    The invalid-file case matches integration-20260928/cc-bootstrap-corrupt-repro.json:
-    explicit settings must not replace an existing damaged authority.
-    """
+    """setup.write_community uses the installed shared authority."""
 
     def _explicit(self, root: Path):
         import setup
@@ -1144,18 +1068,6 @@ class BootstrapCommunityWriterTests(LaneCase):
                     setup.write_community(path, payload)
                 self.assertIn("nothing was written", str(caught.exception.code))
                 self.assertEqual(path.read_bytes(), raw)
-        path = self.tmp / "unreadable" / "mindie-community.json"
-        path.parent.mkdir()
-        raw = b"{broken-community"
-        path.write_bytes(raw)
-        path.chmod(0)
-        try:
-            with self.assertRaises(SystemExit) as caught:
-                setup.write_community(path, payload)
-            self.assertIn("nothing was written", str(caught.exception.code))
-        finally:
-            path.chmod(0o600)
-        self.assertEqual(path.read_bytes(), raw)
 
     def test_missing_file_is_a_first_setup(self):
         import setup

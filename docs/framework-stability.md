@@ -30,7 +30,6 @@ SQLite requirement. Install `pip install -e '.[test]'` for core, or
 `uv sync --locked --no-editable --group test` for an adapter, then run:
 
 ```sh
-MINDIE_TEST_KIMI_SCRIPTS="$PWD/tests/fixtures/kimi-86de2c3/scripts" \
 MINDIE_TEST_KNOWLEDGE_CHECKOUT=/absolute/path/to/mindie-knowledge-pin \
 python -m unittest discover -s tests
 ```
