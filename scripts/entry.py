@@ -352,6 +352,10 @@ def _finish_contribution(result: dict) -> dict:
     except consent_mod.ConsentError as exc:
         result["consent_error"] = dict(state=exc.state, error=str(exc))
     result["service"] = _prepare_capture_service()
+    if str(result.get("service", "")).startswith("prepare-failed:") or result.get("consent_error"):
+        result["status"] = "degraded"
+        result["experience"] = "unavailable"
+        result["warning"] = f"knowledge capture service could not be prepared ({result.get('service')})"
     return result
 
 
@@ -391,7 +395,9 @@ def _apply_contribute(payload, session, event, configured):
     payload = _finish_contribution(payload)
     payload.update(status_payload(session))
     if str(payload.get("service", "")).startswith("prepare-failed:") or payload.get("consent_error"):
+        payload["status"] = "degraded"
         payload["experience"] = "unavailable"
+        payload["warning"] = f"knowledge capture service could not be prepared ({payload.get('service')})"
     return payload
 
 
@@ -458,6 +464,10 @@ def _configured_init_activation(session, cwd, ident):
         project_root=lease["project_root"],
         service=service,
     )
+    if str(service).startswith("prepare-failed:"):
+        payload["status"] = "degraded"
+        payload["experience"] = "unavailable"
+        payload["warning"] = f"knowledge capture service could not be prepared ({service})"
     return payload
 
 

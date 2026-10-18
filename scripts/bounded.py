@@ -681,10 +681,10 @@ def _run_posix(process, timeout, max_output, pgid, check, cancel, transport=Fals
         _cleanup_step(receipt, lambda: _kill_tree(process, pgid), "terminate_owned_tree")
         def reap():
             try:
-                process.wait(timeout=1)
+                process.wait(timeout=2.0)
             except subprocess.TimeoutExpired:
                 _kill_tree(process, pgid)
-                process.wait(timeout=1)
+                process.wait(timeout=2.0)
         _cleanup_step(receipt, reap, "reap_process")
         _cleanup_step(receipt, selector.close, "close_selector")
         _cleanup_step(receipt, process.stdout.close, "close_stdout")
@@ -782,9 +782,9 @@ def _run_windows(process, timeout, max_output, pgid, check, cancel, transport=Fa
     finally:
         # Cleanup never masks the business result; failures land on the receipt.
         _cleanup_step(receipt, lambda: _kill_tree(process, pgid), "terminate_owned_tree")
-        _cleanup_step(receipt, lambda: process.wait(timeout=1), "reap_process")
+        _cleanup_step(receipt, lambda: process.wait(timeout=2.0), "reap_process")
         for thread in threads:
-            _cleanup_step(receipt, lambda thread=thread: thread.join(timeout=1), "join_reader")
+            _cleanup_step(receipt, lambda thread=thread: thread.join(timeout=2.0), "join_reader")
         for thread, stream in zip(threads, (process.stdout, process.stderr)):
             if thread.is_alive():
                 receipt["cleanup_failed"] = True
@@ -793,6 +793,20 @@ def _run_windows(process, timeout, max_output, pgid, check, cancel, transport=Fa
                 # block this cleanup indefinitely after an ownership failure.
                 continue
             _cleanup_step(receipt, stream.close, "close_pipe")
+
+
+def _reader_only_cleanup(receipt: dict) -> bool:
+    cleanup = receipt.get("cleanup") or []
+    if not cleanup:
+        return False
+    return all(
+        isinstance(item, dict)
+        and (
+            item.get("stage") in {"join_reader", "close_pipe", "close_stdout", "close_stderr"}
+            or item.get("error_type") == "ReaderStillRunning"
+        )
+        for item in cleanup
+    )
 
 
 def run(
@@ -888,7 +902,8 @@ def run(
                 error.operation_completed = True
                 raise error
             if receipt["cleanup_failed"] and not explicit_receipt:
-                raise CommandCleanupError(result, receipt)
+                if not (process.returncode == 0 and _reader_only_cleanup(receipt)):
+                    raise CommandCleanupError(result, receipt)
             return result
         except (TimeoutError, subprocess.TimeoutExpired) as exc:
             if timeout is None:

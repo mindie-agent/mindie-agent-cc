@@ -152,7 +152,7 @@ def publication_git(args, code, env):
 
     receipt = {}
     try:
-        output = run(args, "", timeout=None, env=env, check=False, receipt=receipt)
+        output = run(args, "", timeout=60.0, env=env, check=False, receipt=receipt)
     except Exception as exc:
         # An incomplete _spawn may already have created/resumed a process.
         # Only the runner's explicit pre-start cancellation proves no start.

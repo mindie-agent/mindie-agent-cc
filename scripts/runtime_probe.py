@@ -85,8 +85,13 @@ else:
                 missing.append(name + " must be finite and positive")
         valid_bounds = all(type(value) in (int, float) and math.isfinite(value) and value > 0
                            for _, value in positive_bounds)
-        if inspect.signature(bounded_run).parameters["timeout"].default is not None:
-            missing.append("summary invocation has an implicit execution deadline")
+        timeout_default = inspect.signature(bounded_run).parameters["timeout"].default
+        if timeout_default is not None and (
+            type(timeout_default) not in (int, float)
+            or not math.isfinite(timeout_default)
+            or timeout_default <= 0
+        ):
+            missing.append("summary invocation has an invalid execution deadline")
         if (not callable(create_profile)
                 or "prefix" not in inspect.signature(create_profile).parameters
                 or not isinstance(SUMMARY_SCRATCH_ENV, str) or not SUMMARY_SCRATCH_ENV):

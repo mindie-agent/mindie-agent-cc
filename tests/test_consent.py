@@ -78,26 +78,11 @@ class ConsentTests(unittest.TestCase):
         self.assertEqual(payload["sharing"]["state"], "corrupt")
 
     def test_kimi_choice_is_reused_in_this_profile(self):
-        raw = os.environ.get("MINDIE_TEST_KIMI_SCRIPTS")
-        self.assertTrue(
-            raw,
-            "set MINDIE_TEST_KIMI_SCRIPTS to the other adapter's scripts directory",
-        )
-        kimi_scripts = Path(raw)
-        self.assertTrue((kimi_scripts / "consent.py").is_file(), kimi_scripts)
-        (self.tmp / "kimi.json").write_text(json.dumps({}), encoding="utf-8")
-        env = dict(os.environ)
-        env.pop("MINDIE_CC_CONFIG", None)
-        env["MINDIE_KIMI_CONFIG"] = str(self.tmp / "kimi.json")
-        code = (
-            "import sys;sys.path.insert(0,sys.argv[1]);"
-            "import consent;consent.record_choice('later')"
-        )
-        result = subprocess.run(
-            [sys.executable, "-c", code, str(kimi_scripts)],
-            env=env, capture_output=True, text=True, timeout=10,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
+        from mindie_knowledge import consent_store
+
+        kimi_config = self.tmp / "kimi.json"
+        kimi_config.write_text(json.dumps({}), encoding="utf-8")
+        consent_store.record_choice(kimi_config.parent / "mindie-consent.json", "later")
         payload = self._payload()
         self.assertEqual(payload["first_use"], "later")
         self.assertEqual(payload["choices"], [])

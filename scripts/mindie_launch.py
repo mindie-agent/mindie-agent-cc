@@ -21,7 +21,9 @@ from install_state import (
     InstallationUnavailable, LockTimeout, binding_snapshot, installed_binding,
 )
 
-HOOK_TOTAL = 1.5
+HOOK_TOTAL = float(os.environ.get("MINDIE_HOOK_TOTAL_SECONDS") or 10.0)
+HOOK_LOCK_BUDGET = float(os.environ.get("MINDIE_HOOK_LOCK_BUDGET_SECONDS") or 2.0)
+BOOTSTRAP_TOTAL = float(os.environ.get("MINDIE_BOOTSTRAP_TOTAL_SECONDS") or 540.0)
 # Knowledge stdout only. A legal maximum page measured 817407 bytes.
 KNOWLEDGE_MAX_OUTPUT = 1024 * 1024
 MAX_RPC_ID = 256
@@ -236,7 +238,7 @@ def _hook(op: str) -> int:
     try:
         admission = (
             nullcontext(binding_snapshot()) if op == "stop"
-            else installed_binding(timeout=max(0, deadline - time.monotonic()))
+            else installed_binding(timeout=min(HOOK_LOCK_BUDGET, max(0, deadline - time.monotonic())))
         )
         with admission as binding:
             stage = "sharing-probe"
@@ -628,17 +630,20 @@ def main(argv=None) -> int:
     kind = argv[0] if argv else ""
     name = argv[1] if len(argv) > 1 else ""
     if kind == "hook" and name == "session-start":
-        event = _read_hook_stdin(time.monotonic() + HOOK_TOTAL)
+        deadline = time.monotonic() + BOOTSTRAP_TOTAL
+        event = _read_hook_stdin(deadline)
         if not event:
             _record_hook("input", "missing_identity", op="session-start")
             return _hook_warning()
         try:
-            with installed_binding() as binding:
+            with installed_binding(timeout=max(0.0, deadline - time.monotonic())) as binding:
                 from harness import require_binding_support
                 require_binding_support(binding)
                 selected = _runtime(binding)
                 script = Path(selected["scripts"]) / "maintenance.py"
+                remaining = max(0.01, deadline - time.monotonic())
                 raw = bounded.run([selected["python"], str(script)], event,
+                                  timeout=remaining,
                                   env=_child_env(selected), cwd=str(script.parent))
             result = json.loads(raw)
         except (InstallationUnavailable, LockTimeout):
