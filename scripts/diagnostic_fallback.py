@@ -1,4 +1,20 @@
-"""Standalone local diagnostics fallback. Stdlib only."""
+"""Standalone local diagnostics fallback. Stdlib only.
+
+[Role]
+Records redacted local diagnostic incidents when the full `mindie_diagnostics`
+runtime package is not yet available (e.g., during bootstrap failure).
+
+[Invariants]
+- Validates incident schemas, redacts sensitive tokens/paths, and enforces
+  `_NEVER_REPORTABLE` categories (`caller`, `cancelled`, `business`, `connectivity`).
+
+[Timeouts & Locks]
+- Uses thread-safe atomic file writes with bounded retention.
+
+[Side-Effect Policy]
+- Writes only to the local MindIE diagnostics directory; never raises to break
+  the caller's primary control flow.
+"""
 
 from __future__ import annotations
 

@@ -1,4 +1,21 @@
-"""One installation profile and its existing operation lock."""
+"""One installation profile and its existing operation lock.
+
+[Role]
+Manages the cross-process `OperationLock` (`operation.lock`), atomic JSON
+writes, and validation of the installed runtime binding (`installation.json`).
+
+[Invariants]
+- Verifies `INSTALLATION_SCHEMA` (`mindie-cc-installation/1`) and `FACADE_PROTOCOL`
+  before returning a runtime binding.
+
+[Timeouts & Locks]
+- `OperationLock` polls `flock`/`msvcrt.locking` up to caller-specified
+  `timeout` seconds and raises `LockTimeout` on expiry.
+
+[Side-Effect Policy]
+- Acquires `<state_dir>/update/operation.lock` and performs atomic temp-file
+  replacements with `os.replace`.
+"""
 
 from contextlib import contextmanager
 import json

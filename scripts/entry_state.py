@@ -1,4 +1,20 @@
-"""Persistent explicit choice and native slash prompt_id deduplication."""
+"""Persistent explicit choice and native slash prompt_id deduplication.
+
+[Role]
+Deduplicates Claude Code `UserPromptExpansion` `prompt_id` deliveries and
+persists explicit user contribution choices via `consent.py`.
+
+[Invariants]
+- Preserves unreadable or corrupt slash-prompt receipt files untouched and
+  raises `ValueError` rather than silently overwriting them.
+
+[Timeouts & Locks]
+- Uses atomic temp-file replacement in `state_dir()`.
+
+[Side-Effect Policy]
+- Writes prompt deduplication receipts under `state_dir()` and updates
+  `mindie-consent.json`.
+"""
 
 from __future__ import annotations
 

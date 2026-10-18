@@ -1,4 +1,20 @@
-"""Knowledge refresh and diagnostic retention, independent of plugin updates."""
+"""Knowledge refresh and diagnostic retention, independent of plugin updates.
+
+[Role]
+Executes periodic knowledge feed synchronization (`fold_feed_results`) and
+diagnostic retention pruning as an owned background maintenance worker.
+
+[Invariants]
+- Folds core `sync` JSON list stdout into deterministic statuses (`ok`,
+  `deferred`, `degraded`, `failed`) while preserving every original row.
+- Runs independently of plugin release updates.
+
+[Timeouts & Locks]
+- Uses `bounded.run` for subprocess execution with explicit timeouts.
+
+[Side-Effect Policy]
+- Refreshes local knowledge feed snapshots and prunes expired diagnostics.
+"""
 
 import json
 from pathlib import Path

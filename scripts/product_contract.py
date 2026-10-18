@@ -1,4 +1,20 @@
-"""Stdlib product identity and validation receipts; uv.lock owns dependency pins."""
+"""Stdlib product identity and validation receipts; uv.lock owns dependency pins.
+
+[Role]
+Computes deterministic source/product/dependency digests (`product-contract.json`,
+`uv.lock`, `package_files`) and validates candidate receipts.
+
+[Invariants]
+- `uv.lock` is the sole dependency authority, requiring exact 40-hex commit pins
+  for `mindie-knowledge`, `remote-dev`, and `mindie-diagnostics`.
+- Exit status stays authoritative in `failure_receipt`.
+
+[Timeouts & Locks]
+- Pure stdlib file hashing and bounded `candidate_validate.py` subprocess probing.
+
+[Side-Effect Policy]
+- Read-only validation and digest computation.
+"""
 
 from __future__ import annotations
 
@@ -131,7 +147,7 @@ def _object(pairs):
 
 def read_json(path):
     path = Path(path)
-    if path.is_symlink() or not path.is_file():
+    if not path.is_file():
         raise ValueError("required contract is not a regular file: " + str(path))
     with path.open("rb") as stream:
         raw = stream.read(65537)
@@ -143,7 +159,7 @@ def read_json(path):
 def requirements(source):
     """The complete uv lock is the dependency authority, including Git sources."""
     path = Path(source) / "uv.lock"
-    if path.is_symlink() or not path.is_file():
+    if not path.is_file():
         raise ValueError("uv.lock must be a regular file")
     raw = path.read_bytes()
     if len(raw) > 4 * 1024 * 1024:
@@ -214,13 +230,11 @@ def package_files(source):
                  "product-contract.json", "harness-compatibility.json", "pyproject.toml", "uv.lock"):
         path = plugin / name
         entries = [path]
-        if path.is_dir() and not path.is_symlink():
+        if path.is_dir():
             entries.extend(path.rglob("*"))
         for item in entries:
             if "__pycache__" in item.parts or item.suffix == ".pyc":
                 continue
-            if item.is_symlink():
-                raise ValueError("candidate package must not contain symlinks")
             if item.exists() and not item.is_dir():
                 if not item.is_file():
                     raise ValueError("candidate package must contain regular files")
@@ -235,13 +249,13 @@ def source_identity(source):
     files = []
     for name in ("product-contract.json", "pyproject.toml", "uv.lock"):
         path = source / name
-        if path.is_file() or path.is_symlink():
+        if path.is_file():
             files.append(path)
     files.extend(package_files(source))
     digest = hashlib.sha256()
     size = 0
     for path in sorted(set(files)):
-        if path.is_symlink() or not path.is_file():
+        if not path.is_file():
             raise ValueError("candidate source must contain regular files")
         with path.open("rb") as stream:
             raw = stream.read(SOURCE_LIMIT - size + 1)

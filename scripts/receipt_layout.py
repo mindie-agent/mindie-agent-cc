@@ -1,19 +1,22 @@
 """Remote execution receipt formats may reset in development, never after release.
 
-This records the format of the directory ``mcp_server.remote_call`` already
-uses: ``paths.state_dir(adapter) / "remote"``. Each native session is one
-child of that directory, and ``REMOTE_DEV_STATE_DIR`` points at that child.
-Shared remote-dev stores jobs and uncertain receipts inside the session
-directory and does not publish its own format contract, so this file is the
-adapter's contract for that real tree.
+[Role]
+Validates and declares `remote-layout.json` (`mindie-cc-remote-layout/1`) inside
+`paths.state_dir(adapter) / "remote"` before `mcp_server.remote_call` submits
+external remote work.
 
-``remote-layout.json`` lives in the remote base, beside the session
-directories. It does not name Codex's ``gate-v<N>`` root and it does not
-relocate a session. A released format this runtime does not understand fails
-before any session path is moved, deleted, reset, or rewritten.
+[Invariants]
+- A released foreign format is rejected before any session path is moved,
+  deleted, reset, or rewritten.
+- The layout declaration survives failed or uncertain remote submissions.
 
-The remote adapter calls ``prepare_layout`` before submitting external work.
-The declaration must survive a failed or uncertain submission.
+[Timeouts & Locks]
+- Uses atomic `tempfile.mkstemp` + `os.fsync` + `os.replace` writes.
+
+[Side-Effect Policy]
+- Writes only `remote-layout.json` inside the remote state directory; preserves
+  existing session receipt directories (`jobs`, `logs`, `reads`, `artifacts`,
+  `patches`, `context`).
 """
 
 from contextlib import contextmanager
@@ -42,19 +45,11 @@ def _version(value):
     return value
 
 
-def _present(path):
-    try:
-        path.lstat()
-    except FileNotFoundError:
-        return False
-    return True
-
-
 def _read(base):
     path = Path(base) / "remote-layout.json"
-    if not _present(path):
+    if not path.exists():
         return None
-    if not stat.S_ISREG(path.lstat().st_mode):
+    if not path.is_file():
         raise ValueError("remote receipt layout must be a regular file")
     with path.open("rb") as stream:
         raw = stream.read(_LIMIT + 1)

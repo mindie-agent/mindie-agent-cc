@@ -1,4 +1,19 @@
-"""Explicit profile choices backed by the shared Core consent authority."""
+"""Explicit profile choices backed by the shared Core consent authority.
+
+[Role]
+Reads and writes the profile-shared `mindie-consent.json` file via
+`mindie_knowledge.consent_store`.
+
+[Invariants]
+- Reads explicit saved choices without implicit inference or silent repair.
+- Resolves community configuration path alongside the base adapter config.
+
+[Timeouts & Locks]
+- Uses shared core `consent_store` atomic file operations.
+
+[Side-Effect Policy]
+- Mutates only `mindie-consent.json` when explicitly saving user consent choices.
+"""
 
 from pathlib import Path
 

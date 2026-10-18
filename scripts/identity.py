@@ -1,9 +1,22 @@
 """Native Claude Code identity: hook payload and one-shot toolUseId binds.
 
-Claude 2.1.269 MCP tools/call has no session metadata. PreToolUse supplies
-session_id, tool_use_id, tool_name, tool_input. The MCP request carries the
-same id in params._meta['claudecode/toolUseId']. Bind that host-owned call
-id to the verified task, tool, and argument digest; consume it once.
+[Role]
+Validates Claude Code hook payloads (`session_id`, `tool_use_id`, slash
+commands) and manages the SQLite one-shot `claudecode/toolUseId` bind store
+connecting `PreToolUse` to `mcp_server.py`.
+
+[Invariants]
+- Claude Code MCP `tools/call` carries `params._meta['claudecode/toolUseId']`;
+  `PreToolUse` binds that ID to `(session_id, tool_name, input_sha256)` and
+  `mcp_server.py` consumes it at most once within `BIND_TTL_SECONDS`.
+- Never trusts session identity passed inside model-controlled tool arguments.
+
+[Timeouts & Locks]
+- Uses SQLite WAL mode with `busy_timeout=5000` (`timeout=5.0`) and `BEGIN IMMEDIATE`
+  transactions for atomic bind claim/finish.
+
+[Side-Effect Policy]
+- Mutates only `state_dir() / "native-tool-binds.sqlite3"`.
 """
 
 from __future__ import annotations

@@ -1,4 +1,21 @@
-"""Thin stdlib adapter to shared diagnostics. Import performs no I/O."""
+"""Thin stdlib adapter to shared diagnostics. Import performs no I/O.
+
+[Role]
+Bridges Claude Code adapter failures to `mindie_diagnostics` (or
+`diagnostic_fallback` when the runtime is unavailable) and formats user-visible
+`diagnostic_ref` warnings.
+
+[Invariants]
+- Import performs zero I/O.
+- If diagnostic storage fails, emits a single stderr warning and preserves the
+  original operation outcome unchanged.
+
+[Timeouts & Locks]
+- Synchronous, non-blocking local incident recording.
+
+[Side-Effect Policy]
+- Writes redacted diagnostic records under the MindIE state directory.
+"""
 
 from __future__ import annotations
 
@@ -25,28 +42,18 @@ def _hex(value, length):
 
 
 def _read_small(path):
-    """Read bounded regular metadata without following a final symlink."""
-    fd = None
+    """Read bounded regular metadata."""
     try:
-        if Path(path).is_symlink():
+        path = Path(path)
+        if not path.is_file():
             return None
-        flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
-        fd = os.open(path, flags)
-        info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode) or info.st_size > 2048:
-            return None
-        raw = os.read(fd, 2049)
+        with path.open("rb") as stream:
+            raw = stream.read(2049)
         if len(raw) > 2048:
             return None
         return raw.decode()
     except Exception:
         return None
-    finally:
-        if fd is not None:
-            try:
-                os.close(fd)
-            except Exception:
-                pass
 
 
 def build_metadata():

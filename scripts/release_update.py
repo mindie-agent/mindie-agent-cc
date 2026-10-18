@@ -1,7 +1,20 @@
 """Select a compatible Release, then use Claude's native catalog and installer.
 
-This runs only as an owned background maintenance child. It has no scheduler,
-download cache, version pointer, consent changes, or business-operation retries.
+[Role]
+Checks for compatible formal releases in the background and invokes Claude
+Code's native plugin updater when a verified release is available.
+
+[Invariants]
+- Runs only as an owned background maintenance child.
+- Never mutates user consent choices or retries business operations.
+
+[Timeouts & Locks]
+- Enforces `CHECK_INTERVAL = 86400`, `FAILURE_BACKOFF = 60`, and
+  `ACTIVATION_BACKOFF = 5` under `OperationLock`.
+
+[Side-Effect Policy]
+- Writes update check status under `state_dir() / "update"` and delegates plugin
+  installation to the native `claude` CLI.
 """
 
 from __future__ import annotations

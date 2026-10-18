@@ -1,26 +1,24 @@
 #!/usr/bin/env python3
 """Native Claude summary worker for the shared block-indexing contract.
 
-The shared core invokes this worker with ``--identity`` before block indexing,
-then sends one admitted request on stdin and expects exactly one outcome
-envelope line on stdout (``mindie-summary-outcome/1``). Exit zero means the
-envelope was delivered, not that indexing succeeded; a valid request always
-gets an explicit envelope, including failures and uncertain paid outcomes.
-The caller owns queue transactions and scans returned metadata; this worker
-never stores source text, rewrites a body, substitutes a fallback summary, or
-retries an uncertain/billed model request.
+[Role]
+Executes a single isolated `claude` CLI invocation to summarize redacted
+transcript blocks for `mindie_knowledge` indexing, emitting one
+`mindie-summary-outcome/1` JSON envelope line on stdout.
 
-The single native invocation is the local ``claude`` CLI in an isolated workdir with
-no business tools, hooks, plugins or MCP. The native structured-output
-submission tool remains available. Claude owns its schema-validation retries
-and termination; this adapter does not impose a separate agentic-turn cap.
-Usage is the native invocation's accumulated usage; one invocation is not one
-HTTP request.
-Provider and model come from the selected
-native profile's settings (never a shipped host-specific default or
-credential). A missing native model is a configuration failure, not a silent
-default. Cancellation, maintenance-owner death and output bounds still end the
-attempt; there is no arbitrary total execution deadline.
+[Invariants]
+- Exit 0 indicates the outcome envelope was delivered on stdout; never retries
+  uncertain/billed model calls or substitutes fallback summaries.
+- Runs `claude` in an isolated workdir with no business tools, hooks, plugins,
+  or MCP; provider and model come strictly from the selected native profile.
+
+[Timeouts & Locks]
+- Obeys cancellation, maintenance-owner death, and output byte bounds via
+  `bounded.py` and shared `summary_scratch` ownership.
+
+[Side-Effect Policy]
+- Never stores raw source text; writes only the structured summary outcome
+  envelope to stdout.
 """
 
 from __future__ import annotations

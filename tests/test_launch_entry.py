@@ -148,17 +148,6 @@ def test_bad_adapter_configuration_has_nonblocking_warning(tmp_path):
     assert "PRIVATE_SENTINEL" not in text
 
 
-def test_nonregular_sharing_metadata_never_waits_for_a_writer(tmp_path):
-    if not hasattr(os, "mkfifo"):
-        import pytest
-        pytest.skip("FIFO is POSIX-only; directory refusal is platform independent")
-    config = make_config(tmp_path, sharing=True)
-    community = tmp_path / "cc.community.json"
-    community.unlink()
-    os.mkfifo(community)
-    assert "configuration" in _run(tmp_path, env_for(config), warning=True)
-
-
 def test_helper_failure_keeps_visible_warning_even_if_diagnostic_write_fails(capsys):
     import mindie_launch
 

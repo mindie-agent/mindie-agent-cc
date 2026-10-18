@@ -1,4 +1,19 @@
-"""Claude interfaces and their declared support interval have one registry."""
+"""Claude interfaces and their declared support interval have one registry.
+
+[Role]
+Validates `harness-compatibility.json` against the installed Claude Code CLI
+version and verifies that all declared script symbols and test IDs exist.
+
+[Invariants]
+- Single authoritative declaration (`harness-compatibility.json`) for supported
+  Claude Code versions and required contract tests.
+
+[Timeouts & Locks]
+- Uses `bounded.run` with a 15-second timeout when probing `claude --version`.
+
+[Side-Effect Policy]
+- Read-only AST and version inspection; mutates no files.
+"""
 
 import argparse
 import ast

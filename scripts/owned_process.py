@@ -1,8 +1,18 @@
 """POSIX owner-death guard for one standalone subprocess group.
 
-Uses the same pipe ownership rule as the Codex adapter: only the direct caller
-holds the writer. Its exit, including SIGKILL, closes the operation's group.
-Explicitly detached services have separate sessions and independent lifetimes.
+[Role]
+Spawns a POSIX process group monitored by an inherited owner pipe so parent
+exit (including `SIGKILL`) immediately terminates the entire child group.
+
+[Invariants]
+- Only the direct caller holds the write end of `owner_pipe`.
+- Explicitly detached services run in separate sessions with independent lifetimes.
+
+[Timeouts & Locks]
+- Blocks on `os.read(owner_pipe, 1)` until EOF, then sends `SIGKILL` to `-group`.
+
+[Side-Effect Policy]
+- Process-group lifecycle supervision only; no filesystem writes.
 """
 import errno
 import os

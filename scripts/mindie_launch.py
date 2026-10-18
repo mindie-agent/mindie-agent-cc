@@ -1,5 +1,24 @@
 #!/usr/bin/env python3
-"""Stable native facade; each operation dispatches the selected complete helper."""
+"""Stable native facade; each operation dispatches the selected complete helper.
+
+[Role]
+Top-level entrypoint invoked by Claude Code hooks (`SessionStart`,
+`UserPromptExpansion`, `PreToolUse`, `Stop`) and `.mcp.json` (`mcp-server`).
+
+[Invariants]
+- Resolves the locked runtime binding (`install_state.py`) or runs cold-start
+  `bootstrap.py` when required.
+- Never silently swallows helper failures; attaches redacted diagnostic
+  references to user-facing hook warnings.
+
+[Timeouts & Locks]
+- Enforces `HOOK_TOTAL = 10.0s`, `HOOK_LOCK_BUDGET = 2.0s`, and
+  `BOOTSTRAP_TOTAL = 540.0s` (`outer_timeout >= sum(inner_budgets) + grace`).
+
+[Side-Effect Policy]
+- Dispatches into `entry.py`, `bridge.py`, `mcp_server.py`, or background
+  `maintenance.py` / `release_update.py` under the locked runtime interpreter.
+"""
 
 from __future__ import annotations
 

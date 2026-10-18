@@ -1,9 +1,24 @@
 #!/usr/bin/env python3
 """Adapter-owned MCP: knowledge tools and general remote-dev.
 
-Identity is never taken from tool arguments. Native PreToolUse binds
-claudecode/toolUseId; this process consumes it once. Public knowledge reads
-and remote-dev require the native bind, independently of contribution.
+[Role]
+Serves stdio JSON-RPC MCP requests for MindIE knowledge tools and `remote_dev`
+tools in Claude Code.
+
+[Invariants]
+- Session identity is never taken from model-supplied tool arguments; `PreToolUse`
+  binds `claudecode/toolUseId` and this server consumes it at most once via
+  `claim_bind` / `finish_bind`.
+- Once a remote or knowledge tool call succeeds, a local SQLite bind-accounting
+  failure (`finish_bind`) attaches `bind_warning` + `diagnostic_ref` and never
+  flips `isError=True` on the succeeded result.
+
+[Timeouts & Locks]
+- Consumes one-shot SQLite WAL binds (`identity.py`) and prepares remote receipt
+  layouts (`receipt_layout.py`) before external execution.
+
+[Side-Effect Policy]
+- Dispatches authorized tool calls to `mindie_knowledge` and `remote_dev.mcp.server`.
 """
 
 from __future__ import annotations

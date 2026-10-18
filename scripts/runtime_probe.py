@@ -1,4 +1,21 @@
-"""Checks for the installed, locked adapter runtime."""
+"""Checks for the installed, locked adapter runtime.
+
+[Role]
+Builds a side-effect-free probe script to verify that `mindie_knowledge`,
+`remote_dev`, and the Claude Code transcript adapter exports are importable in
+a candidate Python interpreter.
+
+[Invariants]
+- Verifies `PROBE_MODULES` and transcript adapter callables (`FileIdentity`,
+  `identify`, `read_material`).
+
+[Timeouts & Locks]
+- Pure string builder; execution timeout is enforced by the caller via
+  `bounded.run`.
+
+[Side-Effect Policy]
+- Probe script performs imports and attribute checks only; writes no state.
+"""
 
 import os
 

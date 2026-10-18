@@ -1,4 +1,21 @@
-"""Install-time wiring for deterministic public transcript capture."""
+"""Install-time wiring for deterministic public transcript capture.
+
+[Role]
+Resolves the installed `mindie_knowledge.loop.transcript_redaction` executable
+and constructs the capture configuration (`organizer.py` summary worker) during
+setup.
+
+[Invariants]
+- Requires an absolute regular-file redactor executable path.
+- Formats `prepare-store` failures with explicit `error_type` and `error` details.
+
+[Timeouts & Locks]
+- Uses `bounded.run` for subprocess queries during setup.
+
+[Side-Effect Policy]
+- Prepares capture configuration dictionaries and triggers `prepare-store` in
+  the shared knowledge core.
+"""
 import json
 from pathlib import Path
 

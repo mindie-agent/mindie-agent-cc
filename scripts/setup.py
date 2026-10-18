@@ -1,8 +1,22 @@
 #!/usr/bin/env python3
 """Prepare this native release's fixed runtime binding and existing shared state.
 
-Plugin installation, update and removal belong to Claude's Git marketplace.
-No code-update scheduler or mutable code-selection registry lives here.
+[Role]
+Validates the candidate runtime, prepares the knowledge store and capture
+configuration, and records the atomic `installation.json` binding for
+`mindie-agent-cc`.
+
+[Invariants]
+- Plugin installation, update, and removal belong to Claude Code's Git
+  marketplace; no mutable code-selection registry lives here.
+- Preserves existing user consent and community sharing settings across setups.
+
+[Timeouts & Locks]
+- Acquires `OperationLock` around profile configuration and service handoff.
+
+[Side-Effect Policy]
+- Writes MindIE-owned adapter, engine, community, and `installation.json` files;
+  never touches `~/.claude`.
 """
 from __future__ import annotations
 

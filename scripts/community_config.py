@@ -1,4 +1,19 @@
-"""Use the selected core runtime for the single settings write boundary."""
+"""Use the selected core runtime for the single settings write boundary.
+
+[Role]
+Delegates community configuration writes to `mindie_knowledge.loop.settings.CommunityWriteContext`
+in the configured Python runtime.
+
+[Invariants]
+- Preserves existing file bytes untouched if validation or write fails.
+
+[Timeouts & Locks]
+- Enforces a 30-second subprocess timeout and core `CommunityWriteContext` lock.
+
+[Side-Effect Policy]
+- Mutates only the requested community configuration file through the core
+  atomic write boundary.
+"""
 import json
 import subprocess
 import sys
