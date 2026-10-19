@@ -1,33 +1,24 @@
 """One owned attempt with bounded output; a deadline only when the caller asks.
 
-POSIX reads pipes with a selector and kills the owned process group. Windows
-cannot select() process pipes, so it uses two daemon reader threads and an
-owned Windows Job. The child starts suspended until Job assignment completes;
-cleanup still owns descendants after their leader exits.
+[Role]
+Executes child subprocesses with bounded stdout/stderr capture, optional
+cancellation/terminal predicates, and full process-tree cleanup across POSIX
+and Windows.
 
-When this process is already the leader of an owned process group
-(MINDIE_MAINTENANCE_GROUP=1 set by the outer core), POSIX spawns stay in that
-group instead of a new session: the outer core owns whole-group terminal
-cleanup, so this module only kills the direct child, never the group. A
-summary call that has validated shared scratch ownership passes core_managed;
-the shared core is its sole lifetime authority. Other callers retain the
-existing maintenance-owner check before spawn and during the wait.
+[Invariants]
+- POSIX reads pipes with a selector and kills the owned process group (unless
+  `MINDIE_MAINTENANCE_GROUP=1` or `core_managed` indicates outer-core group
+  ownership).
+- Windows starts the child suspended until Job Object assignment completes so
+  descendants cannot escape termination.
+- Stdin is backed by a temporary file rather than a blocking pipe write.
 
-Final cleanup closes a standalone owned tree; managed descendants are closed
-by the outer core when the worker returns. Cleanup failures use the caller's
-receipt, or an exception preserving completed stdout when no receipt exists.
-Stdin is a temporary file, never a blocking pipe write: a child that does not
-read cannot hang the parent past the deadline.
+[Timeouts & Locks]
+- Enforces caller-supplied wall-clock `timeout` and `max_output` byte bounds,
+  terminating the owned process tree before raising.
 
-An optional cancel Event is checked before spawn, while draining/waiting
-(including after the child has closed its pipes), and before returning a
-result. An optional terminal predicate over accumulated stdout bytes ends the
-read early when the caller's protocol has terminal evidence; the owned tree
-is still reaped, and a late nonzero exit is cleanup evidence, never a second
-business result. A child that has exited is evidence; silence from an
-inherited pipe holder is not. Stderr bytes count toward the output bound and
-are then discarded. Updater transport commands may attach a static failure
-category; raw stderr, argv and URLs are not retained. This call does not retry.
+[Side-Effect Policy]
+- Cleans up temporary stdin files and owned descendant processes on exit.
 """
 
 from __future__ import annotations
@@ -681,10 +672,10 @@ def _run_posix(process, timeout, max_output, pgid, check, cancel, transport=Fals
         _cleanup_step(receipt, lambda: _kill_tree(process, pgid), "terminate_owned_tree")
         def reap():
             try:
-                process.wait(timeout=1)
+                process.wait(timeout=2.0)
             except subprocess.TimeoutExpired:
                 _kill_tree(process, pgid)
-                process.wait(timeout=1)
+                process.wait(timeout=2.0)
         _cleanup_step(receipt, reap, "reap_process")
         _cleanup_step(receipt, selector.close, "close_selector")
         _cleanup_step(receipt, process.stdout.close, "close_stdout")
@@ -782,9 +773,9 @@ def _run_windows(process, timeout, max_output, pgid, check, cancel, transport=Fa
     finally:
         # Cleanup never masks the business result; failures land on the receipt.
         _cleanup_step(receipt, lambda: _kill_tree(process, pgid), "terminate_owned_tree")
-        _cleanup_step(receipt, lambda: process.wait(timeout=1), "reap_process")
+        _cleanup_step(receipt, lambda: process.wait(timeout=2.0), "reap_process")
         for thread in threads:
-            _cleanup_step(receipt, lambda thread=thread: thread.join(timeout=1), "join_reader")
+            _cleanup_step(receipt, lambda thread=thread: thread.join(timeout=2.0), "join_reader")
         for thread, stream in zip(threads, (process.stdout, process.stderr)):
             if thread.is_alive():
                 receipt["cleanup_failed"] = True
@@ -793,6 +784,20 @@ def _run_windows(process, timeout, max_output, pgid, check, cancel, transport=Fa
                 # block this cleanup indefinitely after an ownership failure.
                 continue
             _cleanup_step(receipt, stream.close, "close_pipe")
+
+
+def _reader_only_cleanup(receipt: dict) -> bool:
+    cleanup = receipt.get("cleanup") or []
+    if not cleanup:
+        return False
+    return all(
+        isinstance(item, dict)
+        and (
+            item.get("stage") in {"join_reader", "close_pipe", "close_stdout", "close_stderr"}
+            or item.get("error_type") == "ReaderStillRunning"
+        )
+        for item in cleanup
+    )
 
 
 def run(
@@ -888,7 +893,8 @@ def run(
                 error.operation_completed = True
                 raise error
             if receipt["cleanup_failed"] and not explicit_receipt:
-                raise CommandCleanupError(result, receipt)
+                if not (process.returncode == 0 and _reader_only_cleanup(receipt)):
+                    raise CommandCleanupError(result, receipt)
             return result
         except (TimeoutError, subprocess.TimeoutExpired) as exc:
             if timeout is None:

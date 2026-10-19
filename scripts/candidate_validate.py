@@ -1,7 +1,20 @@
 """Candidate-owned, model-free validation in the candidate interpreter.
 
-Only this candidate imports its private runtime probe. Publication bytes are
-read from the fixed official Git commit and never select executable code.
+[Role]
+Validates candidate source identity, runtime dependency pins, and publication
+contracts inside the candidate Python interpreter before activation.
+
+[Invariants]
+- Only this candidate imports its private runtime probe.
+- Publication bytes are read from the fixed official Git commit and never
+  select executable code.
+
+[Timeouts & Locks]
+- Invoked under bounded subprocess timeouts by `product_contract.probe`.
+
+[Side-Effect Policy]
+- Emits a single JSON validation receipt on stdout; performs no persistent
+  profile mutations.
 """
 
 from __future__ import annotations
@@ -65,7 +78,6 @@ def adapter_check(source):
         "bounded.py",
         "owned_process.py",
         "mcp_server.py",
-        "state_compatibility.py",
         "receipt_layout.py",
         "candidate_validate.py",
         "product_contract.py",
@@ -152,7 +164,7 @@ def publication_git(args, code, env):
 
     receipt = {}
     try:
-        output = run(args, "", timeout=None, env=env, check=False, receipt=receipt)
+        output = run(args, "", timeout=60.0, env=env, check=False, receipt=receipt)
     except Exception as exc:
         # An incomplete _spawn may already have created/resumed a process.
         # Only the runner's explicit pre-start cancellation proves no start.

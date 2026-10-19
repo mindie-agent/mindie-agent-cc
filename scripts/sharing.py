@@ -1,8 +1,19 @@
 """Community sharing via the shared core validator and write boundary.
 
-The declared ``community_config`` is the sole settings authority. Mutations
-hold its shared ``CommunityWriteContext`` and read current scope inside that
-boundary. No alternate-file adoption or write-then-check replay occurs.
+[Role]
+Loads, configures, enables, and disables community sharing (`mindie-community-config/1`)
+through `mindie_knowledge.loop.settings.CommunityWriteContext`.
+
+[Invariants]
+- The declared `community_config` is the sole settings authority.
+- Mutations hold `CommunityWriteContext` and read current scope inside that
+  boundary without alternate-file adoption.
+
+[Timeouts & Locks]
+- Acquires `CommunityWriteContext` lock during all settings mutations.
+
+[Side-Effect Policy]
+- Mutates only the declared MindIE community configuration file.
 """
 
 from __future__ import annotations

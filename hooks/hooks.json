@@ -7,8 +7,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv run --offline --no-python-downloads --no-project --python 3.13 python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.0.1'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'bootstrap.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook expansion",
-            "timeout": 2
+            "command": "uv run --offline --no-python-downloads --no-project --python 3.13 python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.0.2'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'bootstrap.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook expansion",
+            "timeout": 15
           }
         ]
       },
@@ -17,8 +17,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv run --offline --no-python-downloads --no-project --python 3.13 python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.0.1'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'bootstrap.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook expansion",
-            "timeout": 2
+            "command": "uv run --offline --no-python-downloads --no-project --python 3.13 python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.0.2'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'bootstrap.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook expansion",
+            "timeout": 15
           }
         ]
       },
@@ -27,8 +27,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv run --offline --no-python-downloads --no-project --python 3.13 python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.0.1'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'bootstrap.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook expansion",
-            "timeout": 2
+            "command": "uv run --offline --no-python-downloads --no-project --python 3.13 python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.0.2'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'bootstrap.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook expansion",
+            "timeout": 15
           }
         ]
       },
@@ -37,8 +37,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv run --offline --no-python-downloads --no-project --python 3.13 python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.0.1'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'bootstrap.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook expansion",
-            "timeout": 2
+            "command": "uv run --offline --no-python-downloads --no-project --python 3.13 python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.0.2'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'bootstrap.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook expansion",
+            "timeout": 15
           }
         ]
       },
@@ -47,8 +47,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv run --offline --no-python-downloads --no-project --python 3.13 python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.0.1'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'bootstrap.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook expansion",
-            "timeout": 2
+            "command": "uv run --offline --no-python-downloads --no-project --python 3.13 python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.0.2'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'bootstrap.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook expansion",
+            "timeout": 15
           }
         ]
       },
@@ -57,8 +57,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv run --offline --no-python-downloads --no-project --python 3.13 python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.0.1'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'bootstrap.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook expansion",
-            "timeout": 2
+            "command": "uv run --offline --no-python-downloads --no-project --python 3.13 python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.0.2'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'bootstrap.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook expansion",
+            "timeout": 15
           }
         ]
       },
@@ -67,8 +67,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv run --offline --no-python-downloads --no-project --python 3.13 python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.0.1'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'bootstrap.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook expansion",
-            "timeout": 2
+            "command": "uv run --offline --no-python-downloads --no-project --python 3.13 python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.0.2'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'bootstrap.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook expansion",
+            "timeout": 15
           }
         ]
       },
@@ -77,8 +77,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv run --offline --no-python-downloads --no-project --python 3.13 python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.0.1'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'bootstrap.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook expansion",
-            "timeout": 2
+            "command": "uv run --offline --no-python-downloads --no-project --python 3.13 python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.0.2'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'bootstrap.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook expansion",
+            "timeout": 15
           }
         ]
       },
@@ -87,8 +87,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv run --offline --no-python-downloads --no-project --python 3.13 python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.0.1'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'bootstrap.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook expansion",
-            "timeout": 2
+            "command": "uv run --offline --no-python-downloads --no-project --python 3.13 python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.0.2'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'bootstrap.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook expansion",
+            "timeout": 15
           }
         ]
       },
@@ -97,8 +97,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv run --offline --no-python-downloads --no-project --python 3.13 python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.0.1'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'bootstrap.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook expansion",
-            "timeout": 2
+            "command": "uv run --offline --no-python-downloads --no-project --python 3.13 python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.0.2'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'bootstrap.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook expansion",
+            "timeout": 15
           }
         ]
       },
@@ -107,8 +107,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv run --offline --no-python-downloads --no-project --python 3.13 python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.0.1'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'bootstrap.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook expansion",
-            "timeout": 2
+            "command": "uv run --offline --no-python-downloads --no-project --python 3.13 python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.0.2'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'bootstrap.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook expansion",
+            "timeout": 15
           }
         ]
       }
@@ -119,8 +119,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv run --offline --no-python-downloads --no-project --python 3.13 python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.0.1'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'bootstrap.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook pretool",
-            "timeout": 2
+            "command": "uv run --offline --no-python-downloads --no-project --python 3.13 python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.0.2'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'bootstrap.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook pretool",
+            "timeout": 15
           }
         ]
       }
@@ -130,8 +130,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv run --offline --no-python-downloads --no-project --python 3.13 python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.0.1'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'bootstrap.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook stop",
-            "timeout": 2
+            "command": "uv run --offline --no-python-downloads --no-project --python 3.13 python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.0.2'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'bootstrap.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook stop",
+            "timeout": 15
           }
         ]
       }
@@ -141,7 +141,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv run --no-project --python 3.13 python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.0.1'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'bootstrap.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook session-start",
+            "command": "uv run --no-project --python 3.13 python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.0.2'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'bootstrap.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook session-start",
             "timeout": 600
           }
         ]

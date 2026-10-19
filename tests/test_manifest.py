@@ -27,7 +27,9 @@ class ManifestTests(unittest.TestCase):
         self.assertTrue(matcher.startswith("^mcp__plugin_mindie-agent_"))
         import mindie_launch
 
-        self.assertEqual(mindie_launch.HOOK_TOTAL, 1.5)
+        self.assertEqual(mindie_launch.HOOK_TOTAL, 10.0)
+        self.assertEqual(mindie_launch.HOOK_LOCK_BUDGET, 2.0)
+        self.assertEqual(mindie_launch.BOOTSTRAP_TOTAL, 540.0)
         skill = (ROOT / "skills" / "init" / "SKILL.md").read_text(encoding="utf-8")
         self.assertIn("disable-model-invocation: true", skill)
         mcp = json.loads((ROOT / ".mcp.json").read_text(encoding="utf-8"))
@@ -46,11 +48,12 @@ class ManifestTests(unittest.TestCase):
 
     def test_hot_hooks_cannot_download_python_or_install_a_runtime(self):
         hooks = json.loads((ROOT / "hooks/hooks.json").read_text(encoding="utf-8"))["hooks"]
+        version = json.loads((ROOT / ".claude-plugin/plugin.json").read_text(encoding="utf-8"))["version"]
         for name, rows in hooks.items():
             for row in rows:
                 for hook in row["hooks"]:
                     self.assertIn("CLAUDE_PLUGIN_DATA", hook["command"])
-                    self.assertIn("0.0.1", hook["command"])
+                    self.assertIn(version, hook["command"])
                     if name != "SessionStart":
                         self.assertIn("--offline --no-python-downloads", hook["command"])
 

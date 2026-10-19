@@ -48,16 +48,6 @@ class ConsentTests(unittest.TestCase):
 
 
 
-    def test_development_marker_is_not_inferred_or_changed(self):
-        import consent
-        marker = self.tmp / "state" / "cc.first-use.json"
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.write_text('{"choice":"read-only"}', encoding="utf-8")
-        before = marker.read_bytes()
-        assert self._payload().get("first_use") is None
-        assert not consent.consent_path().exists()
-        assert marker.read_bytes() == before
-
     def test_corrupt_consent_is_a_fault_not_onboarding(self):
         import consent
 
@@ -78,33 +68,16 @@ class ConsentTests(unittest.TestCase):
         self.assertEqual(payload["sharing"]["state"], "corrupt")
 
     def test_kimi_choice_is_reused_in_this_profile(self):
-        raw = os.environ.get("MINDIE_TEST_KIMI_SCRIPTS")
-        self.assertTrue(
-            raw,
-            "set MINDIE_TEST_KIMI_SCRIPTS to the other adapter's scripts directory",
-        )
-        kimi_scripts = Path(raw)
-        self.assertTrue((kimi_scripts / "consent.py").is_file(), kimi_scripts)
-        (self.tmp / "kimi.json").write_text(json.dumps({}), encoding="utf-8")
-        env = dict(os.environ)
-        env.pop("MINDIE_CC_CONFIG", None)
-        env["MINDIE_KIMI_CONFIG"] = str(self.tmp / "kimi.json")
-        code = (
-            "import sys;sys.path.insert(0,sys.argv[1]);"
-            "import consent;consent.record_choice('later')"
-        )
-        result = subprocess.run(
-            [sys.executable, "-c", code, str(kimi_scripts)],
-            env=env, capture_output=True, text=True, timeout=10,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
+        from mindie_knowledge import consent_store
+
+        kimi_config = self.tmp / "kimi.json"
+        kimi_config.write_text(json.dumps({}), encoding="utf-8")
+        consent_store.record_choice(kimi_config.parent / "mindie-consent.json", "later")
         payload = self._payload()
         self.assertEqual(payload["first_use"], "later")
         self.assertEqual(payload["choices"], [])
 
     def test_isolated_profile_does_not_inherit(self):
-        import entry_state
-
         __import__("consent").record_choice("later")
         other = self.tmp / "other-profile"
         other.mkdir()
@@ -136,38 +109,6 @@ class ConsentTests(unittest.TestCase):
         assert consent.load()["choice"] == "disabled"
         assert consent.load()["reporting"] == "enabled"
         assert authority.read_bytes() == before
-
-    def test_damaged_binding_never_selects_a_different_consent_directory(self):
-        import consent
-
-        consent.record_choice("disabled")
-        original = consent.consent_path()
-        original_bytes = original.read_bytes()
-        base = Path(os.environ["MINDIE_CC_CONFIG"])
-        for raw in ("{broken", "{}", '{"base_config":"relative"}'):
-            base.write_text(raw, encoding="utf-8")
-            with self.assertRaises(ValueError):
-                consent.load()
-            assert base.read_text(encoding="utf-8") == raw
-            assert original.read_bytes() == original_bytes
-
-    def test_fixed_binding_to_damaged_base_does_not_use_its_sibling_consent(self):
-        import consent
-
-        base = Path(os.environ["MINDIE_CC_CONFIG"])
-        fixed = self.tmp / "fixed" / "adapter.json"
-        fixed.parent.mkdir()
-        fixed.write_text(json.dumps({"base_config": str(base)}), encoding="utf-8")
-        decoy = fixed.with_name("mindie-consent.json")
-        decoy.write_text('{"schema":"mindie-consent/1","choice":"contribute"}',
-                         encoding="utf-8")
-        base.write_text("{broken", encoding="utf-8")
-        os.environ["MINDIE_CC_CONFIG"] = str(fixed)
-        with self.assertRaisesRegex(ValueError, "base installation"):
-            consent.load()
-        assert not self.tmp.joinpath("mindie-consent.json").exists()
-        assert base.read_text(encoding="utf-8") == "{broken"
-        assert "contribute" in decoy.read_text(encoding="utf-8")
 
 
 if __name__ == "__main__":

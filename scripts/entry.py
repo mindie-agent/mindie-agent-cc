@@ -1,7 +1,22 @@
 """Slash-command operations invoked from UserPromptExpansion.
 
-Activation is this hook only. MCP status cannot activate or enable sharing.
-Sharing-enable destination is the native command_args, not model arguments.
+[Role]
+Handles `/mindie-agent` slash commands (`activate`, `deactivate`, `status`,
+`sharing-enable`, `sharing-disable`, `sharing-status`) from the Claude Code
+`UserPromptExpansion` hook.
+
+[Invariants]
+- Activation occurs exclusively through this hook; MCP `status` never activates
+  a lease or enables sharing.
+- If lease activation succeeds but background service/maintenance fails,
+  returns `status="degraded"` (preserving the active lease).
+
+[Timeouts & Locks]
+- Runs within the `mindie_launch.py` hook deadline (`HOOK_TOTAL = 10.0s`).
+
+[Side-Effect Policy]
+- Mutates session leases (`admission.py`), explicit consent (`entry_state.py`),
+  and community sharing settings (`sharing.py`) only on explicit slash commands.
 """
 
 from __future__ import annotations
@@ -117,27 +132,17 @@ _META_LIMIT = 65536
 
 
 def _read_regular_json(path):
-    """Small JSON object from a regular file.
-
-    Missing is "missing". FIFO, socket, device, and malformed files are
-    "unavailable" and are not read as a blocking stream. A symlink is
-    followed only when its target is a regular file.
-    """
+    """Small JSON object from a regular file."""
+    path = Path(path)
     try:
-        descriptor = os.open(str(path), os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
-    except FileNotFoundError:
-        return "missing", None
-    except OSError:
-        return "unavailable", None
-    try:
-        info = os.fstat(descriptor)
-        if not stat.S_ISREG(info.st_mode) or info.st_size > _META_LIMIT:
+        if not path.exists():
+            return "missing", None
+        if not path.is_file():
             return "unavailable", None
-        blob = os.read(descriptor, _META_LIMIT + 1)
+        with path.open("rb") as stream:
+            blob = stream.read(_META_LIMIT + 1)
     except OSError:
         return "unavailable", None
-    finally:
-        os.close(descriptor)
     if len(blob) > _META_LIMIT:
         return "unavailable", None
     try:
@@ -352,6 +357,10 @@ def _finish_contribution(result: dict) -> dict:
     except consent_mod.ConsentError as exc:
         result["consent_error"] = dict(state=exc.state, error=str(exc))
     result["service"] = _prepare_capture_service()
+    if str(result.get("service", "")).startswith("prepare-failed:") or result.get("consent_error"):
+        result["status"] = "degraded"
+        result["experience"] = "unavailable"
+        result["warning"] = f"knowledge capture service could not be prepared ({result.get('service')})"
     return result
 
 
@@ -391,7 +400,9 @@ def _apply_contribute(payload, session, event, configured):
     payload = _finish_contribution(payload)
     payload.update(status_payload(session))
     if str(payload.get("service", "")).startswith("prepare-failed:") or payload.get("consent_error"):
+        payload["status"] = "degraded"
         payload["experience"] = "unavailable"
+        payload["warning"] = f"knowledge capture service could not be prepared ({payload.get('service')})"
     return payload
 
 
@@ -458,6 +469,10 @@ def _configured_init_activation(session, cwd, ident):
         project_root=lease["project_root"],
         service=service,
     )
+    if str(service).startswith("prepare-failed:"):
+        payload["status"] = "degraded"
+        payload["experience"] = "unavailable"
+        payload["warning"] = f"knowledge capture service could not be prepared ({service})"
     return payload
 
 

@@ -1,4 +1,19 @@
-"""Exact-configuration retirement and restoration owned by the shared core."""
+"""Exact-configuration retirement and restoration owned by the shared core.
+
+[Role]
+Wraps `mindie_knowledge.loop.lifecycle` (`retire_service`, `restore_service`,
+`inspect_retirement`) for safe service handoff during runtime updates.
+
+[Invariants]
+- Verifies `admission_frozen is False` when restoring a service with active
+  session leases.
+
+[Timeouts & Locks]
+- Delegates service RPC and lifecycle timeouts to `mindie_knowledge.loop.cli`.
+
+[Side-Effect Policy]
+- Retires or restores the local background knowledge service.
+"""
 import json
 import sys
 

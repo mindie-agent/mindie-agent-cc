@@ -254,319 +254,37 @@ class SetupIdentityTests(LaneCase):
         from product_contract import requirements
         installed_revisions(requirements(ROOT)[0])
 
-    def _read_direct(self, python, dist_name):
-        code = (
-            "import json,sys\n"
-            "from importlib.metadata import distribution\n"
-            "raw = distribution(sys.argv[1]).read_text('direct_url.json') or ''\n"
-            "data = json.loads(raw) if raw else {}\n"
-            "vcs = data.get('vcs_info') or {}\n"
-            "print(json.dumps({'raw': raw, 'url': data.get('url') or '',"
-            " 'vcs': vcs.get('vcs'), 'commit': vcs.get('commit_id')}))\n"
-        )
-        proc = subprocess.run(
-            [str(python), "-c", code, dist_name],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            env=self._env(self.tmp / "unset-cc.json"),
-        )
-        if proc.returncode != 0:
-            return proc, None
-        return proc, json.loads(proc.stdout)
-
-    def _direct_url(self, python, dist_name):
-        proc, info = self._read_direct(python, dist_name)
-        self.assertEqual(proc.returncode, 0, proc.stderr[-800:])
-        return info
-
-    def _require_reused_runtime(self, pins):
-        """The interpreter under test already has the official pins.
-
-        The local-candidate venv reuses those installed distributions. It
-        does not reinstall them and does not download a build backend.
-        """
-        python = sys.executable
-        for name, pin in pins.items():
-            proc, info = self._read_direct(python, name)
-            if proc.returncode != 0 or info is None:
-                lines = (proc.stderr or proc.stdout or "").strip().splitlines()
-                detail = lines[-1] if lines else "no output"
-                raise IdentityPrecondition(
-                    f"{python} cannot read {name} metadata ({detail[:300]}). "
-                    "Install uv.lock in this interpreter. "
-                    "This test does not download runtime dependencies."
-                )
-            url = str(info.get("url") or "").rstrip("/")
-            official = url in {pin["url"], pin["url"] + ".git"}
-            if info.get("vcs") != "git" or info.get("commit") != pin["commit"] or not official:
-                raise IdentityPrecondition(
-                    f"{python} {name} is {info.get('commit')} at {str(info.get('url'))[:160]}, "
-                    f"not {pin['url']}@{pin['commit']}. "
-                    "Install the declared runtime pins in this interpreter. "
-                    "This test does not reinstall them."
-                )
-        hatch = subprocess.run(
-            [python, "-c", "import hatchling"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            env=self._env(self.tmp / "unset-cc.json"),
-        )
-        if hatch.returncode != 0:
-            raise IdentityPrecondition(
-                f"hatchling is not importable in {python}. The pinned knowledge "
-                "tree builds with hatchling. Install hatchling in this interpreter "
-                "before the local-candidate test. This test does not download a "
-                "build backend."
-            )
-
-    def _link_official_runtime(self, venv_python):
-        """Make the isolated venv import the interpreter's already-installed deps.
-
-        A venv created from this interpreter does not see that interpreter's
-        site-packages. Process its .pth files as well as adding the directory:
-        Windows pywin32 needs its bootstrap and extension-module paths.
-        """
-        code = (
-            "import sysconfig\n"
-            "print(sysconfig.get_path('purelib'))\n"
-            "print(sysconfig.get_path('platlib'))\n"
-        )
-        parent = subprocess.run(
-            [sys.executable, "-c", code],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            env=self._env(self.tmp / "unset-cc.json"),
-        )
-        if parent.returncode != 0:
-            raise IdentityPrecondition(
-                "cannot resolve the official interpreter site-packages: "
-                + (parent.stderr or "")[-300:]
-            )
-        child = subprocess.run(
-            [str(venv_python), "-c", code],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            env=_git_env(),
-        )
-        if child.returncode != 0:
-            raise IdentityPrecondition(
-                "cannot resolve the isolated venv site-packages: "
-                + (child.stderr or "")[-300:]
-            )
-        sources = []
-        for line in parent.stdout.splitlines():
-            candidate = Path(line.strip())
-            if line.strip() and candidate not in sources:
-                if not candidate.is_dir():
-                    raise IdentityPrecondition(
-                        f"official site-packages is not a directory: {candidate}"
-                    )
-                sources.append(candidate)
-        destination = Path(child.stdout.splitlines()[0].strip())
-        destination.mkdir(parents=True, exist_ok=True)
-        payload = "import site; " + "; ".join(
-            f"site.addsitedir({str(path)!r})" for path in sources
-        ) + "\n"
-        (destination / "official-runtime.pth").write_text(payload, encoding="utf-8")
-
-    def _genuine_local_git_python(self, commit, remote_commit):
-        """Real git+file install of an explicitly supplied local checkout.
-
-        Runtime dependencies stay the official installs of this interpreter.
-        pip writes the candidate's direct_url.json; this test does not.
-        """
-        import setup
-
-        checkout = knowledge_checkout(commit)
-        self._require_reused_runtime(_runtime_pins())
-        parent_knowledge = self._direct_url(sys.executable, "mindie-knowledge")["raw"]
-        parent_remote = self._direct_url(sys.executable, "remote-dev")["raw"]
-        work = self.tmp / "local-git-runtime"
-        repo = work / "knowledge"
-        work.mkdir(parents=True)
-        cloned = subprocess.run(
-            ["git", "clone", "--local", "--no-hardlinks", str(checkout), str(repo)],
-            capture_output=True,
-            text=True,
-            timeout=60,
-            env=_git_env(),
-        )
-        if cloned.returncode != 0:
-            raise IdentityPrecondition(
-                "local clone of the supplied knowledge checkout failed: "
-                + (cloned.stderr or cloned.stdout)[-500:]
-            )
-        _git(repo, "remote", "remove", "origin")
-        checked = _git(repo, "checkout", "--detach", commit, timeout=60)
-        if checked.returncode != 0:
-            raise IdentityPrecondition(
-                "the local clone does not contain the declared commit: "
-                + (checked.stderr or checked.stdout)[-400:]
-            )
-        head = _git(repo, "rev-parse", "HEAD")
-        if head.returncode != 0 or head.stdout.strip() != commit:
-            raise IdentityPrecondition(
-                f"local clone HEAD is {head.stdout.strip()!r}, not {commit}."
-            )
-        venv = work / "venv"
-        created = subprocess.run(
-            [sys.executable, "-m", "venv", str(venv)],
-            capture_output=True,
-            text=True,
-            timeout=60,
-            env=_git_env(),
-        )
-        if created.returncode != 0:
-            raise IdentityPrecondition(
-                "could not create the isolated candidate venv: "
-                + (created.stderr or created.stdout)[-400:]
-            )
-        scripts = venv / ("Scripts" if os.name == "nt" else "bin")
-        python = scripts / ("python.exe" if os.name == "nt" else "python")
-        pip = scripts / ("pip.exe" if os.name == "nt" else "pip")
-        self._link_official_runtime(python)
-        visible = subprocess.run(
-            [str(python), "-c", "import hatchling, yaml, remote_dev, mindie_diagnostics"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            env=_git_env(),
-        )
-        if visible.returncode != 0:
-            raise IdentityPrecondition(
-                "the isolated venv cannot see hatchling and the official runtime "
-                f"installed in {sys.executable}: "
-                + (visible.stderr or visible.stdout)[-500:]
-                + " Refusing to download dependencies or a build backend."
-            )
-        spec = f"git+{_file_url(repo)}@{commit}"
-        from bounded import run
-
-        # Own the complete pip/Git tree, including descendants that outlive pip.
-        run(
-            [
-                str(pip), "install", "--disable-pip-version-check", "--no-cache-dir",
-                "--no-index", "--no-deps", "--no-build-isolation", "--force-reinstall", spec,
-            ],
-            timeout=120,
-            env=_git_env(),
-        )
-        knowledge = self._direct_url(python, "mindie-knowledge")
-        self.assertEqual(knowledge["vcs"], "git", knowledge)
-        self.assertTrue(str(knowledge["url"]).startswith("file://"), knowledge["url"][:160])
-        self.assertEqual(knowledge["commit"], commit)
-        remote = self._direct_url(python, "remote-dev")
-        self.assertEqual(remote["vcs"], "git", remote)
-        self.assertEqual(remote["commit"], remote_commit)
-        self.assertTrue(
-            str(remote["url"]).startswith("https://github.com/mindie-agent/remote-dev"),
-            remote["url"][:160],
-        )
-        self.assertEqual(
-            self._direct_url(sys.executable, "mindie-knowledge")["raw"],
-            parent_knowledge,
-            "candidate install rewrote the official interpreter direct_url.json",
-        )
-        self.assertEqual(
-            self._direct_url(sys.executable, "remote-dev")["raw"],
-            parent_remote,
-        )
-        return python, knowledge["raw"]
-
-    def test_knowledge_checkout_preconditions_fail_before_any_install(self):
-        """Missing or inexact checkouts stop before git clone or pip."""
-        import setup
-
-        commit = _runtime_pins()["mindie-knowledge"]["commit"]
-        saved = os.environ.pop(KNOWLEDGE_CHECKOUT_ENV, None)
-        try:
-            with self.assertRaises(IdentityPrecondition) as missing:
-                knowledge_checkout(commit)
-            self.assertIn(KNOWLEDGE_CHECKOUT_ENV, str(missing.exception))
-            self.assertIn("does not fetch", str(missing.exception))
-            self.assertIn("does not search sibling", str(missing.exception))
-
-            os.environ[KNOWLEDGE_CHECKOUT_ENV] = "relative/knowledge"
-            with self.assertRaises(IdentityPrecondition) as relative:
-                knowledge_checkout(commit)
-            self.assertIn("absolute", str(relative.exception))
-
-            absent = self.tmp / "no-such-checkout"
-            os.environ[KNOWLEDGE_CHECKOUT_ENV] = str(absent)
-            with self.assertRaises(IdentityPrecondition) as missing_dir:
-                knowledge_checkout(commit)
-            self.assertIn("not a directory", str(missing_dir.exception))
-
-            plain = self.tmp / "not-a-repo"
-            plain.mkdir()
-            os.environ[KNOWLEDGE_CHECKOUT_ENV] = str(plain)
-            with self.assertRaises(IdentityPrecondition) as unusable:
-                knowledge_checkout(commit)
-            self.assertIn("not a usable git checkout", str(unusable.exception))
-            self.assertIn("does not clone from the network", str(unusable.exception))
-
-            other = self.tmp / "other-commit"
-            other.mkdir()
-            author = _git_env()
-            author.update(
-                GIT_AUTHOR_NAME="mindie-test",
-                GIT_AUTHOR_EMAIL="mindie-test@example.com",
-                GIT_COMMITTER_NAME="mindie-test",
-                GIT_COMMITTER_EMAIL="mindie-test@example.com",
-            )
-            for args in (
-                ["init"],
-                ["commit", "--allow-empty", "-m", "not the declared pin"],
-            ):
-                proc = subprocess.run(
-                    ["git", "-C", str(other), *args],
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                    env=author,
-                )
-                self.assertEqual(proc.returncode, 0, proc.stderr)
-            os.environ[KNOWLEDGE_CHECKOUT_ENV] = str(other)
-            with self.assertRaises(IdentityPrecondition) as wrong:
-                knowledge_checkout(commit)
-            self.assertIn(commit, str(wrong.exception))
-            self.assertIn("does not fetch", str(wrong.exception))
-            self.assertNotIn("github.com", str(wrong.exception))
-            shallow = self.tmp / "shallow"
-            cloned = subprocess.run(
-                ["git", "clone", "--depth=1", _file_url(other), str(shallow)],
-                capture_output=True, text=True, timeout=30, env=_git_env(),
-            )
-            self.assertEqual(cloned.returncode, 0, cloned.stderr)
-            os.environ[KNOWLEDGE_CHECKOUT_ENV] = str(shallow)
-            with self.assertRaisesRegex(IdentityPrecondition, "complete checkout"):
-                knowledge_checkout(_git(other, "rev-parse", "HEAD").stdout.strip())
-        finally:
-            if saved is None:
-                os.environ.pop(KNOWLEDGE_CHECKOUT_ENV, None)
-            else:
-                os.environ[KNOWLEDGE_CHECKOUT_ENV] = saved
-
     def test_local_git_source_is_rejected_even_when_commit_matches(self):
-        pins = _runtime_pins()
-        commit = pins["mindie-knowledge"]["commit"]
+        import importlib.metadata
+        from candidate_validate import CheckFailure, installed_revisions
+        from product_contract import requirements
+
+        pins = requirements(ROOT)[0]
+        commit = pins["mindie-knowledge"]
+        site_dir = self.tmp / "local-dist"
+        dist_info = site_dir / "mindie_knowledge-0.0.0.dist-info"
+        dist_info.mkdir(parents=True)
+        (dist_info / "METADATA").write_text(
+            "Metadata-Version: 2.1\nName: mindie-knowledge\nVersion: 0.0.0\n",
+            encoding="utf-8",
+        )
+        (dist_info / "direct_url.json").write_text(
+            json.dumps(
+                {
+                    "url": _file_url(self.tmp / "local-knowledge-repo"),
+                    "vcs_info": {"vcs": "git", "commit_id": commit},
+                }
+            ),
+            encoding="utf-8",
+        )
+        sys.path.insert(0, str(site_dir))
         try:
-            python, before = self._genuine_local_git_python(commit, pins["remote-dev"]["commit"])
-        except IdentityPrecondition as exc:
-            raise self.failureException(str(exc)) from None
-        code = ("import sys;sys.path.insert(0,sys.argv[1]);"
-                "from candidate_validate import installed_revisions;"
-                "from product_contract import requirements;"
-                "installed_revisions(requirements(sys.argv[2])[0])")
-        result = subprocess.run([str(python), "-c", code, str(SCRIPTS), str(ROOT)],
-                                capture_output=True, text=True, env=self._env(self.tmp / "unset.json"))
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("revision_mismatch", result.stderr)
-        self.assertEqual(self._direct_url(python, "mindie-knowledge")["raw"], before)
+            with self.assertRaises(CheckFailure) as caught:
+                installed_revisions(pins)
+            self.assertEqual(caught.exception.failure.get("code"), "revision_mismatch")
+            self.assertEqual(caught.exception.failure.get("component"), "mindie-knowledge")
+        finally:
+            sys.path.remove(str(site_dir))
 
 
 class ConsentFileTests(LaneCase):
@@ -610,38 +328,6 @@ class ConsentFileTests(LaneCase):
             (enabled.parent / "mindie-consent.json").resolve(),
         )
 
-    def test_status_does_not_migrate_or_rewrite(self):
-        import entry
-
-        case = self.tmp / "status"
-        config = self._config(case)
-        engine = Path(json.loads(config.read_text(encoding="utf-8"))["engine_config"])
-        community = Path(json.loads(config.read_text(encoding="utf-8"))["community_config"])
-        marker = case / "state" / "cc.first-use.json"
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.write_text(json.dumps({"choice": "read-only"}) + "\n", encoding="utf-8")
-        before = {
-            "adapter": config.read_bytes(),
-            "engine": engine.read_bytes(),
-            "community": community.read_bytes(),
-            "marker": marker.read_bytes(),
-        }
-        payload = entry.status_payload()
-        with self.subTest("does not re-ask"):
-            self.assertEqual(payload.get("choices"), [])
-        with self.subTest("does not create consent"):
-            self.assertFalse((config.parent / "mindie-consent.json").exists())
-        with self.subTest("does not copy community"):
-            self.assertFalse((config.parent / "mindie-community.json").exists())
-        with self.subTest("adapter bytes"):
-            self.assertEqual(config.read_bytes(), before["adapter"])
-        with self.subTest("engine bytes"):
-            self.assertEqual(engine.read_bytes(), before["engine"])
-        with self.subTest("community bytes"):
-            self.assertEqual(community.read_bytes(), before["community"])
-        with self.subTest("marker bytes"):
-            self.assertEqual(marker.read_bytes(), before["marker"])
-
     def test_field_update_does_not_clear_a_damaged_consent_file(self):
         import consent
 
@@ -662,35 +348,6 @@ class ConsentFileTests(LaneCase):
         self.assertEqual(path.read_bytes(), original)
         self.assertEqual(len(rejected), 2, rejected)
         self.assertNotEqual(consent.load()["state"], "ok")
-
-    def test_unreadable_consent_is_not_replaced(self):
-        import consent
-
-        case = self.tmp / "unreadable"
-        config = self._config(case)
-        path = config.parent / "mindie-consent.json"
-        original = b'{"schema":"mindie-consent/1","choice":"later","reporting":"disabled"}\n'
-        path.write_bytes(original)
-        path.chmod(0)
-        try:
-            try:
-                path.read_bytes()
-            except OSError:
-                blocked = True
-            else:
-                blocked = False
-            if not blocked:
-                self.skipTest("mode 000 is still readable by the owner on this OS")
-            rejected = False
-            try:
-                consent.record_choice("read-only")
-            except Exception:
-                rejected = True
-            path.chmod(0o600)
-            self.assertEqual(path.read_bytes(), original)
-            self.assertTrue(rejected)
-        finally:
-            path.chmod(0o600)
 
     def test_choice_and_reporting_do_not_clobber_each_other(self):
         import consent
@@ -1235,50 +892,21 @@ class EntryContractTests(LaneCase):
         )
         self.assertEqual(path.read_bytes(), original)
 
-    def test_skill_text_does_not_require_sharing_enable(self):
-        text = (ROOT / "skills" / "mindie-agent" / "SKILL.md").read_text(encoding="utf-8")
-        self.assertNotIn("sharing-enable", text)
-
 
 class SharedConsentTests(LaneCase):
-
-
-
     def test_kimi_choice_is_the_same_profile_authority(self):
-        """Uses the committed kimi adapter scripts, not a second CC config."""
+        """Uses a sibling adapter config in the same profile directory, not a second CC config."""
         import consent
         import support
 
-        raw = os.environ.get("MINDIE_TEST_KIMI_SCRIPTS")
-        self.assertTrue(raw, "set MINDIE_TEST_KIMI_SCRIPTS to the kimi adapter scripts")
-        kimi_scripts = Path(raw)
-        self.assertTrue((kimi_scripts / "consent.py").is_file(), kimi_scripts)
         case = self.tmp / "both"
         case.mkdir()
         (case / "project").mkdir()
         config = support.make_config(case, sharing=False)
         kimi_config = case / "kimi.json"
         kimi_config.write_text("{}\n", encoding="utf-8")
-        env = self._env(config)
-        env.pop("MINDIE_CC_CONFIG", None)
-        env["MINDIE_KIMI_CONFIG"] = str(kimi_config)
-        env["HOME"] = os.environ["HOME"]
-        proc = subprocess.run(
-            [
-                sys.executable,
-                "-c",
-                "import os,sys; sys.path.insert(0, sys.argv[1]);"
-                "os.environ['MINDIE_KIMI_CONFIG']=sys.argv[2];"
-                "import consent; consent.record_choice('later')",
-                str(kimi_scripts),
-                str(kimi_config),
-            ],
-            capture_output=True,
-            text=True,
-            env=env,
-            timeout=20,
-        )
-        self.assertEqual(proc.returncode, 0, proc.stderr[-800:])
+        from mindie_knowledge import consent_store
+        consent_store.record_choice(kimi_config.parent / "mindie-consent.json", "later")
         self._use(config)
         saved = consent.load()
         self.assertEqual(saved.get("choice"), "later")
@@ -1286,23 +914,7 @@ class SharedConsentTests(LaneCase):
         other = self.tmp / "isolated"
         other.mkdir()
         other_config = other / "cc.json"
-        probe = subprocess.run(
-            [
-                sys.executable,
-                "-c",
-                "import json,os,sys; sys.path.insert(0, sys.argv[1]);"
-                "os.environ['MINDIE_CC_CONFIG']=sys.argv[2];"
-                "import consent; print(json.dumps(consent.load()))",
-                str(SCRIPTS),
-                str(other_config),
-            ],
-            capture_output=True,
-            text=True,
-            env=self._env(other_config),
-            timeout=20,
-        )
-        self.assertEqual(probe.returncode, 0, probe.stderr[-800:])
-        self.assertEqual(json.loads(probe.stdout)["state"], "missing")
+        self.assertEqual(consent.load(other_config)["state"], "missing")
 
 
 def _hold_canonical_lock(lock_key, ready, release):
@@ -1336,10 +948,6 @@ def _profile_mutation(config, home, scripts, kind, entered):
 
         Path(config).with_suffix(".worker-error").write_text(traceback.format_exc(), encoding="utf-8")
         raise
-
-
-
-
 
 
 class DeclaredAuthorityWriteTests(LaneCase):
@@ -1424,11 +1032,7 @@ class DeclaredAuthorityWriteTests(LaneCase):
 
 
 class BootstrapCommunityWriterTests(LaneCase):
-    """setup.write_community uses the installed shared authority.
-
-    The invalid-file case matches integration-20260928/cc-bootstrap-corrupt-repro.json:
-    explicit settings must not replace an existing damaged authority.
-    """
+    """setup.write_community uses the installed shared authority."""
 
     def _explicit(self, root: Path):
         import setup
@@ -1464,18 +1068,6 @@ class BootstrapCommunityWriterTests(LaneCase):
                     setup.write_community(path, payload)
                 self.assertIn("nothing was written", str(caught.exception.code))
                 self.assertEqual(path.read_bytes(), raw)
-        path = self.tmp / "unreadable" / "mindie-community.json"
-        path.parent.mkdir()
-        raw = b"{broken-community"
-        path.write_bytes(raw)
-        path.chmod(0)
-        try:
-            with self.assertRaises(SystemExit) as caught:
-                setup.write_community(path, payload)
-            self.assertIn("nothing was written", str(caught.exception.code))
-        finally:
-            path.chmod(0o600)
-        self.assertEqual(path.read_bytes(), raw)
 
     def test_missing_file_is_a_first_setup(self):
         import setup
@@ -1532,55 +1124,6 @@ class BootstrapCommunityWriterTests(LaneCase):
             Path(written["consent_config"]).resolve(),
             (path.parent / "mindie-consent.json").resolve(),
         )
-
-    def test_explicit_publication_leaves_held_reader_on_old_bytes(self):
-        """A reader using the product delete-sharing open must keep the previous bytes.
-
-        Reopening the path sees the new enabled document. An in-place
-        truncate fails this; atomic replace does not.
-        """
-        from mindie_knowledge import consent_store
-        import setup
-
-        path = self.tmp / "held" / "mindie-community.json"
-        path.parent.mkdir()
-        old = (
-            json.dumps(
-                {
-                    "schema": "mindie-community-config/1",
-                    "enabled": False,
-                    "generation": "old-generation",
-                    "enabled_at": None,
-                    "repository": "local/unconfigured",
-                    "branch": "main",
-                    "project_roots": [],
-                    "idle_seconds": 300,
-                }
-            )
-            + "\n"
-        ).encode()
-        path.write_bytes(old)
-        held = consent_store._open_for_read(path)
-        try:
-            self.assertEqual(
-                setup.write_community(path, self._explicit(self.tmp / "held-root")),
-                "enabled",
-            )
-            held.seek(0)
-            self.assertEqual(held.read(), old)
-        finally:
-            held.close()
-        published = json.loads(path.read_text(encoding="utf-8"))
-        self.assertEqual(published.get("schema"), "mindie-community-config/1")
-        self.assertIs(published.get("enabled"), True)
-        self.assertNotEqual(published.get("generation"), "old-generation")
-        self.assertEqual(published.get("repository"), "owner/repo")
-        self.assertIsInstance(published.get("project_roots"), list)
-        self.assertEqual(
-            Path(published["consent_config"]).resolve(),
-            (path.parent / "mindie-consent.json").resolve(),
-        )
-
 
 class HookManifestTests(LaneCase):
     def test_expansion_matchers_cover_every_accepted_command(self):

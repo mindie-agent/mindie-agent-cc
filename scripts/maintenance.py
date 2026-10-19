@@ -1,10 +1,33 @@
-"""Knowledge refresh and diagnostic retention, independent of plugin updates."""
+"""Knowledge refresh and diagnostic retention, independent of plugin updates.
+
+[Role]
+Executes optional session knowledge feed synchronization (`fold_feed_results`)
+and diagnostic retention pruning in an owned maintenance worker.
+
+[Invariants]
+- Folds core `sync` JSON list stdout into deterministic statuses (`ok`,
+  `deferred`, `degraded`, `failed`) while preserving every original row.
+- Runs independently of plugin release updates.
+
+[Timeouts & Locks]
+- Feed work has 20 seconds and diagnostics 5 seconds; the launcher reserves
+  another 15 seconds for both process-tree drains and result publication.
+
+[Side-Effect Policy]
+- Refreshes local knowledge feed snapshots and prunes expired diagnostics.
+"""
 
 import json
 from pathlib import Path
 import sys
 
 from bounded import run
+
+# Optional session maintenance cannot consume the runtime installation budget.
+# The outer launcher also reserves both owned-process drains and result I/O.
+FEED_BUDGET = 20.0
+REPORTING_BUDGET = 5.0
+TOTAL_BUDGET = FEED_BUDGET + REPORTING_BUDGET + 15.0
 
 _FEED_OK = frozenset({"synced", "unchanged"})
 _FEED_PENDING = frozenset({"busy", "deferred"})
@@ -87,7 +110,7 @@ def _feed_error_summary(rows):
     return "; ".join(parts)[:240]
 
 
-def sync_public_feed(python, engine_config):
+def sync_public_feed(python, engine_config, *, timeout=None):
     """Preserve core sync outcomes independently of process/cleanup failure."""
     receipt = {}
     try:
@@ -96,6 +119,7 @@ def sync_public_feed(python, engine_config):
              "--config", str(engine_config)],
             "",
             receipt=receipt,
+            **({"timeout": timeout} if timeout is not None else {}),
         )
         aggregate, rows, summary = fold_feed_results(output)
         feed = dict(result=aggregate, results=rows)
@@ -142,13 +166,13 @@ def session_start(event=None):
             failure("capture.session_start", stage="association", category="unavailable",
                     exception=exc, reportable=False)
             capture = {"status": "unavailable", "error_type": type(exc).__name__}
-    feed = sync_public_feed(sys.executable, engine_config_path())
+    feed = sync_public_feed(sys.executable, engine_config_path(), timeout=FEED_BUDGET)
     process = {}
     try:
         raw = run(
             [sys.executable, "-m", "mindie_diagnostics.cli", "reporting", "maintain",
              "--update-running", "--config", str(reporting_config_path())],
-            check=False, receipt=process,
+            check=False, receipt=process, timeout=REPORTING_BUDGET,
         )
         reporting = json.loads(raw)
         if not isinstance(reporting, dict):

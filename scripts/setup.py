@@ -1,8 +1,22 @@
 #!/usr/bin/env python3
 """Prepare this native release's fixed runtime binding and existing shared state.
 
-Plugin installation, update and removal belong to Claude's Git marketplace.
-No code-update scheduler or mutable code-selection registry lives here.
+[Role]
+Validates the candidate runtime, prepares the knowledge store and capture
+configuration, and records the atomic `installation.json` binding for
+`mindie-agent-cc`.
+
+[Invariants]
+- Plugin installation, update, and removal belong to Claude Code's Git
+  marketplace; no mutable code-selection registry lives here.
+- Preserves existing user consent and community sharing settings across setups.
+
+[Timeouts & Locks]
+- Serializes cold preparation separately from short profile admission locks.
+
+[Side-Effect Policy]
+- Writes MindIE-owned adapter, engine, community, and `installation.json` files;
+  never touches `~/.claude`.
 """
 from __future__ import annotations
 
@@ -101,7 +115,6 @@ def prepare_binding(source, config=None, *, root=None, domain="vllm-ascend",
     from bootstrap import runtime_key
     from capture_config import prepare, prepare_store
     from harness import require_engine_support
-    from state_compatibility import check
 
     source = Path(source).resolve()
     config = Path(config or default_config_path()).expanduser().resolve()
@@ -118,57 +131,64 @@ def prepare_binding(source, config=None, *, root=None, domain="vllm-ascend",
     adapter = selected or initial
     if adapter["base_config"] != str(config):
         raise InstallationUnavailable("installation profile identity differs")
-    binding = Path(adapter["state_dir"]) / "installations" / key
-    adapter_file, engine_file = binding / "cc.adapter.json", binding / "cc.engine.json"
-    if adapter_file.exists():
-        value = read_binding(adapter_file)
-        from candidate_validate import validate
-        validate(source, identity(source), value["product_validation"])
-        if (value["python"] != sys.executable or value["runtime_scripts"] != str(HERE)
-                or value["base_config"] != str(config)):
-            raise InstallationUnavailable("prepared candidate identity differs")
-        engine = _read(value["engine_config"])
-        require_engine_support(engine, source=source)
-        check(engine, str(Path(value["state_dir"]) / "remote"))
-    else:
-        validation = validate_candidate(source)
-        if selected is None:
-            engine = dict(root=str(domain_root), domain=domain,
-                          admission_path=str(domain_root / "admission.sqlite3"))
+    # Native SessionStart and both MCP processes can arrive together. A
+    # candidate is prepared once; no reader sees its store half initialized.
+    with OperationLock(adapter).preparation(timeout=30):
+        selected = read_binding(config) if config.exists() else None
+        adapter = selected or initial
+        binding = Path(adapter["state_dir"]) / "installations" / key
+        adapter_file, engine_file = binding / "cc.adapter.json", binding / "cc.engine.json"
+        if adapter_file.exists():
+            value = read_binding(adapter_file)
+            from candidate_validate import validate
+            validate(source, identity(source), value["product_validation"])
+            if (value["python"] != sys.executable or value["runtime_scripts"] != str(HERE)
+                    or value["base_config"] != str(config)):
+                raise InstallationUnavailable("prepared candidate identity differs")
+            engine = _read(value["engine_config"])
+            require_engine_support(engine, source=source)
         else:
-            engine = _read(selected["engine_config"])
-        check(engine, str(Path(adapter["state_dir"]) / "remote"))
-        engine.update(transcript_adapter=str(HERE / "transcript.py"),
-                      **prepare(sys.executable, HERE),
-                      community_config=adapter["community_config"],
-                      product_validation=validation)
-        if selected is None and not no_public_feed and domain == validation["publication"]["domain"]:
-            from product_contract import publication_feed
-            engine["feeds"] = [publication_feed(validation)]
-        value = dict(adapter, python=sys.executable, runtime_scripts=str(HERE),
-                     adapter_config=str(adapter_file), engine_config=str(engine_file),
-                     product_validation=validation)
-        if claude_config_dir:
-            value["claude_config_dir"] = str(Path(claude_config_dir).expanduser().resolve())
-        engine["service_launch_context"] = service_launch_context(adapter_file, value)
-        value["claude_config_dir"] = engine["service_launch_context"]["paths"]["CLAUDE_CONFIG_DIR"]
-        require_engine_support(engine, source=source)
-        if selected is None:
-            prepare_store(sys.executable, HERE, engine)
-        _publish_bytes(engine_file, (json.dumps(engine, indent=2) + "\n").encode())
-        _publish_bytes(adapter_file, (json.dumps(value, indent=2) + "\n").encode())
+            validation = validate_candidate(source)
+            if selected is None:
+                engine = dict(root=str(domain_root), domain=domain,
+                              admission_path=str(domain_root / "admission.sqlite3"))
+            else:
+                engine = _read(selected["engine_config"])
+            engine.update(transcript_adapter=str(HERE / "transcript.py"),
+                          **prepare(sys.executable, HERE),
+                          community_config=adapter["community_config"],
+                          product_validation=validation)
+            if selected is None and not no_public_feed and domain == validation["publication"]["domain"]:
+                from product_contract import publication_feed
+                engine["feeds"] = [publication_feed(validation)]
+            value = dict(adapter, python=sys.executable, runtime_scripts=str(HERE),
+                         adapter_config=str(adapter_file), engine_config=str(engine_file),
+                         product_validation=validation)
+            if claude_config_dir:
+                value["claude_config_dir"] = str(Path(claude_config_dir).expanduser().resolve())
+            engine["service_launch_context"] = service_launch_context(adapter_file, value)
+            value["claude_config_dir"] = engine["service_launch_context"]["paths"]["CLAUDE_CONFIG_DIR"]
+            require_engine_support(engine, source=source)
+            if selected is None:
+                prepare_store(sys.executable, HERE, engine)
+            _publish_bytes(engine_file, (json.dumps(engine, indent=2) + "\n").encode())
+            _publish_bytes(adapter_file, (json.dumps(value, indent=2) + "\n").encode())
 
-    # Validation, dependencies and storage preparation never hold admission.
-    with OperationLock(adapter).exclusive(timeout=30):
+        # Only publication changes take exclusive admission. SessionStart holds
+        # shared admission during maintenance, so already prepared MCP entries
+        # must not wait for that maintenance to finish.
         current = read_binding(config) if config.exists() else None
-        if current is None:
-            from release_update import disable_unfiltered_updates
-            disable_unfiltered_updates(value)
-            write_community(Path(value["community_config"]), community, python=sys.executable)
-            atomic_write(config, value)
-            current = value
-        elif community is not None:
-            write_community(Path(current["community_config"]), community, python=sys.executable)
+        if current is None or community is not None:
+            with OperationLock(adapter).exclusive(timeout=30):
+                current = read_binding(config) if config.exists() else None
+                if current is None:
+                    from release_update import disable_unfiltered_updates
+                    disable_unfiltered_updates(value)
+                    write_community(Path(value["community_config"]), community, python=sys.executable)
+                    atomic_write(config, value)
+                    current = value
+                elif community is not None:
+                    write_community(Path(current["community_config"]), community, python=sys.executable)
         status = "ready" if current == value else "prepared"
     os.environ["MINDIE_CC_CONFIG"] = str(adapter_file)
     return dict(config=str(adapter_file), base_config=str(config), status=status)

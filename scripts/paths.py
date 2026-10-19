@@ -1,4 +1,20 @@
-"""MindIE-owned paths for the Claude Code adapter. Never writes ~/.claude."""
+"""MindIE-owned paths for the Claude Code adapter. Never writes ~/.claude.
+
+[Role]
+Resolves MindIE-owned configuration, state, admission, and community file paths
+and extracts read-only provider/transport environment variables from Claude
+settings.
+
+[Invariants]
+- Never writes to `~/.claude` or mutates host-owned Claude Code settings.
+- `MINDIE_CC_CONFIG` overrides the default adapter config path when set.
+
+[Timeouts & Locks]
+- Pure path resolution and bounded local JSON reads.
+
+[Side-Effect Policy]
+- Strictly read-only path and environment resolution.
+"""
 
 from __future__ import annotations
 
@@ -28,7 +44,7 @@ TRANSPORT_ENV = (
 def service_launch_context(adapter_file: Path, adapter: dict) -> dict:
     """Declare service bindings without reading credentials or requiring Claude."""
     from mindie_knowledge.loop.service_context import validate
-    from diagnostic_fallback import default_root
+    from mindie_diagnostics.logging import default_root
     from diagnostic_support import reporting_config_path
 
     selected = adapter.get("claude_config_dir")

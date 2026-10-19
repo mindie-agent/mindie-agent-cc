@@ -1,5 +1,24 @@
 #!/usr/bin/env python3
-"""Stable native facade; each operation dispatches the selected complete helper."""
+"""Stable native facade; each operation dispatches the selected complete helper.
+
+[Role]
+Top-level entrypoint invoked by Claude Code hooks (`SessionStart`,
+`UserPromptExpansion`, `PreToolUse`, `Stop`) and `.mcp.json` (`mcp-server`).
+
+[Invariants]
+- Resolves the locked runtime binding (`install_state.py`) or runs cold-start
+  `bootstrap.py` when required.
+- Never silently swallows helper failures; attaches redacted diagnostic
+  references to user-facing hook warnings.
+
+[Timeouts & Locks]
+- Enforces `HOOK_TOTAL = 10.0s`, `HOOK_LOCK_BUDGET = 2.0s`, and
+  `BOOTSTRAP_TOTAL = 540.0s` (`outer_timeout >= sum(inner_budgets) + grace`).
+
+[Side-Effect Policy]
+- Dispatches into `entry.py`, `bridge.py`, `mcp_server.py`, or background
+  `maintenance.py` / `release_update.py` under the locked runtime interpreter.
+"""
 
 from __future__ import annotations
 
@@ -21,7 +40,9 @@ from install_state import (
     InstallationUnavailable, LockTimeout, binding_snapshot, installed_binding,
 )
 
-HOOK_TOTAL = 1.5
+HOOK_TOTAL = float(os.environ.get("MINDIE_HOOK_TOTAL_SECONDS") or 10.0)
+HOOK_LOCK_BUDGET = float(os.environ.get("MINDIE_HOOK_LOCK_BUDGET_SECONDS") or 2.0)
+BOOTSTRAP_TOTAL = float(os.environ.get("MINDIE_BOOTSTRAP_TOTAL_SECONDS") or 540.0)
 # Knowledge stdout only. A legal maximum page measured 817407 bytes.
 KNOWLEDGE_MAX_OUTPUT = 1024 * 1024
 MAX_RPC_ID = 256
@@ -236,7 +257,7 @@ def _hook(op: str) -> int:
     try:
         admission = (
             nullcontext(binding_snapshot()) if op == "stop"
-            else installed_binding(timeout=max(0, deadline - time.monotonic()))
+            else installed_binding(timeout=min(HOOK_LOCK_BUDGET, max(0, deadline - time.monotonic())))
         )
         with admission as binding:
             stage = "sharing-probe"
@@ -628,21 +649,28 @@ def main(argv=None) -> int:
     kind = argv[0] if argv else ""
     name = argv[1] if len(argv) > 1 else ""
     if kind == "hook" and name == "session-start":
-        event = _read_hook_stdin(time.monotonic() + HOOK_TOTAL)
+        deadline = time.monotonic() + BOOTSTRAP_TOTAL
+        event = _read_hook_stdin(deadline)
         if not event:
             _record_hook("input", "missing_identity", op="session-start")
             return _hook_warning()
         try:
-            with installed_binding() as binding:
+            with installed_binding(timeout=max(0.0, deadline - time.monotonic())) as binding:
                 from harness import require_binding_support
                 require_binding_support(binding)
                 selected = _runtime(binding)
                 script = Path(selected["scripts"]) / "maintenance.py"
+                from maintenance import TOTAL_BUDGET
+                remaining = max(0.01, deadline - time.monotonic())
                 raw = bounded.run([selected["python"], str(script)], event,
+                                  timeout=min(remaining, TOTAL_BUDGET),
                                   env=_child_env(selected), cwd=str(script.parent))
             result = json.loads(raw)
         except (InstallationUnavailable, LockTimeout):
             return _hook_warning(unavailable=True)
+        except Exception as exc:
+            _record_hook("maintenance", "unavailable", op="session-start", exception=exc)
+            result = {"status": "incomplete"}
         if result["status"] != "ready":
             print(json.dumps({"systemMessage": "MindIE startup maintenance is incomplete."}))
             return 0

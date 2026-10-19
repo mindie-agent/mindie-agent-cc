@@ -1,4 +1,21 @@
-"""Thin stdlib adapter to shared diagnostics. Import performs no I/O."""
+"""Thin stdlib adapter to shared diagnostics. Import performs no I/O.
+
+[Role]
+Bridges Claude Code adapter failures to `mindie_diagnostics` and formats
+user-visible `diagnostic_ref` warnings. An unavailable runtime emits only a
+static stderr warning; it never maintains a second diagnostic store.
+
+[Invariants]
+- Import performs zero I/O.
+- If diagnostic storage fails, emits a single stderr warning and preserves the
+  original operation outcome unchanged.
+
+[Timeouts & Locks]
+- Synchronous, non-blocking local incident recording.
+
+[Side-Effect Policy]
+- Writes redacted diagnostic records under the MindIE state directory.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +23,6 @@ import json
 import os
 import re
 import shlex
-import stat
 import sys
 from pathlib import Path
 
@@ -25,28 +41,18 @@ def _hex(value, length):
 
 
 def _read_small(path):
-    """Read bounded regular metadata without following a final symlink."""
-    fd = None
+    """Read bounded regular metadata."""
     try:
-        if Path(path).is_symlink():
+        path = Path(path)
+        if not path.is_file():
             return None
-        flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
-        fd = os.open(path, flags)
-        info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode) or info.st_size > 2048:
-            return None
-        raw = os.read(fd, 2049)
+        with path.open("rb") as stream:
+            raw = stream.read(2049)
         if len(raw) > 2048:
             return None
         return raw.decode()
     except Exception:
         return None
-    finally:
-        if fd is not None:
-            try:
-                os.close(fd)
-            except Exception:
-                pass
 
 
 def build_metadata():
@@ -91,18 +97,13 @@ def _warn():
         return
     _warned = True
     try:
-        descriptor = sys.stderr.fileno()
-        if not os.get_blocking(descriptor):
-            os.write(descriptor, (_STORAGE + "\n").encode("ascii"))
+        sys.stderr.write(_STORAGE + "\n")
     except Exception:
         pass
 
 
 def _record():
-    try:
-        from mindie_diagnostics.integration import record_failure
-    except ImportError:
-        from diagnostic_fallback import record_failure
+    from mindie_diagnostics.integration import record_failure
     return record_failure
 
 

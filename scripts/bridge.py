@@ -1,11 +1,25 @@
 #!/usr/bin/env python3
 """Claude plugin hooks. Activation is UserPromptExpansion, not MCP.
 
-Stop never exits 2 and never continues the model. With contribution enabled
-and the task's own transcript inside the configured scope, Stop automatically
-associates the task (an internal binding, never a consent prompt) and calls
-the shared capture handoff; an explicit deactivate is never undone here.
-Default-off sharing returns {} before any capture state.
+[Role]
+Implements Claude Code `PreToolUse` and `Stop` hook handlers inside the locked
+runtime.
+
+[Invariants]
+- `PreToolUse` records a one-shot `claudecode/toolUseId` bind for MindIE MCP
+  tools and leaves non-MindIE tools untouched.
+- `Stop` never exits 2 and never forces model continuation; default-off sharing
+  returns `{}` before touching capture state.
+- With contribution enabled and an in-scope transcript, `Stop` associates the
+  task (unless explicitly deactivated) and hands off to shared capture.
+
+[Timeouts & Locks]
+- Runs within `mindie_launch.py` hook budgets (`HOOK_TOTAL = 10.0s`) and uses
+  SQLite WAL one-shot bind storage.
+
+[Side-Effect Policy]
+- Writes one-shot tool binds and enqueues redacted transcript captures; reports
+  warnings via `systemMessage` without breaking the host turn.
 """
 
 from __future__ import annotations

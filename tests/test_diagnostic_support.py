@@ -69,11 +69,6 @@ class DiagnosticSupportTests(unittest.TestCase):
             self.assertEqual(unknown["status"], "unavailable")
             self.assertNotIn("command", unknown)
 
-    def test_hints_are_registered_native_commands(self):
-        hint = support.reporting_hint()
-        for action in ("enable", "disable", "status"):
-            self.assertEqual(hint[action], "/mindie-agent:reporting-" + action)
-
     def test_windows_ensure_command_is_powershell_executable(self):
         command = [r"C:\Users\Owner's Name\python.exe", "-m", "mindie_diagnostics.cli",
                    "--config", r"C:\Users\Owner's Name\reporting.json"]

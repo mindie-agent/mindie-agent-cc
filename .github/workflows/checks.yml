@@ -52,7 +52,4 @@ jobs:
         env:
           PYTHONUTF8: '0'
           MINDIE_TEST_KNOWLEDGE_CHECKOUT: ${{ github.workspace }}/.ci/knowledge
-          # Frozen peer scripts vendored at tests/fixtures/kimi-86de2c3.
-          # PROVENANCE.json records the source revision and file hashes.
-          MINDIE_TEST_KIMI_SCRIPTS: ${{ github.workspace }}/tests/fixtures/kimi-86de2c3/scripts
-        run: uv run --locked --no-editable --group test python -m pytest -q
+        run: uv run --locked --no-editable --group test python -m pytest -q -m "not live_npu"

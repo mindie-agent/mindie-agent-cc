@@ -1,9 +1,20 @@
 """Thin wrapper: shared Admission only. No local lease or attempt SQL.
 
-The lease is the internal per-task identity binding established by the
-entry or by an authorized in-scope Stop association; it is never a consent
-prompt and never failure-paused. An explicit deactivate is a revocation that
-an ordinary event never undoes.
+[Role]
+Delegates task lease activation, deactivation, and inspection to the shared
+`mindie_knowledge.loop.activation.Admission` store.
+
+[Invariants]
+- Lease is an internal per-task identity binding established by explicit entry
+  or authorized in-scope Stop association; never a consent prompt and never
+  failure-paused.
+- An explicit `deactivate` is a revocation that ordinary events never undo.
+
+[Timeouts & Locks]
+- Uses shared core SQLite WAL + busy_timeout inside `Admission`.
+
+[Side-Effect Policy]
+- Mutates only the neutral `admission_path(engine)` SQLite database.
 """
 
 from __future__ import annotations

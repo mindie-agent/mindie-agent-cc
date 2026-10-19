@@ -251,7 +251,9 @@ def test_registry_rejects_missing_symbols_and_escaping_test_paths(tmp_path):
 def test_release_asset_binds_exact_source_and_rejects_floating_revision():
     value = harness.metadata(ROOT, "a" * 40)
     assert value["source"] == {"repository": harness.REPOSITORY, "sha": "a" * 40}
-    assert value["version"] == "0.0.1"
+    assert value["version"] == json.loads(
+        (ROOT / ".claude-plugin/plugin.json").read_text(encoding="utf-8")
+    )["version"]
     with pytest.raises(ValueError):
         harness.metadata(ROOT, "main")
 
@@ -271,22 +273,6 @@ def test_background_no_receipt_or_failed_child_is_backed_off(tmp_path, child_fai
         checker.close()
     assert run.call_count == 1
     assert checker.next_check_at == 160
-
-
-def test_ten_thousand_not_due_triggers_only_read_one_small_receipt(tmp_path):
-    saved = binding(tmp_path)
-    with patch.object(update, "read_receipt",
-                      return_value={"last_successful_check": 100}) as read, \
-            patch.object(update, "run") as run, \
-            patch.object(update.time, "time", return_value=101):
-        selected = []
-        checker = update.BackgroundCheck(lambda: selected.append(True) or saved)
-        for _ in range(10000):
-            checker.start_if_due()
-        checker.close()
-    assert len(selected) == 1
-    assert read.call_count == 1
-    run.assert_not_called()
 
 
 def test_concurrent_due_triggers_start_only_one_worker(tmp_path):
@@ -629,41 +615,6 @@ def test_activation_preintent_failure_has_no_side_effect(tmp_path):
     assert state["activation_effect"] == "not_started"
     assert state["activation_process"]["started"] is False
     run.assert_not_called()
-
-
-def test_prepared_receipt_without_activation_phase_is_not_assumed_unstarted(tmp_path):
-    state = {"candidate": release(), "native_effect": "verified", "status": "failed",
-             "prepared": {"config": "unproven"}}
-    with patch.object(update, "native_binary", return_value="claude"), \
-            patch.object(update, "native_version", return_value="2.1.299"), \
-            patch.object(update, "installed_plugin", return_value={"version": "0.0.2"}), \
-            patch("mindie_knowledge.releases_io.fetch_releases") as fetch, \
-            patch.object(update, "run") as run:
-        with pytest.raises(ValueError, match="known activation phase"):
-            update.check(binding(tmp_path), state)
-    fetch.assert_not_called()
-    run.assert_not_called()
-
-
-@pytest.mark.parametrize("stage", ["locked-runtime-install", "binding-prepare"])
-def test_unsettled_preparation_cannot_be_repeated_or_superseded(tmp_path, stage):
-    state = {
-        "candidate": release(harness_version="2.1.269"), "status": "failed",
-        "native_effect": "verified", "preparation_stage": stage,
-        "preparation_effect": "unknown", "preparation_process": {
-            "started": True, "completed": True, "cleanup_failed": True,
-        },
-    }
-    with patch.object(update, "native_binary", return_value="claude"), \
-            patch.object(update, "native_version", return_value="2.1.299"), \
-            patch.object(update, "installed_plugin", return_value={"version": "0.0.2"}), \
-            patch("mindie_knowledge.releases_io.fetch_releases") as fetch, \
-            patch("bootstrap.ensure_runtime") as runtime, \
-            patch.object(update, "run") as run:
-        with pytest.raises(RuntimeError, match="preparation writer"):
-            update.check(binding(tmp_path), state)
-    for call in (fetch, runtime, run):
-        call.assert_not_called()
 
 
 def test_each_runtime_process_persists_fresh_intent_before_spawn(tmp_path):

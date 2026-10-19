@@ -16,8 +16,8 @@
 
 ## 2. Windows 平台原子配置读写
 
-- **删除共享读取 + 原生原子重命名**：共享配置存储结合了删除共享（Delete-Sharing）读取与 Windows 原生原子重命名语义（参见 [`FILE_RENAME_INFORMATION`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_file_rename_information)）。并发读取进程要么看到完整的旧配置文档，要么看到完整的新配置文档，绝不会读到写了一半的残缺 JSON。
-- **外部占用安全保护**：在 Windows 上，单纯调用 Python 的 `os.replace` 无法替换正被打开的文件；通过读写两侧协同即可避免内部并发读写互相阻塞。若被未开启删除共享的外部程序强行锁死，更新操作会保留原配置并明确报错，不会触发死循环重试或配置丢失。
+- **原子发布完整配置**：共享存储先写完临时 JSON 文件，再使用 `os.replace` 发布。读取方使用普通文件读取，适配器不再维护独立的 Win32 替换实现。
+- **占用失败保持可见**：若 Windows 因其他读取方持有文件而拒绝替换，写入明确失败并保留原有配置。适配器不会重置用户授权或无限重试。
 
 ---
 
@@ -30,9 +30,8 @@
 
 ```sh
 uv sync --locked --no-editable --group test
-MINDIE_TEST_KIMI_SCRIPTS="$PWD/tests/fixtures/kimi-86de2c3/scripts" \
 MINDIE_TEST_KNOWLEDGE_CHECKOUT=/absolute/path/to/mindie-knowledge-pin \
-uv run --locked --no-editable --group test python -m pytest -q
+uv run --locked --no-editable --group test python -m pytest tests -m "not live_npu" -q
 ```
 
 ### 本地候选源身份校验说明

@@ -16,8 +16,8 @@ This document describes the everyday usage invariants, cross-platform atomic con
 
 ## 2. Atomic Configuration Reads & Writes on Windows
 
-- **Delete-Sharing + Atomic Rename**: The shared configuration store combines delete-sharing file reads with native Windows atomic rename semantics ([`FILE_RENAME_INFORMATION`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_file_rename_information)). Concurrent readers either observe the complete previous JSON document or the complete updated document—never a truncated write.
-- **Safe Contention Handling**: Unlike standard `os.replace` alone on Windows, this paired read/write contract prevents internal readers from blocking configuration updates. If an external program locks the file without delete sharing, the write fails visibly while preserving the existing saved file, without entering a retry loop or resetting user settings.
+- **Atomic Publication**: The shared store writes a complete temporary JSON document and publishes it with `os.replace`. Readers use ordinary file reads; the adapter has no separate Win32 replacement implementation.
+- **Visible Contention**: If Windows refuses replacement because another reader holds the file, the write fails visibly and the saved document remains intact. The adapter does not reset consent or retry indefinitely.
 
 ---
 
@@ -30,9 +30,8 @@ From the repository root, prepare a local checkout of `mindie-agent/knowledge` a
 
 ```sh
 uv sync --locked --no-editable --group test
-MINDIE_TEST_KIMI_SCRIPTS="$PWD/tests/fixtures/kimi-86de2c3/scripts" \
 MINDIE_TEST_KNOWLEDGE_CHECKOUT=/absolute/path/to/mindie-knowledge-pin \
-uv run --locked --no-editable --group test python -m pytest -q
+uv run --locked --no-editable --group test python -m pytest tests -m "not live_npu" -q
 ```
 
 ### How the Local Candidate Identity Test Works

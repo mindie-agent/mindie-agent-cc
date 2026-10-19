@@ -4,7 +4,9 @@ These synthetic checks do not start native services or publish public Issues.
 """
 import os
 from contextlib import contextmanager
+import json
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -12,7 +14,6 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-import diagnostic_fallback
 import diagnostic_support
 from mindie_diagnostics.ingestion import ingest
 from mindie_diagnostics.integration import configure_reporting
@@ -119,13 +120,24 @@ class AutomaticReportingTests(unittest.TestCase):
                     repository=Publisher.repository)["status"], "configured")
                 self.assertEqual(ingest(logs, Outbox(root / "fresh.db"))["enqueued"], 0)
 
-    def test_bootstrap_policy_damage_is_not_absence_or_withdrawal(self):
+    def test_missing_runtime_reports_unavailable_without_local_shadow_state(self):
         with tempfile.TemporaryDirectory() as raw:
-            policy = Path(raw).resolve() / "policy.json"
-            policy.write_text("{broken")
-            with self.assertRaises(diagnostic_fallback.PolicyUnavailable):
-                diagnostic_fallback.read_policy(policy)
-            reference = dict(config_file=str(policy), revision="a" * 32,
-                             repository=Publisher.repository, purpose="tool_fault_reporting")
-            self.assertEqual(diagnostic_fallback.consent_status(reference), "unavailable")
-            self.assertEqual(policy.read_text(), "{broken")
+            root = Path(raw).resolve()
+            script = (
+                "import json,sys;sys.path.insert(0,sys.argv[1]);"
+                "from diagnostic_support import failure;"
+                "print(json.dumps(failure('mcp.request','decode','protocol_mismatch',"
+                "exception=RuntimeError('PRIVATE_SECRET'))))"
+            )
+            result = subprocess.run(
+                [sys.executable, "-I", "-S", "-c", script,
+                 str(Path(__file__).resolve().parents[1] / "scripts")],
+                env=dict(os.environ, MINDIE_DIAGNOSTICS_ROOT=str(root / "logs"),
+                         MINDIE_DIAGNOSTICS_CONFIG=str(root / "policy.json")),
+                text=True, capture_output=True, timeout=5,
+            )
+            self.assertEqual(result.returncode, 0)
+            self.assertEqual(json.loads(result.stdout), {"logging_failed": True})
+            self.assertEqual(result.stderr.strip(),
+                             "MindIE diagnostic storage unavailable; original outcome unchanged.")
+            self.assertEqual(list(root.iterdir()), [])

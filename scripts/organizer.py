@@ -1,26 +1,24 @@
 #!/usr/bin/env python3
 """Native Claude summary worker for the shared block-indexing contract.
 
-The shared core invokes this worker with ``--identity`` before block indexing,
-then sends one admitted request on stdin and expects exactly one outcome
-envelope line on stdout (``mindie-summary-outcome/1``). Exit zero means the
-envelope was delivered, not that indexing succeeded; a valid request always
-gets an explicit envelope, including failures and uncertain paid outcomes.
-The caller owns queue transactions and scans returned metadata; this worker
-never stores source text, rewrites a body, substitutes a fallback summary, or
-retries an uncertain/billed model request.
+[Role]
+Executes a single isolated `claude` CLI invocation to summarize redacted
+transcript blocks for `mindie_knowledge` indexing, emitting one
+`mindie-summary-outcome/1` JSON envelope line on stdout.
 
-The single native invocation is the local ``claude`` CLI in an isolated workdir with
-no business tools, hooks, plugins or MCP. The native structured-output
-submission tool remains available. Claude owns its schema-validation retries
-and termination; this adapter does not impose a separate agentic-turn cap.
-Usage is the native invocation's accumulated usage; one invocation is not one
-HTTP request.
-Provider and model come from the selected
-native profile's settings (never a shipped host-specific default or
-credential). A missing native model is a configuration failure, not a silent
-default. Cancellation, maintenance-owner death and output bounds still end the
-attempt; there is no arbitrary total execution deadline.
+[Invariants]
+- Exit 0 indicates the outcome envelope was delivered on stdout; never retries
+  uncertain/billed model calls or substitutes fallback summaries.
+- Runs `claude` in an isolated workdir with no business tools, hooks, plugins,
+  or MCP; provider and model come strictly from the selected native profile.
+
+[Timeouts & Locks]
+- Native execution uses the parent's remaining budget with a cleanup reserve;
+  `bounded.py` also observes cancellation, owner death and output byte bounds.
+
+[Side-Effect Policy]
+- Never stores raw source text; writes only the structured summary outcome
+  envelope to stdout.
 """
 
 from __future__ import annotations
@@ -43,6 +41,7 @@ import bounded
 from bounded import OutputLimitExceeded, OwnerExited
 import paths
 from mindie_knowledge.loop.process import AGENT_ERROR_EXIT_CODES
+from mindie_knowledge.loop.summary_budget import native_timeout
 from mindie_knowledge.loop.summary_scratch import (
     ENVIRONMENT_KEY as SUMMARY_SCRATCH_ENV,
     ScratchOwnershipError,
@@ -341,7 +340,7 @@ def _parse_native_stream(output, receipt):
 
 
 def _invoke_native(prompt, schema, env, model, receipt):
-    """One bounded native call in an isolated workdir; no retry, no deadline."""
+    """One native call within the parent summary budget, without retries."""
     directory, managed = create_profile(prefix="mindie-cc-summary-")
     isolated = Path(directory)
     try:
@@ -396,7 +395,7 @@ def _invoke_native(prompt, schema, env, model, receipt):
             output = bounded.run(
                 argv,
                 prompt,
-                timeout=None,
+                timeout=native_timeout(),
                 env=child_env,
                 cwd=str(isolated),
                 max_output=MAX_NATIVE_STREAM_BYTES,
@@ -409,6 +408,8 @@ def _invoke_native(prompt, schema, env, model, receipt):
         except OutputLimitExceeded:
             raise
         except bounded.CommandCancelled:
+            raise
+        except TimeoutError:
             raise
         except OSError as exc:
             raise NativeStartError("native executable could not start") from exc

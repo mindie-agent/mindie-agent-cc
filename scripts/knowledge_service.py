@@ -1,4 +1,20 @@
-"""Use the selected installation's exact shared service."""
+"""Use the selected installation's exact shared service.
+
+[Role]
+Wraps `mindie_knowledge.loop.cli` (`config_at`, `load_transcript_adapter`,
+`ensure_service`, `status`, `rpc`) using the installation's `engine_config_path`.
+
+[Invariants]
+- Resolves the explicit `engine_config_path` before invoking shared core service
+  operations.
+
+[Timeouts & Locks]
+- Delegates RPC and startup timeouts to `mindie_knowledge.loop.cli`.
+
+[Side-Effect Policy]
+- `status` is non-starting; `ensure_service` starts or connects to the local
+  knowledge service.
+"""
 
 from __future__ import annotations
 

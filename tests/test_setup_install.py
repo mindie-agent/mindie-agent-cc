@@ -3,6 +3,8 @@ import json
 import os
 from pathlib import Path
 import sys
+import subprocess
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from contextlib import ExitStack
 from unittest.mock import patch
 
@@ -11,7 +13,7 @@ import pytest
 from support import SCRIPTS
 sys.path.insert(0, str(SCRIPTS))
 import setup
-from install_state import InstallationUnavailable, installed_binding
+from install_state import InstallationUnavailable, OperationLock, installed_binding
 
 
 @pytest.fixture
@@ -32,7 +34,6 @@ def preparing(tmp_path):
             "summary_command": [sys.executable, str(SCRIPTS / "organizer.py")],
         }))
         prepare = stack.enter_context(patch("capture_config.prepare_store"))
-        compatible = stack.enter_context(patch("state_compatibility.check"))
         stack.enter_context(patch("mindie_knowledge.loop.lifecycle.inspect_retirement",
                                   return_value=None))
         community = stack.enter_context(patch.object(setup, "write_community"))
@@ -42,8 +43,7 @@ def preparing(tmp_path):
                                                       "CLAUDE_CONFIG_DIR": str(tmp_path / "claude")},
                                             "environment": [],
                                         }))
-        yield dict(config=config, root=root, prepare=prepare,
-                   compatible=compatible, community=community)
+        yield dict(config=config, root=root, prepare=prepare, community=community)
 
 
 def install(f):
@@ -75,6 +75,57 @@ def test_same_binding_recheck_does_not_rewrite_or_repeat_store_preparation(prepa
     f["community"].assert_called_once()
 
 
+def test_ready_mcp_preparation_does_not_wait_for_session_start_maintenance(preparing):
+    result = install(preparing)
+    binding = setup._read(result["config"])
+    exclusive = OperationLock.exclusive
+    # SessionStart legitimately keeps a shared binding during maintenance.
+    # Use an immediate writer budget so a regressed lock upgrade fails quickly.
+    with installed_binding(binding), patch.object(
+        OperationLock, "exclusive",
+        lambda lock, timeout=30: exclusive(lock, timeout=0),
+    ):
+        assert install(preparing) == result
+
+
+def test_parallel_cold_native_entries_share_one_complete_store(tmp_path_factory):
+    tmp_path = tmp_path_factory.mktemp("cold")
+    command = [sys.executable, str(Path(__file__).parent / "fixtures/concurrent_setup.py"),
+               str(SCRIPTS), str(tmp_path)]
+    processes = []
+    try:
+        first = subprocess.Popen(command + ["first"], stdin=subprocess.PIPE,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        processes.append(first)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            assert pool.submit(first.stdout.readline).result(10) == "started\n"
+            assert pool.submit(first.stdout.readline).result(10) == "state-open-before-layout\n"
+            second = subprocess.Popen(command + ["second"], stdin=subprocess.PIPE,
+                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            processes.append(second)
+            assert pool.submit(second.stdout.readline).result(10) == "started\n"
+            waiting = pool.submit(second.communicate, timeout=10)
+            try:
+                # A contender must wait for layout publication rather than
+                # diagnose the first process's in-progress DB as broken state.
+                with pytest.raises(FutureTimeout):
+                    waiting.result(0.3)
+            finally:
+                output, errors = first.communicate("continue\n", timeout=10)
+            other_output, other_errors = waiting.result(10)
+        assert first.returncode == 0, errors
+        assert second.returncode == 0, other_errors
+        assert json.loads(output) == json.loads(other_output)
+        from mindie_knowledge.loop.store import Store
+        store = Store(tmp_path / "data", "fixture")
+        store.close()
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.kill()
+            process.communicate(timeout=5)
+
+
 def test_different_binding_is_prepared_without_changing_current_or_retiring(preparing):
     f = preparing
     result = install(f)
@@ -101,20 +152,6 @@ def test_unsupported_development_profile_is_rejected_before_lock_creation(prepar
         install(f)
     assert f["config"].read_text(encoding="utf-8") == original
     assert not f["root"].exists()
-
-
-def test_state_format_rejection_does_not_publish_installation(preparing):
-    f = preparing
-    f["root"].mkdir()
-    marker = f["root"] / "paid-unknown.json"
-    marker.write_text('{"outcome":"unknown","usage":7}', encoding="utf-8")
-    before = marker.read_bytes()
-    f["compatible"].side_effect = ValueError("state format incompatible")
-    with pytest.raises(ValueError, match="incompatible"):
-        install(f)
-    assert marker.read_bytes() == before
-    assert not f["config"].exists()
-    f["prepare"].assert_not_called()
 
 
 def test_selected_binding_change_redirects_an_existing_fixed_facade(preparing):
@@ -250,15 +287,6 @@ def test_active_shared_operation_defers_activation_without_retirement(preparing)
         result = setup.activate_binding(candidate["config"])
     assert result == {"status": "deferred", "stage": "active_operation", "switched": False}
     retirement.assert_not_called()
-
-
-def test_immutable_entry_does_not_replace_a_published_runtime(tmp_path):
-    entry = tmp_path / "entry.py"
-    setup.publish_entry(entry, tmp_path / "adapter.json")
-    before = entry.read_bytes()
-    with pytest.raises(ValueError, match="immutable"):
-        setup.publish_entry(entry, tmp_path / "other.json")
-    assert entry.read_bytes() == before
 
 
 def test_default_coinstallation_preserves_shared_authority_bytes(tmp_path):

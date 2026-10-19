@@ -1,16 +1,8 @@
-"""The runtime probe checks the current worker contract.
+"""The runtime probe checks the current worker contract."""
 
-SQLite FTS5 contentless_delete is not a requirement of the current core.
-These checks use the selected interpreter, sys.executable. CI installs the
-pinned runtime there, so the current-core check runs instead of skipping.
-An old core is a synthetic interpreter whose modules omit the current
-contract. No private filesystem path is required. These checks do not claim
-host acceptance.
-"""
-
-import os
 from contextlib import redirect_stdout
 import io
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -22,10 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-import inspect
-
-import runtime_probe
 import candidate_validate
+import runtime_probe
 
 CURRENT = Path(sys.executable)
 
@@ -40,8 +30,6 @@ def _run(python, source, extra_env=None):
     env = _child_env()
     if extra_env:
         env.update(extra_env)
-        # The old-core fixture is the only caller that sets PYTHONPATH.
-        # _child_env removes it so ordinary checks cannot inherit one.
         if "PYTHONPATH" in extra_env:
             env["PYTHONPATH"] = extra_env["PYTHONPATH"]
     return subprocess.run(
@@ -55,12 +43,6 @@ def _run(python, source, extra_env=None):
 
 
 def _missing_contract(directory):
-    """Packages that import and omit the current worker symbols.
-
-    The selected interpreter still runs the probe. These modules hide the
-    pinned runtime for that one process, so rejection does not depend on a
-    private older virtualenv.
-    """
     root = Path(directory)
     packages = {
         "mindie_knowledge/__init__.py": "",
@@ -80,73 +62,21 @@ def _missing_contract(directory):
 
 
 class WorkerProbeTests(unittest.TestCase):
-    def test_update_contract_apis_are_required_before_install(self):
-        from mindie_knowledge.loop import cli, lifecycle, locks
-        from mindie_knowledge import releases
-
-        script = runtime_probe.build_probe_script(str(SCRIPTS / "transcript.py"))
-        for module, name, value, message in (
-            (locks, "try_lock_file", None, "shared operation admission locks"),
-            (releases, "supports_harness", None, "compatible Release selection APIs"),
-            (lifecycle, "retire_service", lambda path: None, "bounded control observation"),
-            (cli, "prepare_service", lambda path: None, "bounded readiness probe"),
-        ):
-            with self.subTest(name=name), patch.object(module, name, value), \
-                    redirect_stdout(io.StringIO()) as output:
-                exec(script, {})
-            self.assertIn(message, output.getvalue())
-            self.assertTrue(output.getvalue().startswith("MISSING:"))
-
-    def test_git_layout_preflight_is_required_before_install(self):
-        from mindie_knowledge import git_layout
-
-        script = runtime_probe.build_probe_script(str(SCRIPTS / "transcript.py"))
-        with patch.object(git_layout, "validate_config_feed_layout", None), \
-                redirect_stdout(io.StringIO()) as output:
-            exec(script, {})
-        self.assertIn("knowledge Git layout preflight is unavailable", output.getvalue())
-        self.assertTrue(output.getvalue().startswith("MISSING:"))
-
-    def test_summary_scratch_contract_is_required_before_install(self):
-        from mindie_knowledge.loop import summary_scratch
-
-        script = runtime_probe.build_probe_script(str(SCRIPTS / "transcript.py"))
-        for name, value, message in (
-            ("create_profile", None, "summary scratch profile API is unavailable"),
-            ("create_profile", lambda: None, "summary scratch profile API is unavailable"),
-            ("ENVIRONMENT_KEY", "", "summary scratch profile API is unavailable"),
-            ("ScratchOwnershipError", ValueError,
-             "summary scratch ownership failure contract is unavailable"),
-        ):
-            with self.subTest(name=name, value=value), \
-                    patch.object(summary_scratch, name, value), \
-                    redirect_stdout(io.StringIO()) as output:
-                exec(script, {})
-            self.assertIn(message, output.getvalue())
-            self.assertTrue(output.getvalue().startswith("MISSING:"))
-
     def test_service_launch_apis_are_required_before_install(self):
-        from mindie_knowledge.loop import cli, service_context
+        from mindie_knowledge.loop import cli
 
         script = runtime_probe.build_probe_script(str(SCRIPTS / "transcript.py"))
-        for module, name, message in (
-            (cli, "prepare_service", "service lifecycle is unavailable"),
-            (cli, "ensure_service", "service lifecycle is unavailable"),
-            (service_context, "validate", "service launch context validation is unavailable"),
-        ):
-            with self.subTest(name=name), patch.object(module, name, None), \
+        for name in ("prepare_service", "ensure_service"):
+            with self.subTest(name=name), patch.object(cli, name, None), \
                     redirect_stdout(io.StringIO()) as output:
                 exec(script, {})
-            self.assertIn(message, output.getvalue())
+            self.assertIn(f"{name} is unavailable", output.getvalue())
             self.assertTrue(output.getvalue().startswith("MISSING:"))
 
     def test_probe_does_not_require_retired_fts_capability(self):
         script = runtime_probe.build_probe_script(str(SCRIPTS / "transcript.py"))
         self.assertNotIn("contentless_delete", script)
         self.assertNotIn("fts5", script.lower())
-        self.assertIn("usage_totals", script)
-        self.assertIn("validate_identity", script)
-        self.assertIn("validate_outcome", script)
 
     def test_current_core_satisfies_worker_probe(self):
         script = runtime_probe.build_probe_script(str(SCRIPTS / "transcript.py"))

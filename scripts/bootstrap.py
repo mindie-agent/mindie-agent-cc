@@ -1,5 +1,22 @@
 #!/usr/bin/env python3
-"""Materialize this native plugin's locked runtime, then leave host selection alone."""
+"""Materialize this native plugin's locked runtime, then leave host selection alone.
+
+[Role]
+Prepares and validates the locked Python virtual environment (`uv sync --locked`)
+for `mindie-agent-cc` and invokes `setup.py` to record the installation binding.
+
+[Invariants]
+- Runtime directory is keyed by `native_version` and `source_identity` digest.
+- Never alters Claude Code's own marketplace selection or unrelated plugins.
+
+[Timeouts & Locks]
+- Acquires `OperationLock` and runs subprocesses through `bounded.run` with
+  explicit deadlines (`BOOTSTRAP_TOTAL = 540.0s` from `mindie_launch.py`).
+
+[Side-Effect Policy]
+- Materializes the isolated runtime under `runtime_root()` and writes atomic
+  installation state via `setup.py`.
+"""
 
 from __future__ import annotations
 

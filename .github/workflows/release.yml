@@ -1,0 +1,27 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    uses: mindie-agent/mindie-bench/.github/workflows/publish-release.yml@f65b6bbe39e6d72110341476a2066e30b2adbf77
+    with:
+      version-files: |
+        pyproject.toml
+        .claude-plugin/plugin.json
+      setup-command: |
+        uv sync --locked --no-editable --group test
+      test-command: |
+        export MINDIE_TEST_KNOWLEDGE_CHECKOUT="$RUNNER_TEMP/release-knowledge"
+        knowledge_sha=$(.venv/bin/python -c 'import importlib.metadata as m,json; print(json.loads(m.distribution("mindie-knowledge").read_text("direct_url.json"))["vcs_info"]["commit_id"])')
+        git clone --no-checkout --filter=blob:none https://github.com/mindie-agent/knowledge "$MINDIE_TEST_KNOWLEDGE_CHECKOUT"
+        git -C "$MINDIE_TEST_KNOWLEDGE_CHECKOUT" checkout --detach "$knowledge_sha"
+        .venv/bin/python -m pytest -q -m "not live_npu"
+      build-command: |
+        uv build --out-dir "$RELEASE_ASSETS_DIR"
+        .venv/bin/python scripts/harness.py --source . --tests tests --revision "$GITHUB_SHA" > "$RELEASE_ASSETS_DIR/mindie-plugin-release.json"

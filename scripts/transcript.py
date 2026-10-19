@@ -1,15 +1,20 @@
 """Claude Code public-record parser (session JSONL). Adapter-owned.
 
-Public records are top-level type user/assistant with camel-case sessionId
-and ISO timestamps. Thinking, redacted_thinking, isMeta, sidechains,
-attachments, system, queue-operation, atis-latch and last-prompt are
-excluded. The caller names exactly one file supplied by a trusted hook.
+[Role]
+Parses Claude Code session JSONL transcripts to extract public `user`/`assistant`
+records (`identify`, `read_material`, `capture_source`) while excluding private
+thinking, sidechains, attachments, and meta records.
 
-``capture_source`` is the Stop path's attribution read: it verifies the named
-file is this native profile's artifact for this task. Its first native queue
-record supplies the creation boundary. A previously verified Admission supplies
-scope; otherwise only a record at or after that boundary may supply scope.
-Forks rewrite inherited sessionId values, so those alone cannot prove ownership.
+[Invariants]
+- `capture_source` verifies that the named file is this native profile's
+  artifact for the task and uses its first native queue record as the creation
+  boundary, preventing inherited fork `sessionId` values from spoofing ownership.
+
+[Timeouts & Locks]
+- Bounded regular-file reads (`SOURCE_HEAD_BYTES`, `SOURCE_HEAD_LINES`).
+
+[Side-Effect Policy]
+- Strictly read-only transcript parsing; mutates no files.
 """
 
 from __future__ import annotations
@@ -93,17 +98,10 @@ def capture_source(path, session_id, *, binding=None):
     explicit failure rather than permission to adopt inherited parent cwd.
     """
     selected = capture_path(path, session_id)
-    descriptor = os.open(selected, os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NONBLOCK", 0))
-    try:
-        info = os.fstat(descriptor)
-        if not statmod.S_ISREG(info.st_mode):
-            raise ValueError("capture source must be a regular transcript file")
-        with os.fdopen(descriptor, "rb") as stream:
-            descriptor = None
-            head = stream.read(SOURCE_HEAD_BYTES)
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
+    if not selected.is_file():
+        raise ValueError("capture source must be a regular transcript file")
+    with selected.open("rb") as stream:
+        head = stream.read(SOURCE_HEAD_BYTES)
     lines = head.split(b"\n")[:SOURCE_HEAD_LINES]
     created = None
     for raw in lines:
