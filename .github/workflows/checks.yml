@@ -52,4 +52,4 @@ jobs:
         env:
           PYTHONUTF8: '0'
           MINDIE_TEST_KNOWLEDGE_CHECKOUT: ${{ github.workspace }}/.ci/knowledge
-        run: uv run --locked --no-editable --group test python -m pytest -q
+        run: uv run --locked --no-editable --group test python -m pytest -q -m "not live_npu"
