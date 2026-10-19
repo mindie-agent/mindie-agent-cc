@@ -12,6 +12,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 import uuid
+import pytest
+
+pytestmark = pytest.mark.live_npu
 
 from mindie_knowledge import consent_store
 from mindie_knowledge.loop.activation import Admission

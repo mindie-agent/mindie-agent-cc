@@ -13,8 +13,8 @@ transcript blocks for `mindie_knowledge` indexing, emitting one
   or MCP; provider and model come strictly from the selected native profile.
 
 [Timeouts & Locks]
-- Obeys cancellation, maintenance-owner death, and output byte bounds via
-  `bounded.py` and shared `summary_scratch` ownership.
+- Native execution uses the parent's remaining budget with a cleanup reserve;
+  `bounded.py` also observes cancellation, owner death and output byte bounds.
 
 [Side-Effect Policy]
 - Never stores raw source text; writes only the structured summary outcome
@@ -41,6 +41,7 @@ import bounded
 from bounded import OutputLimitExceeded, OwnerExited
 import paths
 from mindie_knowledge.loop.process import AGENT_ERROR_EXIT_CODES
+from mindie_knowledge.loop.summary_budget import native_timeout
 from mindie_knowledge.loop.summary_scratch import (
     ENVIRONMENT_KEY as SUMMARY_SCRATCH_ENV,
     ScratchOwnershipError,
@@ -339,7 +340,7 @@ def _parse_native_stream(output, receipt):
 
 
 def _invoke_native(prompt, schema, env, model, receipt):
-    """One bounded native call in an isolated workdir; no retry, no deadline."""
+    """One native call within the parent summary budget, without retries."""
     directory, managed = create_profile(prefix="mindie-cc-summary-")
     isolated = Path(directory)
     try:
@@ -394,7 +395,7 @@ def _invoke_native(prompt, schema, env, model, receipt):
             output = bounded.run(
                 argv,
                 prompt,
-                timeout=None,
+                timeout=native_timeout(),
                 env=child_env,
                 cwd=str(isolated),
                 max_output=MAX_NATIVE_STREAM_BYTES,
@@ -407,6 +408,8 @@ def _invoke_native(prompt, schema, env, model, receipt):
         except OutputLimitExceeded:
             raise
         except bounded.CommandCancelled:
+            raise
+        except TimeoutError:
             raise
         except OSError as exc:
             raise NativeStartError("native executable could not start") from exc

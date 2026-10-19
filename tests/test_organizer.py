@@ -596,12 +596,14 @@ class WorkerEnvelopeTests(unittest.TestCase):
         env = dict(MODEL_ENV, ANTHROPIC_AUTH_TOKEN=secret,
                    MINDIE_MAINTENANCE_GROUP="1", MINDIE_MAINTENANCE_OWNER="424242")
         env[organizer.SUMMARY_SCRATCH_ENV] = "internal-owner-declaration"
-        value = self.execute(payload, native_envelope(metadata_for(payload)),
-                             env=env, captured=captured)
+        with patch.dict(os.environ, {"MINDIE_SUMMARY_WORKER_DEADLINE": str(time.monotonic() + 35)}):
+            value = self.execute(payload, native_envelope(metadata_for(payload)),
+                                 env=env, captured=captured)
         self.assertEqual(value["status"], "returned")
         self.assertEqual(len(captured), 1)
         call = captured[0]
-        self.assertIsNone(call["timeout"])
+        self.assertGreater(call["timeout"], 25)
+        self.assertLessEqual(call["timeout"], 30)
         self.assertEqual(call["max_output"], organizer.MAX_NATIVE_STREAM_BYTES)
         argv = call["argv"]
         self.assertIn("--print", argv)
@@ -627,6 +629,17 @@ class WorkerEnvelopeTests(unittest.TestCase):
         self.assertNotIn("MINDIE_MAINTENANCE_OWNER", child_env)
         self.assertNotIn(organizer.SUMMARY_SCRATCH_ENV, child_env)
         self.assertNotEqual(child_env.get("CLAUDE_CONFIG_DIR"), "")
+
+    def test_expired_parent_budget_never_starts_a_paid_native_call(self):
+        payload = make_payload()
+        captured = []
+        with patch.dict(os.environ, {"MINDIE_SUMMARY_WORKER_DEADLINE": str(time.monotonic() - 1)}):
+            value = self.execute(payload, native_envelope(metadata_for(payload)), captured=captured)
+        self.assertEqual(captured, [])
+        self.assertEqual(value["status"], "failed")
+        self.assertEqual(value["model_calls"], 0)
+        self.assertEqual(value["billing_status"], "not_called")
+        self.assertEqual(value["error"], "deadline")
 
     def test_second_model_call_is_rejected(self):
         model = organizer.NativeClaudeModel(dict(MODEL_ENV), "fixture-model", summarizer.output_schema())
