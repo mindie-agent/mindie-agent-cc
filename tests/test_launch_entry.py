@@ -197,6 +197,33 @@ def test_incomplete_first_start_does_not_claim_an_available_old_owner(capsys):
     assert message == "MindIE startup maintenance is incomplete."
 
 
+def test_optional_maintenance_timeout_keeps_ready_binding_and_warns(tmp_path, capsys):
+    import maintenance
+    import mindie_launch
+
+    scripts = tmp_path / "maintenance-worker"
+    scripts.mkdir()
+    (scripts / "maintenance.py").write_text(
+        "import time\n"
+        "time.sleep(30)\n",
+        encoding="utf-8",
+    )
+    binding = dict(python=sys.executable, runtime_scripts=str(scripts),
+                   adapter_config=str(tmp_path / "ready-adapter.json"))
+    Path(binding["adapter_config"]).write_text('{"ready":true}', encoding="utf-8")
+    with patch("harness.require_binding_support", return_value="2.1.299"), \
+            patch.object(mindie_launch, "_read_hook_stdin", return_value=b"{}"), \
+            patch.object(mindie_launch, "installed_binding",
+                         return_value=nullcontext(binding)), \
+            patch.object(mindie_launch, "_record_hook"), \
+            patch.object(maintenance, "TOTAL_BUDGET", 0.2):
+        assert mindie_launch.main(["hook", "session-start"]) == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "systemMessage": "MindIE startup maintenance is incomplete.",
+    }
+    assert Path(binding["adapter_config"]).read_text() == '{"ready":true}'
+
+
 def test_session_start_forwards_native_fork_payload_to_selected_maintenance(capsys):
     import mindie_launch
     payload = b'{"hook_event_name":"SessionStart","source":"fork","session_id":"native-child"}'

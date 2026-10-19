@@ -1,9 +1,9 @@
 """Thin stdlib adapter to shared diagnostics. Import performs no I/O.
 
 [Role]
-Bridges Claude Code adapter failures to `mindie_diagnostics` (or
-`diagnostic_fallback` when the runtime is unavailable) and formats user-visible
-`diagnostic_ref` warnings.
+Bridges Claude Code adapter failures to `mindie_diagnostics` and formats
+user-visible `diagnostic_ref` warnings. An unavailable runtime emits only a
+static stderr warning; it never maintains a second diagnostic store.
 
 [Invariants]
 - Import performs zero I/O.
@@ -23,7 +23,6 @@ import json
 import os
 import re
 import shlex
-import stat
 import sys
 from pathlib import Path
 
@@ -98,18 +97,13 @@ def _warn():
         return
     _warned = True
     try:
-        descriptor = sys.stderr.fileno()
-        if not os.get_blocking(descriptor):
-            os.write(descriptor, (_STORAGE + "\n").encode("ascii"))
+        sys.stderr.write(_STORAGE + "\n")
     except Exception:
         pass
 
 
 def _record():
-    try:
-        from mindie_diagnostics.integration import record_failure
-    except ImportError:
-        from diagnostic_fallback import record_failure
+    from mindie_diagnostics.integration import record_failure
     return record_failure
 
 

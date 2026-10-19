@@ -11,6 +11,7 @@ writes, and validation of the installed runtime binding (`installation.json`).
 [Timeouts & Locks]
 - `OperationLock` polls `flock`/`msvcrt.locking` up to caller-specified
   `timeout` seconds and raises `LockTimeout` on expiry.
+- Candidate preparation uses a separate lock from admitted business work.
 
 [Side-Effect Policy]
 - Acquires `<state_dir>/update/operation.lock` and performs atomic temp-file
@@ -189,3 +190,8 @@ class OperationLock:
 
     def exclusive(self, timeout=30.0):
         return _Held(self._path, True, timeout, bootstrap=self._bootstrap)
+
+    def preparation(self, timeout=30.0):
+        """Serialize cold binding preparation without blocking admitted work."""
+        return _Held(self._path.with_name("preparation.lock"), True, timeout,
+                     bootstrap=self._bootstrap)

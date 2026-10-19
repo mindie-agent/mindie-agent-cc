@@ -44,7 +44,7 @@ TRANSPORT_ENV = (
 def service_launch_context(adapter_file: Path, adapter: dict) -> dict:
     """Declare service bindings without reading credentials or requiring Claude."""
     from mindie_knowledge.loop.service_context import validate
-    from diagnostic_fallback import default_root
+    from mindie_diagnostics.logging import default_root
     from diagnostic_support import reporting_config_path
 
     selected = adapter.get("claude_config_dir")

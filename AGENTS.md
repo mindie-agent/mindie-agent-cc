@@ -20,7 +20,7 @@ All plugin scripts live under `scripts/` and include standardized top-of-file Ag
 | | `receipt_layout.py` | Declares and validates `remote-layout.json` (`mindie-cc-remote-layout/1`) before external remote work. |
 | **Transcript, Summary & Diagnostics** | `transcript.py` / `capture_config.py` | Parses Claude Code JSONL transcripts (`identify`, `read_material`, `capture_source`) with fork-boundary attribution. |
 | | `organizer.py` | Isolated native `claude` CLI summary worker emitting `mindie-summary-outcome/1` envelopes. |
-| | `diagnostic_support.py` / `diagnostic_fallback.py` | Records redacted diagnostic incidents (`mindie_diagnostics` or stdlib fallback) without altering caller outcomes. |
+| | `diagnostic_support.py` | Records incidents through `mindie_diagnostics`; an unavailable runtime emits only a static stderr warning without altering caller outcomes. |
 | **Configuration, Service & Subprocess** | `paths.py` / `consent.py` / `sharing.py` / `community_config.py` | Resolves MindIE-owned paths (never writing `~/.claude`), manages `mindie-consent.json`, and updates `mindie-community-config/1`. |
 | | `bounded.py` / `owned_process.py` | Bounded subprocess runner with POSIX process-group (`owned_process.py`) and Windows Job Object tree cleanup. |
 | | `knowledge_service.py` / `service_handoff.py` / `maintenance.py` / `release_update.py` | Local service connection, update handoff, feed sync/diagnostic retention, and background release checks. |

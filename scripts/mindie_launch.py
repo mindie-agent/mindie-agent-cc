@@ -660,13 +660,17 @@ def main(argv=None) -> int:
                 require_binding_support(binding)
                 selected = _runtime(binding)
                 script = Path(selected["scripts"]) / "maintenance.py"
+                from maintenance import TOTAL_BUDGET
                 remaining = max(0.01, deadline - time.monotonic())
                 raw = bounded.run([selected["python"], str(script)], event,
-                                  timeout=remaining,
+                                  timeout=min(remaining, TOTAL_BUDGET),
                                   env=_child_env(selected), cwd=str(script.parent))
             result = json.loads(raw)
         except (InstallationUnavailable, LockTimeout):
             return _hook_warning(unavailable=True)
+        except Exception as exc:
+            _record_hook("maintenance", "unavailable", op="session-start", exception=exc)
+            result = {"status": "incomplete"}
         if result["status"] != "ready":
             print(json.dumps({"systemMessage": "MindIE startup maintenance is incomplete."}))
             return 0

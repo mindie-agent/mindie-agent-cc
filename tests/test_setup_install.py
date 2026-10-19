@@ -3,6 +3,8 @@ import json
 import os
 from pathlib import Path
 import sys
+import subprocess
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from contextlib import ExitStack
 from unittest.mock import patch
 
@@ -11,7 +13,7 @@ import pytest
 from support import SCRIPTS
 sys.path.insert(0, str(SCRIPTS))
 import setup
-from install_state import InstallationUnavailable, installed_binding
+from install_state import InstallationUnavailable, OperationLock, installed_binding
 
 
 @pytest.fixture
@@ -71,6 +73,57 @@ def test_same_binding_recheck_does_not_rewrite_or_repeat_store_preparation(prepa
     assert [(p.read_bytes(), p.stat().st_mtime_ns) for p in paths] == before
     f["prepare"].assert_called_once()
     f["community"].assert_called_once()
+
+
+def test_ready_mcp_preparation_does_not_wait_for_session_start_maintenance(preparing):
+    result = install(preparing)
+    binding = setup._read(result["config"])
+    exclusive = OperationLock.exclusive
+    # SessionStart legitimately keeps a shared binding during maintenance.
+    # Use an immediate writer budget so a regressed lock upgrade fails quickly.
+    with installed_binding(binding), patch.object(
+        OperationLock, "exclusive",
+        lambda lock, timeout=30: exclusive(lock, timeout=0),
+    ):
+        assert install(preparing) == result
+
+
+def test_parallel_cold_native_entries_share_one_complete_store(tmp_path_factory):
+    tmp_path = tmp_path_factory.mktemp("cold")
+    command = [sys.executable, str(Path(__file__).parent / "fixtures/concurrent_setup.py"),
+               str(SCRIPTS), str(tmp_path)]
+    processes = []
+    try:
+        first = subprocess.Popen(command + ["first"], stdin=subprocess.PIPE,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        processes.append(first)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            assert pool.submit(first.stdout.readline).result(10) == "started\n"
+            assert pool.submit(first.stdout.readline).result(10) == "state-open-before-layout\n"
+            second = subprocess.Popen(command + ["second"], stdin=subprocess.PIPE,
+                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            processes.append(second)
+            assert pool.submit(second.stdout.readline).result(10) == "started\n"
+            waiting = pool.submit(second.communicate, timeout=10)
+            try:
+                # A contender must wait for layout publication rather than
+                # diagnose the first process's in-progress DB as broken state.
+                with pytest.raises(FutureTimeout):
+                    waiting.result(0.3)
+            finally:
+                output, errors = first.communicate("continue\n", timeout=10)
+            other_output, other_errors = waiting.result(10)
+        assert first.returncode == 0, errors
+        assert second.returncode == 0, other_errors
+        assert json.loads(output) == json.loads(other_output)
+        from mindie_knowledge.loop.store import Store
+        store = Store(tmp_path / "data", "fixture")
+        store.close()
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.kill()
+            process.communicate(timeout=5)
 
 
 def test_different_binding_is_prepared_without_changing_current_or_retiring(preparing):
