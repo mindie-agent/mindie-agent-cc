@@ -67,9 +67,10 @@ KNOWLEDGE_TOOL_DEFS = [
     dict(
         name="knowledge_query",
         description=(
-            "Search domain knowledge. Each match has a readable block ref and a "
-            "feedback_ref. For more related matches, pass related_next as continuation "
-            "without query. A changed corpus rejects the continuation. References are advisory."
+            "Search graded rules and task material in the selected domain. Each match has a readable ref "
+            "and feedback_ref for its observed revision. Pass known task conditions to filter graded rules. "
+            "For related task blocks, pass related_next as continuation without query. "
+            "A changed corpus rejects the continuation. References are advisory."
         ),
         inputSchema=dict(
             type="object",
@@ -78,6 +79,13 @@ KNOWLEDGE_TOOL_DEFS = [
                 limit={"type": "integer", "minimum": 1, "maximum": 20},
                 conditions={"type": "object"},
                 continuation={"type": "string"},
+                domain={
+                    "type": "string",
+                    "description": "Optional configured domain name; omit for the installation default.",
+                },
+                domain_path={"type": "string"},
+                token_budget={"type": "integer", "minimum": 1, "maximum": 16000},
+                include_unknown={"type": "boolean"},
             ),
             additionalProperties=False,
         ),
@@ -85,7 +93,8 @@ KNOWLEDGE_TOOL_DEFS = [
     dict(
         name="knowledge_explain",
         description=(
-            "Read one domain reference: a task ref returns the current navigation and "
+            "Read one domain reference: a graded-unit ref returns its exact current revision and conditions; "
+            "a task ref returns the current navigation and "
             "first_block_ref; a block ref returns that immutable block with "
             "previous_block_ref/next_block_ref for walking the task. "
             "The content is a reference slice, not the full case or a verified report."
@@ -101,7 +110,7 @@ KNOWLEDGE_TOOL_DEFS = [
     ),
     dict(
         name="knowledge_feedback",
-        description="Optional up/down vote for a consulted reference. Never required.",
+        description="Optional up/down vote: copy the exact feedback_ref returned by query/explain into ref. Never required.",
         inputSchema=dict(
             type="object",
             properties=dict(
@@ -110,6 +119,61 @@ KNOWLEDGE_TOOL_DEFS = [
                 reason={"type": "string"},
             ),
             required=["ref", "rating"],
+            additionalProperties=False,
+        ),
+    ),
+    dict(
+        name="knowledge_distill",
+        description=(
+            "Distill only explicitly selected evidence into C5 graded units. The "
+            "shared runtime redacts the selected inputs before the model call. This "
+            "requires the current active capture lease and saved contribution "
+            "authorization. task_state is explicit; an ordinary Stop does not mean "
+            "completion. This is one paid native model call: it never discovers "
+            "transcripts, grants publication, or retries an uncertain result."
+        ),
+        inputSchema=dict(
+            type="object",
+            properties=dict(
+                inputs=dict(
+                    type="array",
+                    minItems=1,
+                    items=dict(
+                        type="object",
+                        properties=dict(
+                            kind={"enum": [
+                                "experiment_ledger", "run_manifest",
+                                "authorized_transcript", "ecosystem_repo",
+                                "hardware_spec", "ablation_receipt",
+                            ]},
+                            outcome={"enum": [
+                                "observed", "verified", "compile_failed",
+                                "infra_failed", "measurement_invalid", "in_flight",
+                            ]},
+                            source_locator={"type": "string", "minLength": 1},
+                            content={"type": "string", "minLength": 1},
+                            evidence_refs={
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                            repetitions={"type": "integer", "minimum": 1},
+                        ),
+                        required=[
+                            "kind", "outcome", "source_locator", "content",
+                            "evidence_refs",
+                        ],
+                        additionalProperties=False,
+                    ),
+                ),
+                task_state={"enum": [
+                    "in_flight", "verified_milestone", "completed",
+                ]},
+                domain={
+                    "type": "string",
+                    "description": "Optional configured domain name; omit for the installation default.",
+                },
+            ),
+            required=["inputs", "task_state"],
             additionalProperties=False,
         ),
     ),
@@ -200,17 +264,109 @@ def clamp_remote_args(args):
     return body
 
 
+def _public_domain(args):
+    """Read the optional public domain without accepting any path or mapping."""
+    if not isinstance(args, dict) or "domain" not in args:
+        return None
+    value = args["domain"]
+    if not isinstance(value, str):
+        raise ValueError("domain must match [a-z][a-z0-9-]{0,63}")
+    return value
+
+
+def _distill_timeout():
+    """The paired distill RPC budget: scanners, identity, worker, ledger and cleanup.
+
+    Mirrors shared ``cli.distill_selected`` so this synchronous forward never
+    outlives the native call it bounds.
+    """
+    from mindie_knowledge.loop import summary_budget
+    return summary_budget.distill_rpc_timeout()
+
+
+def _knowledge_distill_call(args, session, ensure_service, rpc):
+    """Forward one paid C6 request through the selected engine's own lease."""
+    allowed = {"inputs", "task_state"}
+    if isinstance(args, dict) and "domain" in args:
+        allowed.add("domain")
+    if not isinstance(args, dict) or set(args) != allowed:
+        raise ValueError(
+            "knowledge_distill accepts only inputs, task_state and optional domain"
+        )
+    domain = _public_domain(args)
+    try:
+        from mindie_knowledge.graded import distill
+    except ImportError as exc:
+        raise ValueError(
+            "knowledge_distill is unavailable in the installed knowledge runtime"
+        ) from exc
+    if not callable(getattr(distill, "prepare_request", None)) or not callable(
+            getattr(distill, "value_gate", None)):
+        raise ValueError("knowledge_distill is unavailable in the installed knowledge runtime")
+    if args["task_state"] not in distill.TASK_STATES:
+        raise ValueError("task_state must be in_flight, verified_milestone or completed")
+    if not isinstance(args["inputs"], list) or not args["inputs"]:
+        raise ValueError("inputs must be a nonempty selected-evidence array")
+    # The native toolUseId only proves the host call. Paid distillation also
+    # requires the selected engine's current active capture lease. An explicit
+    # domain must never inherit the default domain's activation.
+    from admission import gate
+    from knowledge_service import engine_config, select_engine
+
+    selected, routed_domain = select_engine(domain=domain)
+    if selected is None:
+        lease = gate().check(session)
+    else:
+        lease = gate(engine_config(str(selected))).check(session)
+    try:
+        timeout = _distill_timeout()
+    except ImportError as exc:
+        raise ValueError(
+            "knowledge_distill is unavailable in the installed knowledge runtime"
+        ) from exc
+    connection = ensure_service() if selected is None else ensure_service(selected)
+    payload = dict(args, _session_id=session, _activation=lease["token"])
+    if routed_domain is not None:
+        payload["domain"] = routed_domain
+    return rpc(connection, "distill", payload, timeout=timeout)
+
+
+def _read_or_feedback_call(name, args, session, ensure_service, rpc):
+    from knowledge_service import select_engine
+
+    selected, routed_domain = select_engine(ref=args.get("ref"))
+    payload = dict(args, _session_id=session, _session_verified=True)
+    if routed_domain is not None and "domain" not in payload:
+        payload["domain"] = routed_domain
+    connection = ensure_service() if selected is None else ensure_service(selected)
+    return rpc(connection, name.removeprefix("knowledge_"), payload, timeout=None)
+
+
 def knowledge_call(name, args, session):
-    from knowledge_service import ensure_service
+    from knowledge_service import ensure_service, select_engine
     from mindie_knowledge.loop.cli import rpc
 
     if name == "knowledge_query":
         # Keep the native schema a plain object; enforce the shared argument
-        # contract before any service/storage operation.
+        # contract before any service/storage operation. The newer graded
+        # parameters are forwarded unchanged and validated by the shared Store.
         from mindie_knowledge.materials.provenance import query_request
 
         query_request(args.get("query"), args.get("limit", 5),
                       args.get("conditions"), args.get("continuation"))
+        domain = _public_domain(args)
+        selected, routed_domain = select_engine(domain=domain)
+        payload = dict(args, _session_id=session, _session_verified=True)
+        if routed_domain is not None:
+            payload["domain"] = routed_domain
+        connection = ensure_service() if selected is None else ensure_service(selected)
+        return rpc(connection, "query", payload, timeout=None)
+    if name == "knowledge_distill":
+        return _knowledge_distill_call(args, session, ensure_service, rpc)
+    if name in {"knowledge_explain", "knowledge_feedback"}:
+        # The returned mindie://DOMAIN/... URI is the routing authority; there is
+        # no caller-supplied path, map or separate domain parameter in the schema.
+        return _read_or_feedback_call(name, args, session, ensure_service, rpc)
     # Identity comes from the consumed native toolUseId bind. Public reads
     # use the native tool binding and do not require a capture lease.
     method = name.removeprefix("knowledge_")
@@ -307,7 +463,11 @@ def handle(surface, message):
         if not isinstance(args, dict):
             raise ValueError("invalid tool arguments")
         if surface == "knowledge" and (
-            "session_id" in args or "sessionId" in args or "thread_id" in args
+            any(key in args for key in (
+                "session_id", "sessionId", "thread_id",
+                "_session_id", "_activation", "_session_verified",
+            ))
+            or any(isinstance(key, str) and key.startswith("_") for key in args)
         ):
             raise ValueError("knowledge tool arguments must not include native session identity")
         call_id = meta_tool_use_id(params)
@@ -328,10 +488,14 @@ def handle(surface, message):
             if local not in KNOWLEDGE_TOOLS and not is_knowledge_tool(native_name, surface):
                 raise ValueError("unknown knowledge tool")
             payload = knowledge_call(local, args, session)
+            is_error = False
+            if local == "knowledge_distill":
+                from mindie_knowledge.graded.distill import result_view
+                payload, is_error = result_view(payload)
             result = dict(
                 content=[dict(type="text", text=canonical(payload))],
                 structuredContent=payload,
-                isError=False,
+                isError=is_error,
             )
         else:
             try:

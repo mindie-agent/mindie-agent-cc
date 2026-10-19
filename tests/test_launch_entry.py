@@ -54,6 +54,7 @@ def test_only_knowledge_business_calls_can_transfer_service_ownership(tmp_path):
         ("knowledge", "tools/call", "knowledge_query", True),
         ("knowledge", "tools/call", "knowledge_explain", True),
         ("knowledge", "tools/call", "knowledge_feedback", True),
+        ("knowledge", "tools/call", "knowledge_distill", True),
         ("knowledge", "tools/call", "mindie_status", False),
         ("knowledge", "tools/list", None, False),
         ("remote", "tools/call", "remote_bash", False),

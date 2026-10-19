@@ -74,6 +74,11 @@ class IdentityTests(unittest.TestCase):
             )
         )
         self.assertTrue(
+            self.identity.is_knowledge_tool(
+                "mcp__plugin_mindie-agent_knowledge__knowledge_distill"
+            )
+        )
+        self.assertTrue(
             self.identity.is_mindie_mcp_tool(
                 "mcp__plugin_mindie-agent_remote__remote.bash"
             )

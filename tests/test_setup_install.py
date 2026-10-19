@@ -195,6 +195,26 @@ def test_busy_owner_keeps_selected_binding_and_choices(preparing):
     start.assert_not_called()
 
 
+def test_domain_registration_after_prepare_defers_and_can_be_reprepared(preparing):
+    f = preparing
+    original, candidate = new_candidate(f)
+    previous = setup._read(f['config'])
+    custom = f['root'] / 'custom.engine.json'
+    engine = setup._read(previous['engine_config'])
+    custom.write_text(json.dumps({**engine, 'domain': 'custom'}))
+    changed = {**previous, 'domain_configs': {**previous.get('domain_configs', {}), 'custom': str(custom)}}
+    setup.atomic_write(f['config'], changed)
+    result = setup.activate_binding(candidate['config'])
+    assert result['status'] == 'deferred' and result['stage'] == 'domain_routes_changed'
+    assert setup._read(f['config']) == changed
+    with patch('bootstrap.runtime_key', return_value='release-b'):
+        refreshed = install(f)
+    value = setup._read(refreshed['config'])
+    assert refreshed['config'] != candidate['config']
+    assert value['domain_configs']['custom'] == str(custom)
+    assert value['domain_source_configs'] == changed['domain_configs']
+
+
 def test_ready_candidate_is_selected_only_after_exact_idle_retirement(preparing):
     f = preparing
     original, candidate = new_candidate(f)

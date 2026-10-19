@@ -11,6 +11,11 @@ transcript blocks for `mindie_knowledge` indexing, emitting one
   uncertain/billed model calls or substitutes fallback summaries.
 - Runs `claude` in an isolated workdir with no business tools, hooks, plugins,
   or MCP; provider and model come strictly from the selected native profile.
+- Only explicit versioned requests are admitted: the existing summary schema
+  keeps its path, a C6 request delegates prompt/schema/decision validation to
+  shared `graded.distill`, and an unknown schema fails instead of downgrading.
+- The C6 path consumes only supplied sanitized inputs, never scans a ledger or
+  filesystem, never installs/publishes locally and keeps no second task state.
 
 [Timeouts & Locks]
 - Native execution uses the parent's remaining budget with a cleanup reserve;
@@ -56,6 +61,10 @@ SUMMARY_EFFORT = "low"
 # The observed five-attempt native stream fits well below this envelope.
 MAX_NATIVE_STREAM_BYTES = 1024 * 1024
 
+# C6 requests carry explicitly selected sanitized evidence, so they use a wider
+# wire budget than legacy summary batches. The branch API is imported lazily.
+MAX_DISTILL_REQUEST_BYTES = 512 * 1024
+
 # Native 2.1.269 result/terminal enums. Unknown values never become log text.
 NATIVE_FAILURE_REASONS = {
     "error_max_turns": "native_max_turns",
@@ -75,6 +84,12 @@ NATIVE_TERMINAL_REASONS = {
 
 class ConfigurationError(ValueError):
     """The worker configuration or the admitted policy is unusable."""
+
+
+class UnsupportedSchemaError(ValueError):
+    """A request declares a worker protocol this build does not implement."""
+
+    reason = "unsupported_schema"
 
 
 class ProfileUnavailableError(ConfigurationError):
@@ -156,17 +171,45 @@ def native_model(env):
     return model.strip()
 
 
+def _distill_capabilities():
+    """Declare C6 only when the installed shared runtime exposes its API."""
+    try:
+        from mindie_knowledge.graded import distill
+    except ImportError:
+        return []
+    try:
+        from organizer_distill import REQUEST_SCHEMA as WORKER_SCHEMA
+    except ImportError:
+        return []
+    schema = getattr(distill, "REQUEST_SCHEMA", None)
+    required = ("with_worker_identity", "build_prompt", "decision_schema",
+                "parse_validate_result")
+    if (schema == WORKER_SCHEMA
+            and all(callable(getattr(distill, name, None)) for name in required)):
+        return [WORKER_SCHEMA]
+    return []
+
+
 def identity(env=None):
     """The actual executing policy: pinned sources plus the native model name."""
     if env is None:
         env = native_environment()
     # Read the implementation actually executing, not merely its command path.
-    sources = (Path(__file__), Path(bounded.__file__), Path(summarizer.__file__),
-               Path(paths.__file__))
+    sources = [Path(__file__), Path(bounded.__file__), Path(summarizer.__file__),
+               Path(paths.__file__)]
+    companion = Path(__file__).with_name("organizer_distill.py")
+    if companion.is_file():
+        sources.append(companion)
     implementation = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in sources}
     implementation["native_command"] = os.environ.get("MINDIE_CC_BIN", "claude")
-    return summarizer.policy_identity(model=native_model(env), effort=SUMMARY_EFFORT,
-                                      implementation=implementation)
+    value = summarizer.policy_identity(model=native_model(env), effort=SUMMARY_EFFORT,
+                                       implementation=implementation)
+    capabilities = _distill_capabilities()
+    if capabilities:
+        value["capabilities"] = capabilities
+        value["fingerprint"] = summarizer.digest(
+            {key: item for key, item in value.items() if key != "fingerprint"})
+    return value
 
 
 def _usage_counters(raw):
@@ -431,6 +474,12 @@ def _invoke_native(prompt, schema, env, model, receipt):
                 receipt["cleanup_failed"] = True
 
 
+def new_receipt():
+    """One invocation's transport facts; a missing counter stays unknown."""
+    return dict(native_started=False, turn_completed=False, turn_failed=False,
+                usage=None, cleanup_failed=False)
+
+
 class NativeClaudeModel:
     """LangMem `.invoke` bridge; no provider SDK, tools, history or retries."""
 
@@ -438,8 +487,7 @@ class NativeClaudeModel:
         self.env = env
         self.model = model
         self.schema = schema
-        self.receipt = dict(native_started=False, turn_completed=False, turn_failed=False,
-                            usage=None, cleanup_failed=False)
+        self.receipt = new_receipt()
         self.raw_result = None
         self.calls = 0
 
@@ -508,6 +556,13 @@ def _reason(error, receipt):
 
 
 def run(payload):
+    # A new explicit request selects the C6 branch. Unknown schema versions are
+    # rejected, never reinterpreted as a legacy summary request.
+    if isinstance(payload, dict) and "schema_version" in payload:
+        from organizer_distill import REQUEST_SCHEMA, run as run_distill
+        if payload.get("schema_version") == REQUEST_SCHEMA:
+            return run_distill(payload)
+        raise UnsupportedSchemaError("unsupported worker request schema")
     # Invalid wire input is rejected before a model object exists. Valid requests
     # always receive an explicit outcome, even for configuration/parse failures.
     summarizer.validate_request(payload)
@@ -553,17 +608,23 @@ def main():
         if args.identity:
             value = identity()
         else:
-            raw = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
-            if len(raw) > MAX_REQUEST_BYTES:
+            raw = sys.stdin.buffer.read(MAX_DISTILL_REQUEST_BYTES + 1)
+            if len(raw) > MAX_DISTILL_REQUEST_BYTES:
+                raise summarizer.SummaryInputError("worker request exceeds wire budget")
+            payload = json.loads(raw)
+            versioned = isinstance(payload, dict) and "schema_version" in payload
+            if not versioned and len(raw) > MAX_REQUEST_BYTES:
                 raise summarizer.SummaryInputError("summary request exceeds wire budget")
-            value = run(json.loads(raw))
+            value = run(payload)
         sys.stdout.buffer.write((summarizer.canonical(value) + "\n").encode("utf-8"))
         sys.stdout.buffer.flush()
         return 0
     except Exception as exc:
         category = _category(exc)
-    print("summary protocol failed: " + category, file=sys.stderr)
-    return AGENT_ERROR_EXIT_CODES.get(category, 2)
+        detail = getattr(exc, "reason", None)
+        suffix = " (" + detail + ")" if isinstance(detail, str) and detail else ""
+        print("summary protocol failed: " + category + suffix, file=sys.stderr)
+        return AGENT_ERROR_EXIT_CODES.get(category, 2)
 
 
 if __name__ == "__main__":

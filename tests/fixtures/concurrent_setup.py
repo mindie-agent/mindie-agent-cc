@@ -41,7 +41,10 @@ with ExitStack() as stack:
     stack.enter_context(patch.object(setup, "identity", return_value={}))
     stack.enter_context(patch("harness.require_engine_support", return_value="2.1.269"))
     stack.enter_context(patch("release_update.disable_unfiltered_updates"))
-    stack.enter_context(patch("capture_config.prepare", return_value={}))
+    stack.enter_context(patch("capture_config.prepare", return_value={
+        "redactor_executable": sys.executable,
+        "summary_command": [sys.executable, str(scripts / "organizer.py")],
+    }))
     stack.enter_context(patch("capture_config.prepare_store", side_effect=prepare_store))
     stack.enter_context(patch.object(Store, "_open_state", open_state))
     stack.enter_context(patch.object(setup, "write_community"))

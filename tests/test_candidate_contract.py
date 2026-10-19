@@ -68,6 +68,22 @@ class ProductContractTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "missing bounded runtime entry: owned_process.py"):
                 validator.adapter_check(source)
 
+    def test_candidate_requires_the_c6_organizer_helper(self):
+        import shutil
+
+        validator = _load_validator()
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "candidate"
+            for path in product_contract.package_files(ROOT):
+                target = source / path.relative_to(ROOT)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(path, target)
+            validator.adapter_check(source)
+            (source / "scripts" / "organizer_distill.py").unlink()
+            with self.assertRaisesRegex(
+                    ValueError, "missing bounded runtime entry: organizer_distill.py"):
+                validator.adapter_check(source)
+
     def test_identity_binds_product_requirements_and_source_bytes(self):
         with tempfile.TemporaryDirectory() as tmp:
             source = _source(Path(tmp))

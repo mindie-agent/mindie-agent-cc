@@ -57,6 +57,7 @@ KNOWLEDGE_TOOLS = {
     "knowledge_query",
     "knowledge_explain",
     "knowledge_feedback",
+    "knowledge_distill",
 }
 
 # Native Claude 2.1.269 plugin MCP names from `claude mcp list`
