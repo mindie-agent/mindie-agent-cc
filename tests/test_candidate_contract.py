@@ -10,6 +10,7 @@ import json
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 from unittest.mock import patch
 from pathlib import Path
@@ -42,8 +43,9 @@ def _source(root, version="0.0.1"):
     for name in ("pyproject.toml", "uv.lock", "harness-compatibility.json"):
         (root / name).write_bytes((ROOT / name).read_bytes())
     project = root / "pyproject.toml"
+    packaged_version = tomllib.loads(project.read_text(encoding="utf-8"))["project"]["version"]
     project.write_text(project.read_text(encoding="utf-8").replace(
-        'version = "0.0.1"', f'version = "{version}"', 1), encoding="utf-8")
+        f'version = "{packaged_version}"', f'version = "{version}"', 1), encoding="utf-8")
     scripts = root / "scripts"
     scripts.mkdir()
     (scripts / "marker.py").write_text("value = 1\n", encoding="utf-8")

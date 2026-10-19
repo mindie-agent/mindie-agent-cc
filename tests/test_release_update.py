@@ -251,7 +251,9 @@ def test_registry_rejects_missing_symbols_and_escaping_test_paths(tmp_path):
 def test_release_asset_binds_exact_source_and_rejects_floating_revision():
     value = harness.metadata(ROOT, "a" * 40)
     assert value["source"] == {"repository": harness.REPOSITORY, "sha": "a" * 40}
-    assert value["version"] == "0.0.1"
+    assert value["version"] == json.loads(
+        (ROOT / ".claude-plugin/plugin.json").read_text(encoding="utf-8")
+    )["version"]
     with pytest.raises(ValueError):
         harness.metadata(ROOT, "main")
 

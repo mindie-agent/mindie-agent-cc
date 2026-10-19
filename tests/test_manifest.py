@@ -48,11 +48,12 @@ class ManifestTests(unittest.TestCase):
 
     def test_hot_hooks_cannot_download_python_or_install_a_runtime(self):
         hooks = json.loads((ROOT / "hooks/hooks.json").read_text(encoding="utf-8"))["hooks"]
+        version = json.loads((ROOT / ".claude-plugin/plugin.json").read_text(encoding="utf-8"))["version"]
         for name, rows in hooks.items():
             for row in rows:
                 for hook in row["hooks"]:
                     self.assertIn("CLAUDE_PLUGIN_DATA", hook["command"])
-                    self.assertIn("0.0.1", hook["command"])
+                    self.assertIn(version, hook["command"])
                     if name != "SessionStart":
                         self.assertIn("--offline --no-python-downloads", hook["command"])
 
