@@ -29,9 +29,12 @@ Only report the reporter ready when the returned status is `running`. Report
 `degraded`, authentication errors, timeouts, and `needs_choice` directly; do not
 retry an uncertain external write. Local configuration alone is not delivery.
 
-There is no automatic yes. A saved choice persists for this installation and
-is reused. A legacy choice without a unified-consent revision requires an
-explicit new contribution choice before fault uploads. Remote-dev works without this binding.
+There is no automatic yes. Reuse the installation's valid saved choice without
+another prompt. Resolve legacy `needs_choice` once at the `/mindie-agent` entry
+using the user's explicit contribution choice; a contribution request already
+made in this setup flow needs no further confirmation. Startup does not grant
+missing permission, and ordinary tasks do not ask again. Remote-dev works
+without this binding.
 
 During installation or first-use setup, present the [user notice](../mindie-agent/references/user-notice.md),
 then follow [optional workspace setup](../mindie-agent/references/workspace-setup.md).

@@ -37,7 +37,7 @@ uv run --locked --no-editable --group test python -m pytest tests -m "not live_n
 ### How the Local Candidate Identity Test Works
 - `MINDIE_TEST_KNOWLEDGE_CHECKOUT` must point to an absolute local Git checkout whose `HEAD` matches the `mindie-knowledge` commit in `uv.lock`.
 - The test verifies that commit using local `git` only (without fetching from GitHub or scanning parent directories), creates an isolated virtual environment reusing the locked wheels, and performs a single offline `pip install --no-deps --no-build-isolation` from `git+file://` to verify `direct_url.json` provenance.
-- **Per-Release CPU Microbenchmark**: Each `0.0.2` release runs [`benchmarks/release.json`](../benchmarks/release.json) ([`benchmarks/release.py`](../benchmarks/release.py)) to measure `public-transcript` extraction and sanitization latency in `us/op`, publishing `benchmark-results.json`, `benchmark-results.md`, `benchmark-SHA256SUMS`, and `SHA256SUMS` as a reproducible CPU baseline.
+- **Per-Release CPU Microbenchmark**: Each `0.0.2` release runs [`benchmarks/release.json`](../benchmarks/release.json) ([`benchmarks/release.py`](../benchmarks/release.py)) to measure `public-transcript` public-message parsing and hidden-reasoning filtering latency in `us/op`, publishing `benchmark-results.json` and `benchmark-results.md` as a reproducible CPU baseline.
 
 ---
 

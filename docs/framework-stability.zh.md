@@ -37,7 +37,7 @@ uv run --locked --no-editable --group test python -m pytest tests -m "not live_n
 ### 本地候选源身份校验与基准测试说明
 - `MINDIE_TEST_KNOWLEDGE_CHECKOUT` 必须指向一个本地 Git 检出目录的绝对路径，且其 `HEAD` 提交必须与 `uv.lock` 中声明的 `mindie-knowledge` 提交完全一致。
 - 测试仅通过本地 `git` 命令核对该提交（不联网访问 GitHub，也不自动搜索相邻目录），随后在独立临时虚拟环境中复用已锁定的依赖包执行一次离线 `pip install --no-deps --no-build-isolation`，以验证 `direct_url.json` 溯源回执。
-- **随版 CPU 微基准测试（Release Microbenchmark）**：每个 `0.0.2` 发行版均运行 [`benchmarks/release.json`](../benchmarks/release.json)（[`benchmarks/release.py`](../benchmarks/release.py)）测量 `public-transcript` 公开对话脱敏管线的延迟（`us/op`），并随 GitHub Release 附带 `benchmark-results.json`、`benchmark-results.md`、`benchmark-SHA256SUMS` 与 `SHA256SUMS` 作为可复现的本地 CPU 性能基线。
+- **随版 CPU 微基准测试（Release Microbenchmark）**：每个 `0.0.2` 发行版均运行 [`benchmarks/release.json`](../benchmarks/release.json)（[`benchmarks/release.py`](../benchmarks/release.py)）测量 `public-transcript` 公开消息解析与隐藏推理过滤的延迟（`us/op`），并随 GitHub Release 附带 `benchmark-results.json` 和 `benchmark-results.md` 作为可复现的本地 CPU 性能基线。
 
 ---
 
