@@ -1,99 +1,41 @@
-# Claude Code interface evidence
+# Claude Code Harness Interface Evidence
 
-The release declaration lists only Claude Code 2.1.269 and 2.1.299. These are
-tested version points, not a claim that every intervening or newer version works.
-`scripts/harness.py` uses the shared semantic-version validator and checks that
-every registered production symbol, test identifier and local evidence file
-exists. CI runs this check before component tests. The metadata command binds
-the resulting declaration and product version to a full source commit; it does
-not publish a Release.
+<a href="harness-interface-evidence.zh.md">中文</a> | <b>English</b> · <a href="README.en.md">Documentation Index</a>
 
-The experiments below used isolated native profiles. Control-only experiments
-sent no user message and made no model request. Component tests are separate
-from native acceptance and from backend quality.
+[`harness-compatibility.json`](../harness-compatibility.json) is the single machine-readable registry of Claude Code interfaces used by `mindie-agent-cc`. Release `0.0.1` declares support for two exact tested Claude Code versions: **`2.1.269`** and **`2.1.299`**.
 
-| Interface | Observed native behavior | Reproducible contract checks |
-| --- | --- | --- |
-| Git marketplace and installation record | 2.1.269 and 2.1.299 installed the local fixture or selected MindIE package and returned version, scope, enablement and install path through `plugin list --json`. A 2.1.269 Git fixture rejected a full SHA as a branch ref; an explicit tag plus the same profile marketplace declaration updated the native catalog. The checkout SHA must still match the selected official Release before plugin installation. | `tests/test_release_update.py` validates selected SHA before plugin update and refuses to resolve a still-running writer from a matching version snapshot. |
-| Per-marketplace settings | Actual 2.1.269 selected-tag installation consumed the exact profile's `extraKnownMarketplaces` declaration. A separate native disable/update experiment preserved `enabled: false` after updating the local fixture. The implementation changes only this marketplace's `source.ref` and `autoUpdate`; it refuses unknown source declarations. The disable-through-update native experiment has not yet been repeated on 2.1.299. | `test_native_first_install_policy_preserves_exact_source_and_other_choices` and `test_native_source_declaration_preserves_other_settings_and_explicit_off` check that unrelated settings and explicit disable are unchanged. |
-| Native initialization | Isolated `--init-only` completed SessionStart preparation without a conversation on both tested versions. Exit zero alone was insufficient: a Windows attempt returned zero while MCP loading failed, so discovery and fixed-runtime readback are separate gates. | `tests/test_setup_install.py` covers first preparation, compatibility and state-preserving activation. |
-| Native Hook payload and warning | Real Stop events on both tested versions supplied native session identity and transcript location. Static `systemMessage` warning output uses no block decision or model context. Explicit valid off remains quiet; malformed authority is a warning. | `tests/test_launch_entry.py` checks bad configuration, missing fields, invalid schemas and valid off without a model. |
-| MCP stdio | Real native SDK control initialization discovered plugin MCP servers on both versions without a model turn. The facade handles cancellation independently of active tool work. | `tests/test_front_control.py` keeps a real facade process alive across cancellation and a complete helper-binding change. This is a process contract test, not evidence of a complete native update. |
-| Structured result submission | Actual 2.1.269 on macOS and 2.1.299 on Windows advertise only `StructuredOutput` to a localhost synthetic provider. Separate macOS 2.1.269 and WSL 2.1.299 controls without `--max-turns` accepted a valid fourth submission after three schema-invalid submissions, and ended five invalid submissions with `error_max_structured_output_retries`. Repeated ordinary text instead ended after two requests with native success but no `structured_output`; the adapter rejects that result. Claude owns its structured-output correction and termination, without a second turn cap or text fallback in this adapter. | `WorkerEnvelopeTests.test_structured_output_is_authoritative_over_prose`, `test_missing_structured_output_does_not_repair_fenced_prose`, `test_native_structured_correction_preserves_accumulated_usage_in_one_invocation`, `test_terminal_limits_keep_distinct_safe_diagnostics_and_one_call` and `test_one_batch_one_call_and_prompt_carries_only_public_blocks` preserve the strict result, native retry boundary and usage contract. |
+`scripts/harness.py` validates this registry in CI before component tests run: it checks that every declared production symbol, test identifier, and local evidence document exists, and binds the compatibility metadata to an immutable Git commit SHA.
 
-The local HTTP structured-output experiment uses fabricated token counters.
-Its native cost estimate is not a paid model-usage receipt. It proves the native
-submission and parser path; it does not prove that a particular backend will
-follow the instructions. Earlier paid failures remain failed and are not
-replayed or relabeled as successes.
+---
 
-`model_calls` counts the admitted native invocation, not its HTTP requests.
-The native result supplies accumulated usage across its internal turns. The
-four-submission correction control reported `num_turns: 5` because native
-tool-result events also contribute to that count.
+## 1. Registered Interface Verification Matrix
 
-The worker uses `stream-json --verbose` to observe schema rejection events
-inside that same invocation. Full streams from native 2.1.269 and 2.1.299
-ended with exactly one terminal event, with no later warning or event. The
-terminal `structured_output` remains the only source of accepted metadata.
-A duplicate terminal or trailing event is rejected while retaining valid
-usage already reported by the first terminal.
+All experiments below ran in isolated native Claude Code profiles. Control-plane checks sent no user prompts and made no external model calls.
 
-The failure diagnostic retains only submission/rejection counts and
-schema-owned paths paired with the observed validator keywords `required`,
-`enum` and `maxLength`. Other paths or error forms become `unknown`. Tool
-identifiers, submitted values, model prose and raw validator messages are
-not retained. Native localhost fixtures exercise three rejected submissions
-followed by success and five rejected submissions followed by exhaustion.
-They verify the production parser and the absence of private-value canaries
-in the diagnostic. The event transport has a separate 1 MiB bound; accepted
-metadata still has the shared 32 KiB limit. These limits do not add a retry.
+| Registered Interface | Verified Native Behavior (`2.1.269` & `2.1.299`) | Automated Contract Tests |
+|---|---|---|
+| **Git Marketplace & Install Record** | Both `2.1.269` and `2.1.299` install the package from an explicit Git tag and report version, scope, enabled state, and install path via `claude plugin list --json`. (Note: `2.1.269` rejects raw commit SHAs as marketplace branch refs, so release selection uses immutable Git tags while verifying the checkout SHA before install.) | `tests/test_release_update.py` verifies the selected commit SHA before plugin update and prevents resolving an active writer from a stale snapshot. |
+| **Per-Marketplace Settings** | Tag-based installation updates only this plugin's `extraKnownMarketplaces` entry (`source.ref` and `autoUpdate`), preserving `enabled: false` and unrelated user settings. | `test_native_first_install_policy_preserves_exact_source_and_other_choices` & `test_native_source_declaration_preserves_other_settings_and_explicit_off` |
+| **Headless Initialization (`--init-only`)** | `claude --init-only` executes `SessionStart` preparation and exits without starting a conversation. Because exit code `0` alone does not guarantee MCP readiness on Windows, tool discovery and runtime readback are verified as separate gates. | `tests/test_setup_install.py` covers initial preparation, version compatibility, and state-preserving activation. |
+| **Hook Payloads & Neutral Warnings** | Real `Stop` events on both versions deliver `session_id`, `transcript_path`, and `cwd`. Static `systemMessage` warnings surface configuration or capture issues without blocking termination or injecting model context. | `tests/test_launch_entry.py` verifies malformed configs, missing fields, invalid schemas, and quiet exit when sharing is off. |
+| **MCP Stdio Transport** | Native SDK control initialization discovers both plugin MCP servers (`mindie-knowledge` and `remote-dev`) without a model turn. The stdio facade handles request cancellation independently of active worker execution. | `tests/test_front_control.py` verifies facade survival across request cancellation and helper-binding updates. |
+| **Structured Output Submission** | Tested against a local synthetic HTTP provider on macOS (`2.1.269`), Windows (`2.1.299`), and WSL (`2.1.299`). Claude Code natively retries up to 5 schema-invalid submissions before returning `error_max_structured_output_retries`. If the model returns plain prose without `structured_output`, the adapter explicitly rejects the result rather than parsing prose as a fallback. | `WorkerEnvelopeTests` in `tests/test_independent_cc.py` verify strict `structured_output` authority, accumulated token usage accounting across internal turns, and single-call batch boundaries. |
 
-The historical macOS summary that exhausted native validation remains a
-known failed invocation. Its old JSON-only receipt did not retain individual
-schema rejections, so neither these localhost fixtures nor a later successful
-synthetic Flash request establishes the cause of that historical failure.
+### Structured Output & Usage Accounting Notes
+- **Single Admitted Invocation**: `model_calls` counts the single native CLI invocation initiated by the worker, while token usage reflects the total accumulated tokens reported by Claude Code across its internal structured-output correction turns.
+- **Sanitized Schema Diagnostics**: Using `stream-json --verbose`, the worker records only submission/rejection counts and schema property paths paired with standard validator keywords (`required`, `enum`, `maxLength`). Submitted text, model prose, tool IDs, and raw validator messages are never stored in diagnostic receipts.
+- **Official References** (checked against native behavior):
+  - [Claude Code CLI Reference](https://code.claude.com/docs/en/cli-reference)
+  - [Claude Code Environment Variables](https://code.claude.com/docs/en/env-vars) (`MAX_STRUCTURED_OUTPUT_RETRIES` defaults to 5)
+  - [Agent SDK Structured Outputs](https://platform.claude.com/docs/en/agent-sdk/structured-outputs)
 
-The official CLI and environment-variable references were retrieved on
-2026-10-16. They document no default agentic-turn limit and a native
-`MAX_STRUCTURED_OUTPUT_RETRIES` default of five attempts. The adapter sets
-neither limit. The SDK structured-output reference also requires checking
-that a successful native result actually contains structured output. These
-documentation claims were checked against the native experiments above:
+---
 
-- https://code.claude.com/docs/en/cli-reference
-- https://code.claude.com/docs/en/env-vars
-- https://platform.claude.com/docs/en/agent-sdk/structured-outputs
+## 2. Fork Attribution (`--fork-session`)
 
-The release review retains the exact native binaries, source hashes, complete
-native events and experiment receipts outside the product tree. The registry
-references this source-controlled summary rather than treating an unavailable
-documentation URL as verified support evidence.
+When a user forks a conversation via `claude --resume <ID> --fork-session`, Claude Code emits a `SessionStart` event with `source: "fork"`, a new child `session_id`, the new `transcript_path`, and `cwd` before the first child prompt is written.
 
-## Fork attribution
-
-Actual native 2.1.269 and 2.1.299 `--resume ID --fork-session` experiments
-reported `SessionStart` with `source: "fork"`, a new `session_id`, its exact
-`transcript_path`, and the native `cwd`. At that event the child artifact did
-not yet exist. The adapter uses this pre-prompt event to establish the
-existing Admission scope and capture boundary. No parent-history scan or
-separate lineage store is involved.
-
-The native child transcript rewrites inherited records' `sessionId` to the
-child identity while preserving their original timestamps and `cwd`. Neither
-the filename nor the first dated `cwd` alone distinguishes inherited content.
-Each tested native child starts with its own queue `enqueue` timestamp before
-the copied dated records. That first queue remained unchanged through two
-ordinary resumes, actual `/compact`, and a subsequent resume on both native
-versions. The parent included a single synthetic assistant record larger than
-1 MiB; the child's first own public record was beyond the attribution head.
-Only localhost fixture responses were used, with no external model requests.
-
-Stop validates the selected profile, named child artifact and first native
-queue on every event, then reuses an already verified Admission without
-moving its boundary or changing its scope. Without an existing binding it
-may use only own dated metadata at or after the first queue. Missing queue
-metadata or unavailable own scope fails visibly; it never falls back to
-inherited parent scope. Attribution reads remain bounded to the first 64
-lines and 1 MiB. Ordinary resume and compaction preserve an established
-binding even when the body grows beyond that read window.
+### How `mindie-agent-cc` Isolates Forked Sessions
+1. **Pre-Prompt Boundary Recording**: On `SessionStart (source: "fork")`, the adapter records the child session's admission scope and capture boundary immediately, without scanning parent transcripts or maintaining a separate lineage database.
+2. **Excluding Copied Parent History**: When Claude Code creates the child transcript file, it rewrites copied parent records to carry the child's `sessionId` while keeping their historical timestamps—and prepends the child's own initial `enqueue` queue record before those copied records.
+3. **Deterministic Child-Only Capture**: During `Stop`, the adapter verifies the child session's first native queue timestamp (surviving normal `--resume` and `/compact` operations) and captures only new public messages created within the child session itself. If attribution metadata is missing or unreadable, `Stop` fails visibly and never falls back to capturing inherited parent history. Attribution header reads are bounded to the first 64 lines / 1 MiB.

@@ -1,83 +1,46 @@
-# Framework stability — 2026-09-28
+# Framework Stability & Testing Contracts
 
-Historical component baseline at revision `3e36a28`. Current native installation
-and acceptance boundaries are described in the README.
+<a href="framework-stability.zh.md">中文</a> | <b>English</b> · <a href="README.en.md">Documentation Index</a>
 
-## Everyday use
+This document describes the everyday usage invariants, cross-platform atomic configuration I/O, and reproducible test contracts for `mindie-agent-cc`.
 
-Invoke the native MindIE entry and continue the existing task: `/mindie-agent`
-in Kimi or Claude Code, and `$mindie-agent` in Codex. The first use after
-installation asks for a choice once. That choice persists across tasks,
-forks, restarts, updates and ordinary failures. Later entries require no
-renewal or manual activation/recovery steps. An explicit choice change is
-still available through the entry. Automatic diagnostic reporting has its
-own independent saved choice and does not follow contribution consent.
+---
 
-With contribution off, the framework performs no Stop collection or organizer
-call. Retrieval and remote development remain available. Temporary service
-or network failures use the existing worker's persisted recovery state;
-corrupt configuration is reported as a fault and never triggers onboarding.
+## 1. Everyday Usage & Persistent User Preferences
 
-## Implementation and verification
+- **Set Once, Persist Everywhere**: Your community contribution choice, approved project scope, and independent fault-reporting preference persist across sessions, `--fork-session` branches, restarts, plugin updates, and transient failures. Ordinary tasks require no per-task activation or renewal step.
+- **Zero Overhead When Sharing Is Off**: When community sharing is disabled, the `Stop` hook performs no transcript collection or organizer model calls, while domain knowledge search (`mindie-knowledge`) and remote Ascend execution (`remote-dev`) remain fully available.
+- **Explicit Fault Visibility**: Transient network or service issues are recovered using persisted worker state, whereas a corrupted configuration file is reported explicitly as a diagnostic error and never triggers a fresh onboarding prompt.
 
-The bootstrap writer preserves damaged, foreign and unreadable existing settings. Normal setup generates the host package with the actual pinned interpreter.
+---
 
-The baseline integrated suite passed all 152 tests, including bootstrap preservation and shared choice checks. All 24 bundled Kimi fixture files matched their recorded source revision. These are local component baseline results before the Windows read follow-up. The PR
-checks are the source of online CI status; local counts are not CI claims.
+## 2. Atomic Configuration Reads & Writes on Windows
 
-From the repository root, use a Python interpreter satisfying the README's
-SQLite requirement. Install `pip install -e '.[test]'` for core, or
-`uv sync --locked --no-editable --group test` for an adapter, then run:
+- **Atomic Publication**: The shared store writes a complete temporary JSON document and publishes it with `os.replace`. Readers use ordinary file reads; the adapter has no separate Win32 replacement implementation.
+- **Visible Contention**: If Windows refuses replacement because another reader holds the file, the write fails visibly and the saved document remains intact. The adapter does not reset consent or retry indefinitely.
+
+---
+
+## 3. Reproducible Component Testing
+
+Component and contract tests use committed parser fixtures and exact Git commits pinned in [`uv.lock`](../uv.lock). They never probe or mutate your production installation.
+
+### Running the Full Test Suite
+From the repository root, prepare a local checkout of `mindie-agent/knowledge` at the exact commit pinned in `uv.lock`, then run:
 
 ```sh
+uv sync --locked --no-editable --group test
 MINDIE_TEST_KNOWLEDGE_CHECKOUT=/absolute/path/to/mindie-knowledge-pin \
-python -m unittest discover -s tests
+uv run --locked --no-editable --group test python -m pytest tests -m "not live_npu" -q
 ```
 
-`MINDIE_TEST_KNOWLEDGE_CHECKOUT` is required for the local-candidate identity
-test. It must be an absolute git checkout whose HEAD is the `mindie-knowledge`
-commit in `uv.lock`. The test checks that commit with local
-git only. It does not fetch GitHub and it does not look for a nearby checkout.
-The same interpreter must already have both official pins from
-`uv.lock` and must be able to import `hatchling` (the pinned
-tree's build backend, not a runtime pin: `python -m pip install hatchling==1.32.4`).
-The test then makes a separate venv, reuses those installed distributions, and
-runs one real `pip install --no-deps --no-build-isolation` of
-`git+file://` that checkout. pip's own `direct_url.json` is the provenance.
-A missing checkout, a different HEAD, or a missing official pin fails before
-any install. The active interpreter's metadata is left unchanged.
+### How the Local Candidate Identity Test Works
+- `MINDIE_TEST_KNOWLEDGE_CHECKOUT` must point to an absolute local Git checkout whose `HEAD` matches the `mindie-knowledge` commit in `uv.lock`.
+- The test verifies that commit using local `git` only (without fetching from GitHub or scanning parent directories), creates an isolated virtual environment reusing the locked wheels, and performs a single offline `pip install --no-deps --no-build-isolation` from `git+file://` to verify `direct_url.json` provenance.
 
-Tests use committed real parser/peer fixtures or exact Git revisions declared
-in the workflow. They do not discover a user's production installation.
-Missing dependencies fail explicitly. Keep failure-path, concurrency and
-recovery cases bounded and deterministic; model sessions are reserved for
-checks that actually need a native host.
+---
 
-## Windows configuration reads and writes
+## 4. Integration & Release Ordering
 
-The shared configuration implementation combines delete-sharing reads with
-a native atomic rename on Windows. Existing readers retain the complete old
-document, and readers opening the published path see the complete new one.
-That historical baseline used Core and bootstrap copies of the same implementation.
-The current locked CC runtime imports the shared Core store directly. This
-requires both sides of the mechanism: Python's Windows `os.replace` alone
-cannot replace an open destination. See the [Windows rename semantics](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_file_rename_information).
-
-An external program holding a file without delete sharing can still block
-an update; that error preserves the saved document and does not trigger
-onboarding or a retry loop. Windows CI checks this filesystem contract;
-it is separate from acceptance inside a native Windows agent host.
-
-## Integration and acceptance boundaries
-
-Publish the exact dependency commits before adapter CI. Process the reviewed
-PRs in order: knowledge core, Claude Code, Kimi, Codex. Preserve published
-commit identities used by runtime and test pins.
-
-Isolated native read-only entry and persistent choice were exercised across
-the three hosts. Claude's normal generated package and pinned runtime were
-verified. Evidence for unchanged entry paths can be reused; it does not
-prove native contribution Stop, publication, or Windows host acceptance.
-Those remain separate integration checks. Historical dated reports retain
-their original scope. Domain asset import and new business workflows remain
-deferred while the framework stabilizes.
+- **Paired Release Order**: When updating shared runtime dependencies, publish component Releases first (`mindie-knowledge`, `remote-dev`, `mindie-diagnostics`) before updating and releasing the native plugin adapters (`mindie-agent-cc`, `mindie-agent-codex`, `mindie-agent-kimi`).
+- **Clear Acceptance Boundaries**: Automated CI verifies locked dependencies, parser fixtures, and cross-platform filesystem contracts; live host acceptance and remote Ascend NPU verification are recorded separately.

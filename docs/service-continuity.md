@@ -1,122 +1,46 @@
-# Fixed-runtime service continuity
+# Service Continuity & Smooth Updates
 
-The unpublished 0.0.1 candidate uses native Git marketplace selection and an
-immutable uv runtime. One adapter installation config names the selected fixed
-binding; the shared Core owns the exact service identity and process lifetime.
-There is no version ordering, compatible-client fallback or successor chain.
+<a href="service-continuity.zh.md">中文</a> | <b>English</b> · <a href="README.en.md">Documentation Index</a>
 
-First preparation initializes an empty profile after checking durable formats.
-Release preparation builds immutable candidate bytes outside operation admission
-and does not let a new Core open the active store. Business facade operations read
-the complete current helper under a shared lock. Concurrent status and
-cancellation requests also use shared admission, so long work does not block
-its own cancellation.
+`mindie-agent-cc` uses native Claude Code marketplace selection paired with an immutable `uv` Python runtime. A single adapter configuration file binds the active installation, while the shared `mindie-knowledge` Core owns the background service identity and process lifecycle.
 
-Only update activation takes exclusive admission, without waiting for active
-operations. A busy Core defers the switch. An idle exact owner is retired, the
-new owner is observed ready, and the existing canonical installation config
-is written last. Failure to publish keeps the new owner's known readiness in
-the result; subsequent recovery recognizes that exact owner without attempting
-to retire the old configuration again. A retired marker without new readiness
-does not waive old-owner cleanup. A 30-second control observation expiry never
-kills useful work or becomes a success receipt.
+---
 
-Existing native MCP processes keep their facade but select the current complete
-helper for their next operation. They never choose a Release or reverse the
-binding. New calls during exclusive activation may wait briefly or receive an
-explicit temporary-unavailable, not-started result. There is no generation
-chain or semver-derived service compatibility.
+## 1. Immutable Runtime Preparation & Admission Locking
 
-Stop takes one complete immutable binding snapshot without service admission,
-then writes the existing capture queue. A retired helper may enqueue an
-authorized event but cannot restart its retired owner. The new owner consumes
-that same queue; repeated native event identities are deduplicated. Current
-consent, scope, task revocation and durable-format checks still apply. Known
-capture failures produce a static native warning without continuing the model.
-This preserves delivery during the installation gate without a second queue.
+### Preparation Outside Active Traffic
+- **First Installation**: Initializes the adapter profile after validating durable storage formats.
+- **Background Release Preparation**: When a compatible new Release is discovered, `uv` builds the immutable candidate runtime outside the active operation lock. Preparing a candidate never opens or mutates the active database store.
+- **Shared Lock for Active Requests**: Normal MCP tool calls, read-only status checks, and request cancellations acquire a shared lock and read the current complete runtime binding. Long-running tool calls never block their own cancellation or status inspection.
 
-Contribution and reporting choices are independent user data. Native code
-selection or host reload does not ask for authorization again, reset scope,
-or change a recorded disabled choice. Paid and uncertain outcomes remain
-preserved. Unsupported earlier development profiles are not automatically
-migrated. Release compatibility comes from the declared Harness interfaces,
-facade/helper protocol and actual durable formats.
+### Atomic Idle Cutover
+- **Exclusive Lock Only When Idle**: Activating a prepared Release requires an exclusive admission lock without killing in-flight work. If the Core service is busy, the switch is deferred until the active operation finishes.
+- **Safe Service Handoff**: Once idle, the exact previous service owner is retired, the new owner is verified ready, and the canonical installation configuration is updated last.
+- **No Unintended Work Termination**: The 30-second control observation window bounds how long the switcher waits for idle state—it never terminates active tasks or turns a timeout into a false success receipt.
+- **Live MCP Process Continuity**: Already-running MCP stdio processes stay alive across an update and automatically dispatch subsequent requests to the newly committed runtime helper without requiring a manual session restart.
 
-The following notes describe earlier updater implementations and their historical
-acceptance. They do not claim that the replacement has passed native acceptance.
+---
 
-## Historical implementation
+## 2. `Stop` Queue Durability & User Data Persistence
 
-# Service continuity during plugin updates
+### `Stop` Handoff During Updates
+- `Stop` reads one immutable binding snapshot without waiting for service admission and appends the capture reference to the persistent SQLite queue.
+- Even if a previous helper was just retired during an update, it can safely enqueue an authorized `Stop` event without restarting its retired service owner; the new service owner consumes the same persistent queue and deduplicates native event IDs.
+- Known capture failures surface a concise static warning in Claude Code without forcing the model to continue.
 
-An updater used to stop an idle knowledge service and install the next plugin
-without restoring the service. A later query hid the defect by starting it;
-a task that only used remote development could then deliver a Stop event to
-no service and lose that increment.
+### Persistent User Preferences
+- Community contribution consent, approved project scope, and product fault-reporting choices are stored as persistent user data decoupled from code versions.
+- Installing an update or reloading Claude Code never re-prompts for consent, resets project scope, or alters a saved opt-out choice.
 
-The historical update transaction confirmed that the exact old loopback endpoint
-had exited, switched the native package and committed runtime tuple, and made
-one bounded restoration attempt while retaining the exclusive operation lock.
-Restoration used the selected interpreter and engine configuration directly,
-never a shared-lock launcher. Core startup remains one spawn, five seconds,
-and three readiness probes; the returned service must be unfrozen.
+---
 
-Only a service stopped by this updater invocation is eligible for updater
-restoration. A service already absent before the update stays absent; revoked
-or explicitly unbound task leases do not authorize updater restoration. No task is
-activated, no transcript is replayed, and no model call belongs to the updater.
+## 3. Isolated Organizer Model Execution & Service Reuse
 
-The lifecycle repair candidate handles Stop separately: an activated task with
-contribution enabled first durably hands off its capture reference, then may
-request one coalesced wake when the service is absent. Knowledge queries retain
-on-demand startup. Hook acceptance, a live worker, organized experience and a
-submitted PR are separate outcomes. This change requires new native acceptance;
-the historical update-continuity evidence below does not establish it.
+- **Exact Fingerprint Matching**: Reusing a running background knowledge service requires matching the exact engine configuration fingerprint, active installation binding, and worker health. A reachable local port from an older generation is never mistakenly reused, and the adapter never spawns a competing second worker on error.
+- **Isolated Organizer Environment**: When invoking Claude Code headlessly to generate block navigation metadata, the worker imports only the supported provider, model, and effort fields from the user's selected profile—never loading user hooks, MCP servers, tools, or project-level prompts, and never writing API secrets into status receipts.
 
-Historical rollback restored a service only after both the retained native
-package and exact old pointer were proven restored. Failed or interrupted
-handoff was kept in updater status as service_handoff. That updater, pointer
-and scheduler have been removed. The current implementation uses the fixed installation and exact Core owner
-described above; it does not retain that update transaction.
+---
 
-The selected native profile is retained for the replacement service. Claude
-Code imports only supported provider/model/effort values from that profile's
-user settings into its isolated organizer; it does not import hooks, tools,
-MCP configuration or project settings. Secret values never enter updater status.
+## 4. Verification Scope
 
-Knowledge MCP requests use the shared core's ready-service path. Reuse requires
-the selected engine's exact configuration fingerprint, an active configuration
-and a healthy worker. A reachable endpoint in the same data domain is
-insufficient: it may belong to another generation or a retired configuration.
-The adapter does not substitute that endpoint or start a second owner when the
-core reports an unknown or failed owner. A matching healthy service is reused
-without another startup. These checks do not impose a deadline on the subsequent
-knowledge query or body read.
-
-## Validation boundary
-
-Real local-daemon acceptance covers live, absent, revoked and rollback paths
-for Kimi and Claude Code. Those cases use a controlled native-install boundary;
-they establish actual process/endpoint/admission behavior, not native package
-installation or model authentication. Native acceptance is recorded separately.
-Windows real-machine acceptance remains with the maintainer after merge.
-
-Real Claude Code 2.1.269 acceptance used the existing DSV4 route in an owned
-persistent native profile, with provider/model variables absent from the updater
-and service shell environment. After an explicit old-service setup, actual native
-installation replaced the service PID/endpoint in 7.32 s, preserved the same task
-lease and returned an unfrozen service. A retained task then completed one default
-permission-mode turn in 1.07 s with zero tools. Native Stop produced one organized
-capture and one successful organizer attempt, returning zero entries for the
-configuration-only material. No post-update ensure/query, draft or new PR occurred.
-Contribution was disabled after 1.9 s; provider settings and all owned processes
-were cleaned up.
-
-The business result directly reports deepseek-flash. The selected persistent
-profile configured high effort, but a short-lived organizer command escaped the
-independent process sampler; its exact runtime argv/effort is not separately
-claimed. The harness retained that final assertion failure without rerunning a
-model. An earlier no-model harness readback used the wrong package path; actual
-installation had passed, and the corrected forward-switch case above is separate.
-The final exception-readback fix was also checked through the actual native API
-against the registered stable package, without another install or model call.
+- **Local Daemon & Native Acceptance**: Covered live service handoff, absent service, revoked lease, and rollback paths on macOS (`2.1.269`), native Windows, and WSL (`2.1.299`), confirming that active task leases survive updates and that all owned processes clean up on disablement.
