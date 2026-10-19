@@ -8,7 +8,7 @@
 
 ## 1. 入口与任务身份自动绑定
 
-### 日常按需使用（零激活仪式）
+### 日常按需使用（无日常额外操作）
 日常研发任务无需手动执行激活命令：
 - **领域知识检索（`mindie-knowledge`）**：通过原生 Hook 与 MCP 元数据自动关联当前 Claude Code 会话。
 - **远端昇腾开发（`remote-dev`）**：与知识服务及社区贡献开关完全解耦，随时按需调用。
@@ -52,6 +52,6 @@
 
 ## 4. 验证范围说明
 
-- **已验证能力**：基于真实 Claude Code `2.1.269` 进程（macOS 隔离配置，`deepseek-flash`）完成原生接口探针验证，确认 `UserPromptExpansion`、`PreToolUse` → `_meta["claudecode/toolUseId"]` 身份关联以及静默 `Stop` 收尾全链路正常（单回合耗时 2.8 秒，零重试）。
+- **已验证能力**：基于真实 Claude Code `2.1.269` 进程（macOS 隔离配置，`deepseek-flash`）完成原生接口探针验证，确认 `UserPromptExpansion`、`PreToolUse` → `_meta["claudecode/toolUseId"]` 身份关联以及静默 `Stop` 收尾全链路正常。
 - **验收边界**：宿主 Hook 关联测试用于验证适配层接缝契约；完整的端到端经验发布闭环与原生 Windows 宿主验收作为独立项管理（详见 [框架稳定性与测试契约](framework-stability.zh.md)）。
 - **Claude Code 官方文档参考**：[Hooks](https://code.claude.com/docs/en/hooks) · [Plugins](https://code.claude.com/docs/en/plugins-reference) · [Skills](https://code.claude.com/docs/en/skills)

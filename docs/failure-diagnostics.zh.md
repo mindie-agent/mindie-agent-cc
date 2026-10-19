@@ -35,7 +35,7 @@
 ## 4. 可选的产品故障自动上报（`/mindie-agent:reporting-*`）
 
 `mindie-agent-cc` 集成了共享的 `mindie-diagnostics` 故障上报组件：
-- **一个贡献开关**：明确开启贡献同时授权范围内知识 PR 与脱敏故障 Issue。Hook 返回待启动状态，由 Agent 在同次配置中于 Hook 外执行启动并检查真实结果；旧 reporting 开关命令只引导到完整贡献流程，`/mindie-agent:reporting-status` 保持只读。
+- **统一贡献开关（`mindie-consent.json`）**：显式开启社区贡献（`contribute`）会同时授权配置范围内的知识 PR 与脱敏故障 Issue。配置时 Hook 返回待启动交接项（`reporting.run_outside_hook=true`），由 Agent 在同次配置流程中于 Hook 外启动后台 reporter 并核验就绪状态（`reporting.status == "running"`）。缺少统一授权版本（`choice_revision`）的旧版仅知识 `contribute` 记录在升级后不会自动获得故障上传权限，状态显示 `needs_choice` 并等待用户重新显式确认一次。系统严格区分**（1）本地授权配置已保存**、**（2）后台 reporter 进程运行中**与**（3）外部 GitHub Issue 已实际创建**三种状态。旧版 reporting 变更命令仅引导至统一贡献配置流程，`/mindie-agent:reporting-status` 保持纯只读。
 - **极简脱敏载荷**：仅针对经确认的产品自身故障生成记录；开启上报后，后台 Worker 会在不调用大模型、不打扰日常任务的情况下提交脱敏 GitHub Issue。公开载荷**仅包含**静态产品阶段、错误类型与已安装代码版本，绝不包含任务对话、命令、路径、环境变量或原始异常栈。
 - **指纹去重与对账**：相同故障共享同一指纹；若 Issue 提交结果因网络中断处于不确定状态，会在后续动作前先完成远端对账，绝不盲目重复建单。
 

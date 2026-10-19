@@ -29,8 +29,8 @@
 - Known capture failures surface a concise static warning in Claude Code without forcing the model to continue.
 
 ### Persistent User Preferences
-- Community contribution consent, approved project scope, and product fault-reporting choices are stored as persistent user data decoupled from code versions.
-- Installing an update or reloading Claude Code never re-prompts for consent, resets project scope, or alters a saved opt-out choice.
+- Community knowledge sharing and automatic tool fault reporting share a single unified contribution switch in `<profile>/.mindie/mindie-consent.json`, stored alongside approved project scope as persistent user data decoupled from code versions.
+- Installing an update or reloading Claude Code never re-prompts for consent, resets project scope, modifies saved `disabled` / `later` / `read-only` choices, or silently upgrades legacy knowledge-only `contribute` records lacking the unified consent revision (`needs_choice`).
 
 ---
 

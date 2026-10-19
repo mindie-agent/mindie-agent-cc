@@ -2,7 +2,7 @@
 
 <a href="harness-interface-evidence.zh.md">中文</a> | <b>English</b> · <a href="README.en.md">Documentation Index</a>
 
-[`harness-compatibility.json`](../harness-compatibility.json) is the single machine-readable registry of Claude Code interfaces used by `mindie-agent-cc`. Release `0.0.1` declares support for two exact tested Claude Code versions: **`2.1.269`** and **`2.1.299`**.
+[`harness-compatibility.json`](../harness-compatibility.json) is the single machine-readable registry of Claude Code interfaces used by `mindie-agent-cc`. Release `0.0.2` declares support for two exact tested Claude Code versions: **`2.1.269`** and **`2.1.299`**.
 
 `scripts/harness.py` validates this registry in CI before component tests run: it checks that every declared production symbol, test identifier, and local evidence document exists, and binds the compatibility metadata to an immutable Git commit SHA.
 

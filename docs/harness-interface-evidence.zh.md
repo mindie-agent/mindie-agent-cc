@@ -2,7 +2,7 @@
 
 <b>中文</b> | <a href="harness-interface-evidence.md">English</a> · <a href="README.md">返回文档索引</a>
 
-[`harness-compatibility.json`](../harness-compatibility.json) 是 `mindie-agent-cc` 所依赖的 Claude Code 宿主接口的唯一机器可读注册表。当前 `v0.0.1` 发行版经实机验证声明支持两个精确的 Claude Code 版本：**`2.1.269`** 与 **`2.1.299`**。
+[`harness-compatibility.json`](../harness-compatibility.json) 是 `mindie-agent-cc` 所依赖的 Claude Code 宿主接口的唯一机器可读注册表。当前 `v0.0.2` 发行版经实机验证声明支持两个精确的 Claude Code 版本：**`2.1.269`** 与 **`2.1.299`**。
 
 在 CI 运行组件测试前，`scripts/harness.py` 会自动校验该注册表：核对每一个登记的生产代码符号、测试用例 ID 与本地证据文档均真实存在，并将兼容性元数据绑定到不可变的 Git 提交哈希上。
 

@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/mindie-agent/mindie-agent-cc/releases"><img src="https://img.shields.io/badge/release-v0.0.1-0F766E.svg" alt="Release v0.0.1"></a>
+  <a href="https://github.com/mindie-agent/mindie-agent-cc/releases"><img src="https://img.shields.io/badge/release-v0.0.2-0F766E.svg" alt="Release v0.0.2"></a>
   <a href="harness-compatibility.json"><img src="https://img.shields.io/badge/Claude_Code-2.1.269_%7C_2.1.299-D97757.svg" alt="Claude Code 2.1.269 | 2.1.299"></a>
   <a href="pyproject.toml"><img src="https://img.shields.io/badge/python-3.13-3776AB.svg" alt="Python 3.13"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-0F766E.svg" alt="License: MIT"></a>
@@ -27,7 +27,7 @@
 
 ---
 
-**MindIE Agent for Claude Code** (`mindie-agent-cc`) is the official native Claude Code plugin for [MindIE Agent](https://github.com/mindie-agent/mindie-agent), providing **a unified Agent capability foundation across the entire Ascend NPU AI Infra workflow — architecture design, feature development, operator implementation, testing & verification, and performance tuning**. Today it includes deep support for **`vLLM-Ascend` development & testing** and **`AscendC` / `Triton` kernel engineering**, with broader Ascend AI Infra domains continuously expanding.
+**MindIE Agent for Claude Code** (`mindie-agent-cc`) is the native Claude Code plugin for [MindIE Agent](https://github.com/mindie-agent/mindie-agent), supporting the **Ascend NPU AI Infra design, development, and testing lifecycle**. Release `v0.0.2` delivers three core capabilities: **local and community knowledge base retrieval with privacy redaction** (focused on `vLLM-Ascend` feature development and `AscendC` / `Triton` kernel engineering), **remote SSH / Docker development and NPU inspection**, and **unified fault diagnostics with sanitized reporting**; additional Ascend software domains are tracked on the project roadmap.
 
 Built on the [MindIE Agent Engineering Design Principles](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.en.md), **domain knowledge and the Skill system are invoked manually on demand via `/mindie-agent`** so they never pollute unrelated tasks, while **`remote-dev` remote NPU development and testing tools trigger automatically by default** in everyday conversation—surfacing every failure or uncertain external state transparently without silent fallbacks.
 
@@ -41,7 +41,7 @@ MindIE Agent combines **manual on-demand activation for domain knowledge & skill
 | :--- | :--- | :--- | :--- |
 | **Experience, Knowledge & Skill System**<br/>(`mindie-knowledge` + `mindie-agent` Skill) | **🎯 Manual Trigger** | When designing Ascend AI Infra features, developing in `vLLM-Ascend`, writing `AscendC` / `Triton` kernels, authoring unit/accuracy tests, or tuning performance | Explicitly type **`/mindie-agent` + your task description** (all setup and status actions are also wrapped inside `/mindie-agent`) |
 | **Remote Ascend NPU Dev & Testing**<br/>(`remote-dev` MCP toolset) | **⚡ Default Auto-Trigger** | When syncing local code/tests to a remote Ascend server/container, running NPU builds/tests, checking `npu-smi`, or tailing long job logs | **No slash command needed**—just describe the remote task in natural language |
-| **Engineering Experience Loop**<br/>(`Stop` Auto-Capture + Gitleaks Redaction) | **🔄 Silent Background Run** | When contributing sanitized design, kernel development, testing, or tuning takeaways back to the open-source knowledge base | **Set once, zero daily friction**—once enabled in setup, every session is automatically redacted and packaged into a knowledge PR in the background |
+| **Engineering Experience Loop**<br/>(`Stop` Auto-Capture + Gitleaks Redaction) | **🔄 Background Run** | When contributing sanitized design, kernel development, testing, or tuning takeaways back to the open-source knowledge base | **Zero Daily Overhead**—once enabled in setup, every session is automatically redacted and packaged into a knowledge PR in the background |
 
 ### Scenario 1: Type `/mindie-agent` for Feature Design, Kernel Development & Test Authoring (Manual Trigger)
 > **The Problem**: Designing new Ascend features, implementing `AscendC` / `Triton` operators, or writing `vLLM-Ascend` accuracy tests often requires domain-specific architecture conventions, kernel constraints, and verified test patterns.  
@@ -59,13 +59,14 @@ MindIE Agent combines **manual on-demand activation for domain knowledge & skill
 > ```
 > **What Happens**: The built-in `remote-dev` MCP server is always on and **triggers automatically by default** whenever your prompt involves remote servers, containers, or NPU commands—handling remote file reads/writes, patch application, managed background jobs, and live log polling over SSH. It works completely independently, even if the knowledge service or community sharing is turned off.
 
-### Scenario 3: Silent Background Experience Capture & Community Contribution (Set Once, Zero Friction)
+### Scenario 3: Background Experience Capture & Unified Contribution Switch (Zero Daily Overhead)
 > **The Problem**: After completing a complex architecture design, kernel implementation, or NPU test verification, that engineering insight usually disappears when you close the terminal—yet sharing raw transcripts risks leaking internal IPs, tokens, or file paths.  
 > **Copy-Paste Example (just work on your engineering task normally)**:
 > ```text
 > /mindie-agent Help me complete the build and accuracy alignment verification for this custom Ascend operator using the knowledge base and our remote NPU container, and run the unit test suite.
 > ```
-> **What Happens**: Community contribution is **off by default**. Once you opt in during initial setup, every time a session finishes (`Stop`), the plugin silently extracts public user/assistant messages in the background, runs local deterministic redaction and Gitleaks scanning, generates navigation metadata, and opens a sanitized knowledge PR—with zero extra steps required during your daily work.
+> **What Happens**: Community contribution is **off by default**. Once you opt in during setup, every time a session finishes (`Stop`), the plugin extracts public user/assistant messages in the background, runs local deterministic redaction and Gitleaks scanning, generates navigation metadata, and opens a sanitized knowledge PR—with no extra daily steps.
+> - **Unified Contribution Switch (`mindie-consent.json` beside the adapter configuration)**: Community knowledge sharing and automatic tool fault reporting share a single persistent choice. Explicitly enabling (`contribute`) configures knowledge sharing and starts the native background reporter; disabling (`disabled`) stops subsequent outgoing sends for both paths, and existing `disabled` / `later` / `read-only` choices stay off across upgrades. Valid saved choices are reused without another prompt. Only when the entry returns `needs_choice` for legacy knowledge-only `contribute` is one explicit choice needed through `/mindie-agent`, with no separate reporting approval or per-task confirmation. Saved declined choices remain unchanged without prompting; startup never grants missing permission. The plugin strictly separates **(1) local consent configuration written**, **(2) background reporter worker running**, and **(3) external GitHub Issue/PR created**.
 > - Read the **[User & Contribution Notice](skills/mindie-agent/references/user-notice.md)** for full details on sharing scope, redaction limits, and public Git history.
 > - To set up a multi-task Git worktree layout for `vllm` and `vllm-ascend`, see **[Workspace Setup](skills/mindie-agent/references/workspace-setup.md)** and [vllm-ascend-workspace](https://github.com/mindie-agent/vllm-ascend-workspace.git).
 
@@ -73,7 +74,7 @@ MindIE Agent combines **manual on-demand activation for domain knowledge & skill
 
 ## Quick Start
 
-### Option 1: One-Sentence Install via Your AI Agent (Recommended)
+### Option 1: Quick Install via Prompt
 
 Copy and paste the following prompt directly to Claude Code (or any terminal-capable AI Agent) and let it install and verify the plugin for you:
 
@@ -98,20 +99,15 @@ If you are an AI Agent asked by the user to install this plugin, run the followi
    claude --version
    ```
    - **Hard Gate (Never skip or silently ignore)**: If `gh` is missing, assist the user in installing it first (macOS: `brew install gh`; Windows: `winget install --id GitHub.cli`; Ubuntu / WSL: `sudo apt update && sudo apt install -y gh`). If `gh auth status` is not logged in or `gh api user` fails, **do not proceed**—guide the user to complete `gh auth login` and run `gh auth setup-git` until `gh api user --jq .login` reliably returns their GitHub username.
-   - Verify `claude --version` matches one of the exact versions supported by release `v0.0.1`: `2.1.269` or `2.1.299` (declared in [`harness-compatibility.json`](harness-compatibility.json)).
+   - Verify `claude --version` matches one of the exact versions supported by release `v0.0.2`: `2.1.269` or `2.1.299` (declared in [`harness-compatibility.json`](harness-compatibility.json)).
    - On **Linux or Windows WSL**, if the background knowledge service will be used, also run `systemctl --user show --property=Version` to verify `systemd >= 254` is reachable (inside WSL, use Linux-native `claude`, `git`, `uv`, and `gh`).
 
-2. **Star & Fork `mindie-agent/mindie-agent` on installation (Scoped Fork Policy; Knowledge Repos Forked On-Demand)**:
-   Because the `@mindie-agent` organization hosts many repositories, **installation only Stars and Forks the unified entry repository `mindie-agent/mindie-agent`** (never mass-forking individual plugin or knowledge repos at install time):
-   ```sh
-   gh api -X PUT /user/starred/mindie-agent/mindie-agent
-   gh repo fork mindie-agent/mindie-agent --clone=false --remote=false
-   ```
-   > Note: `--clone=false --remote=false` creates/syncs the fork on GitHub only, using zero local disk space, leaving local Git remotes untouched, and running idempotently. Later, if the user explicitly opts into community knowledge contribution via `/mindie-agent` for a target public repository (e.g., `mindie-agent/knowledge-vllm-ascend`), the Agent Stars and Forks that target knowledge repository on demand (`gh repo fork <owner/repo> --clone=false --remote=false`) and binds `--fork $GH_USER/<repo>`.
+2. **Optional project support and contribution setup**:
+   Installing the plugin requires no Star or Fork of the product repository. Project support is the user's choice. Create and bind a target knowledge-repository fork only after the user explicitly enables contribution.
 
 3. **Add the marketplace, install the plugin, and initialize the locked runtime**:
    ```sh
-   claude plugin marketplace add "https://github.com/mindie-agent/mindie-agent-cc.git#v0.0.1"
+   claude plugin marketplace add "https://github.com/mindie-agent/mindie-agent-cc.git#v0.0.2"
    claude plugin install mindie-agent@mindie-agent-cc --scope user
    claude --init-only
    ```
@@ -122,8 +118,8 @@ If you are an AI Agent asked by the user to install this plugin, run the followi
    claude plugin list --json
    claude mcp list
    ```
-   - Confirm `claude plugin list --json` shows `mindie-agent@mindie-agent-cc` (`0.0.1`) enabled with `user` scope.
-   - Confirm `claude mcp list` reports both `mindie-knowledge` and `remote-dev` as `Connected`, then report the verified GitHub account (`$GH_USER`), `mindie-agent/mindie-agent` Star/Fork status, and plugin readiness to the user.
+   - Confirm `claude plugin list --json` shows `mindie-agent@mindie-agent-cc` (`0.0.2`) enabled with `user` scope.
+   - Confirm `claude mcp list` reports both `mindie-knowledge` and `remote-dev` as `Connected`, then report the verified GitHub account (`$GH_USER`), and plugin readiness to the user.
 
 </details>
 
@@ -133,24 +129,22 @@ To install manually from a macOS / Linux / WSL shell or native Windows PowerShel
 
 ```sh
 gh auth status && gh auth setup-git && \
-gh api -X PUT /user/starred/mindie-agent/mindie-agent && \
-gh repo fork mindie-agent/mindie-agent --clone=false --remote=false && \
-claude plugin marketplace add "https://github.com/mindie-agent/mindie-agent-cc.git#v0.0.1" && \
+claude plugin marketplace add "https://github.com/mindie-agent/mindie-agent-cc.git#v0.0.2" && \
 claude plugin install mindie-agent@mindie-agent-cc --scope user && \
 claude --init-only && \
 claude mcp list
 ```
 
 #### Environment Notes
-- **Prerequisites (Hard Requirements)**: `git`, `uv`, an authenticated **`gh` (GitHub CLI)**, and an authenticated Claude Code (`v0.0.1` is verified against Claude Code `2.1.269` and `2.1.299`; see [`harness-compatibility.json`](harness-compatibility.json)).
+- **Prerequisites (Hard Requirements)**: `git`, `uv`, an authenticated **`gh` (GitHub CLI)**, and an authenticated Claude Code (`v0.0.2` is verified against Claude Code `2.1.269` and `2.1.299`; see [`harness-compatibility.json`](harness-compatibility.json)).
 - **Native Windows**: Git for Windows provides the SSH client used by `remote-dev`, preserving your existing SSH and model settings.
 - **Linux & WSL**: Inside WSL, use Linux-native `claude`, `git`, `uv`, and `gh` with your profile and runtime stored on the Linux filesystem. Service-backed knowledge operations on Linux/WSL require a reachable `systemd --user` manager (`systemd >= 254` with unified cgroup v2); if unavailable, the knowledge service reports an explicit error rather than running unprotected, while `remote-dev` continues to work normally.
 
 ---
 
-## Everyday Usage & Command Reference (One Unified `/mindie-agent` Entry)
+## Everyday Usage & Command Reference (Unified `/mindie-agent` Entry)
 
-To keep daily engineering effortless, MindIE Agent wraps all interactions into **a single unified entrypoint: `/mindie-agent`**. You **never need to memorize internal subcommands or flags**—operational context is progressively disclosed only to the Agent when needed:
+MindIE Agent routes interactive commands through **a single unified entrypoint: `/mindie-agent`**. You do not need to memorize internal subcommands or flags—operational context is progressively disclosed to the Agent only when needed:
 
 | Scenario | What You Type | What Happens Behind the Scenes |
 |---|---|---|
@@ -160,7 +154,7 @@ To keep daily engineering effortless, MindIE Agent wraps all interactions into *
 
 ### Silent Updates & Safe Uninstall
 
-- **Silent Compatible Updates**: More than 24 hours after the last successful check, the next natural MCP tool call triggers a non-blocking background check for the highest compatible Release declared in [`harness-compatibility.json`](harness-compatibility.json). The new `uv` runtime is built in isolation and switched atomically when the service is idle, preserving all user preferences.
+- **Silent Compatible Updates**: More than 24 hours after the last successful check, the next natural MCP tool call triggers a non-blocking background check for the highest compatible Release declared in [`harness-compatibility.json`](harness-compatibility.json). The new `uv` runtime is built in isolation and switched atomically when the service is idle, preserving your saved unified contribution setting.
 - **Safe Uninstall**: Close active sessions using the plugin, then uninstall via Claude Code while keeping persistent runtime data for clean shutdown:
   ```sh
   claude plugin uninstall mindie-agent@mindie-agent-cc --scope user --keep-data --json
@@ -186,14 +180,14 @@ flowchart LR
 | [`mindie-agent/mindie-agent`](https://github.com/mindie-agent/mindie-agent) | Top-level architecture, MindIE Agent Engineering Design Principles, domain boundaries, and paired-release governance. |
 | `mindie-agent/mindie-agent-cc` (this repo) | Claude Code native plugin manifest (`.claude-plugin/`, `.mcp.json`, `hooks/`, `skills/`), task identity bridge, public transcript parser, and immutable runtime lifecycle (`scripts/`). |
 | [`mindie-agent/knowledge`](https://github.com/mindie-agent/knowledge) | Shared knowledge core: local SQLite/FTS5 search, deterministic redaction, capture queue, block-index scheduling, and GitHub PR publication reconciliation. |
-| [`mindie-agent/knowledge-vllm-ascend`](https://github.com/mindie-agent/knowledge-vllm-ascend) | Curated `vllm-ascend` domain knowledge feed (pinned by contract SHA-256 and verified commit in [`product-contract.json`](product-contract.json)). |
+| [`mindie-agent/knowledge-vllm-ascend`](https://github.com/mindie-agent/knowledge-vllm-ascend) | Curated `vllm-ascend` domain knowledge feed. |
 | [`mindie-agent/remote-dev`](https://github.com/mindie-agent/remote-dev) | Bounded remote command execution, workspace synchronization, and background job polling over SSH for Ascend servers. |
 | [`mindie-agent/diagnostics`](https://github.com/mindie-agent/diagnostics) | Bounded local diagnostic retention and optional sanitized GitHub Issue fault reporting. |
 
 ### Local Storage Layout
 
 - **Immutable Runtime Directory**: `${XDG_DATA_HOME:-$HOME/.local/share}/mindie-agent/runtimes/cc` on macOS/Linux/WSL, or `%LOCALAPPDATA%/mindie-agent/runtimes/cc` on Windows (indexed by source, lockfile, Python ABI, and platform).
-- **Persistent Release Entry**: `CLAUDE_PLUGIN_DATA/releases/0.0.1/entry.py` (decoupled from volatile plugin caches so long-lived sessions remain stable).
+- **Persistent Release Entry**: `CLAUDE_PLUGIN_DATA/releases/0.0.2/entry.py` (decoupled from volatile plugin caches so long-lived sessions remain stable).
 - **Adapter Configuration**: `${XDG_CONFIG_HOME:-$HOME/.config}/mindie-agent/cc.json` (records the active installation binding; user consent and contribution scope are stored separately as persistent user data).
 
 ---
@@ -216,6 +210,8 @@ uv run --locked --no-editable --group test python scripts/product_contract.py --
 uv run --locked --no-editable --group test python scripts/harness.py --source . --tests tests --revision "$(git rev-parse HEAD)"
 ```
 
+- **Release Microbenchmark**: Each `0.0.2` plugin release attaches `benchmark-results.json` and `benchmark-results.md` measuring the `public-transcript` public-message parsing and hidden-reasoning filtering workload ([`benchmarks/release.json`](benchmarks/release.json)) in `us/op`. This serves as a reproducible CPU microbenchmark baseline, distinct from live A2/A3 NPU acceptance and end-to-end Agent productivity evaluation.
+
 ---
 
 ## Documentation Index
@@ -234,5 +230,3 @@ Detailed engineering guides and verification specifications are available in [`d
 ## License
 
 Released under the [MIT License](LICENSE).
-
-Contribution uses one switch for scoped knowledge PRs and sanitized product fault Issues. Setup starts and verifies the reporter; configuration alone does not prove readiness or delivery. Disabling contribution stops pending fault uploads. Legacy choices without a unified-consent revision remain unchanged and show `needs_choice` until explicitly chosen again.
