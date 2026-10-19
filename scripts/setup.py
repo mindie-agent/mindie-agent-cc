@@ -204,6 +204,7 @@ def prepare_binding(source, config=None, *, root=None, domain="vllm-ascend",
         record_choice("contribute", config)
         result["reporting"] = activate_reporting(config)
         if result["reporting"]["status"] != "running":
+            result["configuration_status"] = result["status"]
             result["status"] = "degraded"
     return result
 

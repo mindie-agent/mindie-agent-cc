@@ -28,7 +28,8 @@ def test_context_declares_names_without_loading_provider_or_requiring_claude(tmp
     with patch.dict(os.environ, values, clear=True), \
             patch.object(paths.Path, "home", return_value=tmp_path / "home"), \
             patch.object(paths.shutil, "which", return_value=None):
-        declaration = paths.service_launch_context(tmp_path / "adapter.json", {})
+        declaration = paths.service_launch_context(
+            tmp_path / "adapter.json", {"base_config": str(tmp_path / "adapter.json")})
     assert declaration["paths"]["CLAUDE_CONFIG_DIR"] == str(profile)
     assert "MINDIE_CC_BIN" not in declaration["paths"]
     assert "ANTHROPIC_AUTH_TOKEN" in declaration["environment"]
@@ -59,7 +60,8 @@ def test_first_install_honors_adapter_profile_and_explicit_native_path(tmp_path)
     with patch.dict(os.environ, choices, clear=True), \
             patch.object(paths.shutil, "which", return_value=None):
         declaration = paths.service_launch_context(
-            tmp_path / "adapter.json", {"claude_config_dir": str(profile)},
+            tmp_path / "adapter.json", {"claude_config_dir": str(profile),
+                                      "base_config": str(tmp_path / "adapter.json")},
         )
     assert declaration["paths"] == dict(
         choices, CLAUDE_CONFIG_DIR=str(profile), MINDIE_CC_CONFIG=str(tmp_path / "adapter.json"),
@@ -71,7 +73,8 @@ def test_unresolved_explicit_command_does_not_invent_an_executable_path(tmp_path
             patch.object(paths.Path, "home", return_value=tmp_path / "home"), \
             patch.object(paths.shutil, "which", return_value=None):
         with pytest.raises(ValueError, match="explicit native executable is unavailable"):
-            paths.service_launch_context(tmp_path / "adapter.json", {})
+            paths.service_launch_context(
+                tmp_path / "adapter.json", {"base_config": str(tmp_path / "adapter.json")})
 
 
 
