@@ -23,7 +23,7 @@ def test_mcp_dispatch_has_no_total_deadline_and_keeps_caller_cancel(tmp_path):
     scripts.mkdir()
     (scripts / "mcp_server.py").touch()
     current = dict(scripts=str(scripts), python=sys.executable,
-                   adapter_config=str(tmp_path / "adapter.json"))
+                   adapter_config=str(make_config(tmp_path)))
     response = dict(jsonrpc="2.0", id="slow-read", result={"content": []})
     raw = json.dumps(dict(jsonrpc="2.0", id="slow-read", method="tools/call")).encode()
     cancel = threading.Event()
@@ -48,7 +48,7 @@ def test_only_knowledge_business_calls_can_transfer_service_ownership(tmp_path):
     scripts.mkdir()
     (scripts / "mcp_server.py").touch()
     current = dict(scripts=str(scripts), python=sys.executable,
-                   adapter_config=str(tmp_path / "adapter.json"))
+                   adapter_config=str(make_config(tmp_path)))
     response = dict(jsonrpc="2.0", id="ownership", result={"content": []})
     cases = [
         ("knowledge", "tools/call", "knowledge_query", True),
@@ -87,6 +87,7 @@ def test_only_stop_and_explicit_contribution_entries_allow_service_transfer():
 def _run(tmp, env, payload=b"", *, warning=False):
     env = dict(env)
     env["MINDIE_DIAGNOSTICS_ROOT"] = str(tmp / "diag")
+    env["MINDIE_DIAGNOSTICS_CONFIG"] = str(tmp / "diagnostics.json")
     proc = subprocess.run(
         [sys.executable, str(LAUNCH), "hook", "stop"],
         input=payload,
@@ -224,14 +225,14 @@ def test_optional_maintenance_timeout_keeps_ready_binding_and_warns(tmp_path, ca
     assert Path(binding["adapter_config"]).read_text() == '{"ready":true}'
 
 
-def test_session_start_forwards_native_fork_payload_to_selected_maintenance(capsys):
+def test_session_start_forwards_native_fork_payload_to_selected_maintenance(capsys, tmp_path):
     import mindie_launch
     payload = b'{"hook_event_name":"SessionStart","source":"fork","session_id":"native-child"}'
     with patch("harness.require_binding_support", return_value="2.1.299"), \
             patch.object(mindie_launch, "_read_hook_stdin", return_value=payload), \
             patch.object(mindie_launch, "installed_binding", return_value=nullcontext({
                 "python": sys.executable, "runtime_scripts": str(SCRIPTS),
-                "adapter_config": "fixture",
+                "adapter_config": str(make_config(tmp_path)),
             })), patch.object(mindie_launch.bounded, "run",
                               return_value='{"status":"ready"}') as runner:
         assert mindie_launch.main(["hook", "session-start"]) == 0

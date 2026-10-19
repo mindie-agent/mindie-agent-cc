@@ -339,97 +339,18 @@ class ConsentFileTests(LaneCase):
         rejected = []
         for call in (
             lambda: consent.record_choice("later"),
-            lambda: consent.record_reporting("enabled"),
         ):
             try:
                 call()
             except Exception as exc:
                 rejected.append(type(exc).__name__)
         self.assertEqual(path.read_bytes(), original)
-        self.assertEqual(len(rejected), 2, rejected)
+        self.assertEqual(len(rejected), 1, rejected)
         self.assertNotEqual(consent.load()["state"], "ok")
 
-    def test_choice_and_reporting_do_not_clobber_each_other(self):
-        import consent
-
-        case = self.tmp / "fields"
-        config = self._config(case)
-        self.assertEqual(consent.record_choice("read-only"), "read-only")
-        self.assertEqual(consent.record_reporting("later"), "later")
-        saved = consent.load()
-        self.assertEqual(saved["choice"], "read-only")
-        self.assertEqual(saved["reporting"], "later")
-        self.assertEqual(consent.record_choice("disabled"), "disabled")
-        saved = consent.load()
-        self.assertEqual(saved["choice"], "disabled")
-        self.assertEqual(saved["reporting"], "later")
-
-    def test_cross_process_updates_keep_both_fields(self):
-        import consent
-        import multiprocessing
-
-        case = self.tmp / "race"
-        config = self._config(case)
-        path = consent.consent_path()
-        path.write_text(
-            json.dumps(
-                {
-                    "schema": "mindie-consent/1",
-                    "choice": "read-only",
-                    "reporting": "later",
-                }
-            )
-            + "\n"
-        , encoding="utf-8")
-        ctx = multiprocessing.get_context("spawn")
-        barrier = ctx.Barrier(2)
-        rounds = 20
-        home = os.environ["HOME"]
-        proc_choice = ctx.Process(
-            target=_race_worker,
-            args=(str(config), home, str(SCRIPTS), "choice", "disabled", rounds, barrier),
-        )
-        proc_report = ctx.Process(
-            target=_race_worker,
-            args=(str(config), home, str(SCRIPTS), "reporting", "enabled", rounds, barrier),
-        )
-        proc_choice.start()
-        proc_report.start()
-        proc_choice.join(30)
-        proc_report.join(30)
-        self.assertFalse(proc_choice.is_alive())
-        self.assertFalse(proc_report.is_alive())
-        details = []
-        for label, proc in (("choice", proc_choice), ("reporting", proc_report)):
-            if proc.exitcode != 0:
-                details.append(f"{label} exit {proc.exitcode}")
-        self.assertEqual(
-            details,
-            [],
-            "cross-process consent update failed: " + "; ".join(details),
-        )
-        saved = json.loads(path.read_text(encoding="utf-8"))
-        self.assertEqual(saved.get("choice"), "disabled")
-        self.assertEqual(saved.get("reporting"), "enabled")
 
 
-def _race_worker(config, home, scripts, kind, value, rounds, barrier):
-    os.environ["HOME"] = home
-    os.environ["MINDIE_CC_CONFIG"] = config
-    os.environ["XDG_CONFIG_HOME"] = str(Path(home) / "xdg")
-    os.environ["XDG_STATE_HOME"] = str(Path(home) / "state")
-    os.environ["MINDIE_DIAGNOSTICS_CONFIG"] = str(Path(home) / "diagnostics.json")
-    os.environ["MINDIE_DIAGNOSTICS_ROOT"] = str(Path(home) / "diag")
-    os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
-    sys.path.insert(0, scripts)
-    import consent
 
-    for _ in range(rounds):
-        barrier.wait(20)
-        if kind == "choice":
-            consent.record_choice(value)
-        else:
-            consent.record_reporting(value)
 
 
 class StopGateTests(LaneCase):
@@ -811,7 +732,7 @@ class EntryContractTests(LaneCase):
                 engine = json.loads(Path(adapter["engine_config"]).read_text(encoding="utf-8"))
                 self.assertFalse(Path(engine["admission_path"]).exists())
 
-    def test_first_entry_offers_reporting_with_the_knowledge_choice(self):
+    def test_first_entry_reports_one_missing_choice_without_independent_opt_in(self):
         import entry
 
         _config, project = self._config(False)
@@ -826,9 +747,9 @@ class EntryContractTests(LaneCase):
         )
         self.assertEqual(payload["choices"], [])
         self.assertEqual(payload["experience"], "needs-configuration")
-        reporting = payload.get("reporting_choice")
-        self.assertIsInstance(reporting, dict, json.dumps(payload.get("reporting"), default=str)[:400])
-        self.assertTrue(reporting.get("independent_of_knowledge_contribution"))
+        self.assertNotIn("reporting_choice", payload)
+        self.assertEqual(payload["reporting"]["status"], "needs_choice")
+        self.assertFalse(payload["reporting"]["enabled"])
 
     def test_contribute_completes_on_the_unified_entry(self):
         import consent

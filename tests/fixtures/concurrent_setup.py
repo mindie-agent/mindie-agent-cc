@@ -46,7 +46,9 @@ with ExitStack() as stack:
     stack.enter_context(patch.object(Store, "_open_state", open_state))
     stack.enter_context(patch.object(setup, "write_community"))
     stack.enter_context(patch.object(setup, "service_launch_context", return_value={
-        "paths": {"CLAUDE_CONFIG_DIR": str(root / "claude")}, "environment": [],
+        "paths": {"CLAUDE_CONFIG_DIR": str(root / "claude"),
+                  "MINDIE_DIAGNOSTICS_CONFIG": str(root / "diagnostics.json"),
+                  "MINDIE_DIAGNOSTICS_ROOT": str(root / "diagnostics")}, "environment": [],
     }))
     print("started", flush=True)
     result = setup.prepare_binding(scripts.parent, root / "cc.json", root=root / "data",

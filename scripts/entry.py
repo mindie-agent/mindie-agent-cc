@@ -252,7 +252,7 @@ def _knowledge_status_payload(session=None):
 
 
 def status_payload(session=None):
-    """Read-only. Reporting is independent of knowledge setup and binding."""
+    """Read-only status of capture and reporting under one contribution choice."""
     import consent as consent_mod
     import diagnostic_support
 
@@ -264,15 +264,7 @@ def status_payload(session=None):
                                     error=dict(stage="consent_path", type=type(exc).__name__))
         payload["experience"] = "unavailable"
         return payload
-    payload["reporting"] = diagnostic_support.effective_reporting(
-        diagnostic_support.reporting_status(), saved.get("reporting"))
-    # A later task does not reopen an independent choice left unset at setup.
-    if (
-        payload["reporting"].get("status") == "not_configured"
-        and saved["state"] == "missing"
-        and saved["reporting"] is None
-    ):
-        payload["reporting_choice"] = diagnostic_support.reporting_hint()
+    payload["reporting"] = diagnostic_support.reporting_status()
     return payload
 
 
@@ -311,6 +303,8 @@ def _apply_native_choice(payload, native_choice, session=None):
             from sharing import write_disabled
             write_disabled()
         stored = set_choice(native_choice)
+        from diagnostic_support import activate_reporting
+        payload["reporting"] = activate_reporting(ensure=False)
     except consent_mod.ConsentError as exc:
         # A damaged saved authority is never silently cleared: the fault
         # payload shows the real state instead of recording over it.
@@ -349,18 +343,26 @@ def _prepare_capture_service():
 
 
 def _finish_contribution(result: dict) -> dict:
-    """Persist the explicit choice and prepare an authorized capture service."""
+    """Commit one explicit choice, then prepare capture and a reporter handoff."""
     import consent as consent_mod
+    import diagnostic_support
 
     try:
         consent_mod.record_choice("contribute")
     except consent_mod.ConsentError as exc:
-        result["consent_error"] = dict(state=exc.state, error=str(exc))
+        return dict(result, status="degraded", experience="unavailable",
+                    consent_error=dict(state=exc.state, error=str(exc)))
     result["service"] = _prepare_capture_service()
-    if str(result.get("service", "")).startswith("prepare-failed:") or result.get("consent_error"):
+    try:
+        result["reporting"] = diagnostic_support.activation_handoff(load_adapter_config()["python"])
+    except Exception as exc:
+        result["reporting"] = dict(status="unavailable", error_type=type(exc).__name__)
+    result["status"] = "reporter_pending"
+    if (str(result["service"]).startswith("prepare-failed:")
+            or result["reporting"].get("status") != "reporter_pending"):
         result["status"] = "degraded"
         result["experience"] = "unavailable"
-        result["warning"] = f"knowledge capture service could not be prepared ({result.get('service')})"
+        result["warning"] = "Contribution was saved, but capture or fault reporting preparation is incomplete."
     return result
 
 
@@ -398,7 +400,10 @@ def _apply_contribute(payload, session, event, configured):
     payload.update(first_use="contribute", choices=[], repeat=True)
     payload["sharing"] = result
     payload = _finish_contribution(payload)
-    payload.update(status_payload(session))
+    refreshed = status_payload(session)
+    refreshed.pop("reporting", None)
+    refreshed.pop("status", None)
+    payload.update(refreshed)
     if str(payload.get("service", "")).startswith("prepare-failed:") or payload.get("consent_error"):
         payload["status"] = "degraded"
         payload["experience"] = "unavailable"
@@ -406,49 +411,17 @@ def _apply_contribute(payload, session, event, configured):
     return payload
 
 
-def _record_reporting_decision(enable: bool) -> dict:
-    """Save explicit intent before changing the independent reporter policy."""
-    import consent as consent_mod
-    import diagnostic_support
-
-    python = load_adapter_config()["python"]
-    try:
-        consent_mod.record_reporting("enabled" if enable else "disabled")
-    except consent_mod.ConsentError as exc:
-        return dict(status="unavailable", enabled=None,
-                    consent_error=dict(state=exc.state, error=str(exc)))
-    result = diagnostic_support.configure_reporting(enable, python)
-    if result.get("enabled") is not enable:
-        result = dict(result, saved_reporting="enabled" if enable else "disabled",
-                      policy_change_confirmed=False)
-    return result
+def _reporting_guidance():
+    return dict(
+        status="contribution_choice_required",
+        detail="Knowledge sharing and sanitized fault Issues share one contribution switch.",
+        enable="/mindie-agent contribute --repository OWNER/REPO --account USER --project-root PATH --visibility public",
+        disable="/mindie-agent disabled",
+    )
 
 
 def _apply_reporting_token(payload, token, configured):
-    """Persist the independent choice without starting a service in a Hook."""
-    import consent as consent_mod
-    import diagnostic_support
-
-    value = {
-        "reporting-enable": "enabled",
-        "reporting-disable": "disabled",
-        "reporting-later": "later",
-    }[token]
-    if token == "reporting-later" or not configured:
-        if token == "reporting-enable":
-            payload["reporting"] = dict(
-                recorded=False,
-                note="Reporting enable requires a prepared runtime; start a new Claude session with MindIE enabled",
-            )
-            return payload
-        try:
-            consent_mod.record_reporting(value)
-        except consent_mod.ConsentError as exc:
-            payload["consent_error"] = dict(state=exc.state, error=str(exc))
-        payload["reporting"] = diagnostic_support.effective_reporting(
-            diagnostic_support.reporting_status(), consent_mod.load().get("reporting"))
-        return payload
-    payload["reporting"] = _record_reporting_decision(token == "reporting-enable")
+    payload["reporting"] = _reporting_guidance()
     return payload
 
 
@@ -546,6 +519,8 @@ def op_sharing_disable(session, event):
     result = sharing_mod.write_disabled()
     try:
         consent_mod.record_choice("disabled")
+        from diagnostic_support import activate_reporting
+        result = dict(result, reporting=activate_reporting(ensure=False))
     except consent_mod.ConsentError as exc:
         result = dict(result)
         result["consent_error"] = dict(state=exc.state, error=str(exc))
@@ -620,21 +595,12 @@ def op_recover(session, event):
 
 
 def op_reporting(session, event, command):
-    """Native slash only. Does not ensure the reporter inside the Hook."""
-    first = consume_slash(session, event, command)
-    import diagnostic_support
-
+    """Compatibility entrypoints never make a separate reporting choice."""
+    consume_slash(session, event, command)
     if command == "reporting-status":
-        import consent as consent_mod
-        return diagnostic_support.effective_reporting(
-            diagnostic_support.reporting_status(), consent_mod.load().get("reporting"))
-    if not first:
-        import consent as consent_mod
-        return dict(diagnostic_support.effective_reporting(
-            diagnostic_support.reporting_status(), consent_mod.load().get("reporting")), already=True)
-    if not _configured():
-        raise ValueError("MindIE is not configured; start a new Claude session with the native plugin enabled")
-    return _record_reporting_decision(command == "reporting-enable")
+        from diagnostic_support import reporting_status
+        return reporting_status()
+    return _reporting_guidance()
 
 
 def dispatch_event(event: dict) -> dict:

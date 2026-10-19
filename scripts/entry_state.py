@@ -97,5 +97,6 @@ def configuration_required() -> dict:
         note=("Supply only missing destination and scope information. Reuse "
               "previously approved values. Installation or task binding alone "
               "does not make the experience loop available. Explicitly disabled "
-              "settings remain disabled until changed."),
+              "settings remain disabled until changed. Contribution authorizes "
+              "scoped knowledge PRs and sanitized product fault Issues together."),
     )

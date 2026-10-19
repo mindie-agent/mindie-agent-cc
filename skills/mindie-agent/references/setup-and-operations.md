@@ -26,7 +26,16 @@ Load this reference **only** when the user is performing first-time setup, confi
 During installation or first-use setup:
 1. Present [用户须知](user-notice.md) (which explains visible-message sharing, redaction limits, model-provider processing, and public Git history).
 2. Follow [optional workspace setup](workspace-setup.md): recommend the multi-worktree workspace (`vllm` + `vllm-ascend`), ask whether and where to create it, and after creation ask whether to initialize it. Reuse prior answers and offer this only during setup rather than ordinary task execution.
-3. Offer the independent product fault reporting choice once (`/mindie-agent reporting-enable`, `reporting-disable`, or `reporting-later`). It is separate from knowledge contribution, an installer default-off is not a recorded user decision, and any recorded decision persists without being re-asked.
+3. Explain the single contribution choice: it authorizes scoped knowledge PRs and sanitized product fault Issues. Legacy choices without a unified-consent revision require a new explicit choice; startup never upgrades consent.
+
+Contribution enables both scoped knowledge PRs and sanitized product fault Issues.
+When the native Hook returns `reporting.run_outside_hook=true`, execute its
+`reporting.command_line` now, outside the Hook, in the same setup flow. Use a
+90-second outer timeout. This is part of the user's existing contribution
+request; do not ask for another confirmation or leave the command for the user.
+Only report the reporter ready when the returned status is `running`. Report
+`degraded`, authentication errors, timeouts, and `needs_choice` directly; do not
+retry an uncertain external write. Local configuration alone is not delivery.
 
 ## 3. Error Handling & Background Worker Rules
 

@@ -11,7 +11,8 @@ static stderr warning; it never maintains a second diagnostic store.
   original operation outcome unchanged.
 
 [Timeouts & Locks]
-- Synchronous, non-blocking local incident recording.
+- Fault recording uses local I/O only. Explicit reporter activation has a
+  75-second shared budget within a 90-second caller, never inside short Hooks.
 
 [Side-Effect Policy]
 - Writes redacted diagnostic records under the MindIE state directory.
@@ -104,6 +105,7 @@ def _warn():
 
 def _record():
     from mindie_diagnostics.integration import record_failure
+    os.environ["MINDIE_DIAGNOSTICS_CONFIG"] = str(reporting_config_path())
     return record_failure
 
 
@@ -176,7 +178,7 @@ def attach(result, diagnostic):
         return result
     result = dict(result, diagnostic=projected)
     incident = projected.get("incident_id")
-    text = (f"MindIE incident {incident}; read-only local status: /mindie-agent:reporting-status. Upload remains a separate opt-in."
+    text = (f"MindIE incident {incident}; read-only local status: /mindie-agent:reporting-status. Fault uploads follow the contribution switch."
             if incident else _STORAGE)
     content = result.get("content")
     if isinstance(content, list):
@@ -186,12 +188,19 @@ def attach(result, diagnostic):
     return result
 
 
-def reporting_config_path():
+def reporting_config_path(config_file=None):
     explicit = os.environ.get("MINDIE_DIAGNOSTICS_CONFIG")
     if explicit:
-        return Path(explicit).expanduser().resolve()
-    base = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
-    return (base / "mindie-agent" / "diagnostics.json").expanduser().resolve()
+        return Path(explicit).expanduser().absolute()
+    from paths import base_config_path, config_path
+    profile = Path(config_file) if config_file is not None else base_config_path()
+    adapter_path = Path(config_file) if config_file is not None else config_path()
+    if adapter_path.is_file():
+        adapter = json.loads(adapter_path.read_text(encoding="utf-8"))
+        selected = adapter.get("diagnostics_context", {}).get("MINDIE_DIAGNOSTICS_CONFIG")
+        if selected:
+            return Path(selected).expanduser().absolute()
+    return profile.expanduser().absolute().parent / "diagnostics.json"
 
 
 def _unavailable(stage, error_type):
@@ -205,19 +214,37 @@ def _unavailable(stage, error_type):
 def reporting_status():
     try:
         from mindie_diagnostics.integration import reporting_status as upstream
+        import consent
         result = upstream(config=reporting_config_path())
-        if not isinstance(result, dict):
-            raise TypeError("invalid reporting status")
-        return result
+        return effective_reporting(result, consent.load())
     except Exception as exc:
         return _unavailable("reporting_status", type(exc).__name__)
 
 
-def ensure_argv(python):
-    if not isinstance(python, str) or not Path(python).is_absolute():
-        raise ValueError("selected runtime requires an absolute interpreter")
-    return [python, "-m", "mindie_diagnostics.cli", "reporting", "ensure",
-            "--config", str(reporting_config_path())]
+def activate_reporting(config_file=None, *, ensure=True):
+    """Derive policy from the existing authority; only long-lived callers ensure."""
+    from mindie_knowledge.consent_store import activate_reporting as activate
+    import consent
+    policy = reporting_config_path(config_file)
+    authority = consent.consent_path(config_file)
+    return activate(authority, config=policy, repository=REPOSITORY, ensure=ensure)
+
+
+def activation_handoff(python):
+    """The native ten-second Hook configures; the same Skill finishes outside it."""
+    from paths import base_config_path
+    result = activate_reporting(ensure=False)
+    if result.get("status") == "configured" and result.get("enabled"):
+        command = [python, str(Path(__file__).resolve()), "activate",
+                   "--diagnostics-config", str(reporting_config_path()),
+                   "--config", str(base_config_path())]
+        if os.environ.get("MINDIE_DIAGNOSTICS_ROOT"):
+            command.extend(["--diagnostics-root", os.environ["MINDIE_DIAGNOSTICS_ROOT"]])
+        result = dict(result, status="reporter_pending", run_outside_hook=True,
+                      command=command, command_line=ensure_command_line(command),
+                      command_shell="powershell" if os.name == "nt" else "posix",
+                      note="Execute this command now in the same contribution setup flow; verify worker readiness before reporting completion.")
+    return result
 
 
 def ensure_command_line(command):
@@ -226,56 +253,39 @@ def ensure_command_line(command):
     return shlex.join(command)
 
 
-def configure_reporting(enabled, python):
-    if type(enabled) is not bool:
-        return _unavailable("reporting_configure", "TypeError")
+def effective_reporting(view, saved):
+    """The authority gates status too; a legacy choice cannot widen consent."""
+    if saved.get("state") in {"corrupt", "unreadable"}:
+        return dict(view, enabled=False, status="unavailable", consent=saved)
+    if not saved.get("choice_revision"):
+        return dict(view, enabled=False, status="needs_choice", consent=saved,
+                    detail="Choose contribution again to authorize knowledge sharing and sanitized fault Issues together.")
+    if saved.get("choice") != "contribute":
+        return dict(view, enabled=False, status="disabled", consent=saved)
+    return dict(view, consent=saved)
+
+
+def main(argv=None):
+    import argparse
+    parser = argparse.ArgumentParser(description="Activate fault reporting from the saved contribution choice.")
+    parser.add_argument("operation", choices=["activate", "status"])
+    parser.add_argument("--config", type=Path, required=True)
+    parser.add_argument("--diagnostics-config", type=Path)
+    parser.add_argument("--diagnostics-root", type=Path)
+    args = parser.parse_args(argv)
+    os.environ["MINDIE_CC_CONFIG"] = str(args.config.expanduser().absolute())
+    if args.diagnostics_config:
+        os.environ["MINDIE_DIAGNOSTICS_CONFIG"] = str(args.diagnostics_config.expanduser().absolute())
+    if args.diagnostics_root:
+        os.environ["MINDIE_DIAGNOSTICS_ROOT"] = str(args.diagnostics_root.expanduser().absolute())
     try:
-        command = ensure_argv(python)
-        from mindie_diagnostics.integration import configure_reporting as upstream
-        result = upstream(enabled, repository=REPOSITORY, config=reporting_config_path())
-        if not isinstance(result, dict) or result.get("enabled") is not enabled:
-            return _unavailable("reporting_configure", "ConfigurationUnconfirmed")
-        result = dict(result, run_outside_hook=False)
-        if enabled:
-            result.update(
-                run_outside_hook=True, command=command,
-                command_line=ensure_command_line(command),
-                command_shell="powershell" if os.name == "nt" else "posix",
-                note=("Reporting settings are enabled. Execute this command once outside "
-                      "the Hook and inspect its result before claiming reporter readiness. "
-                      "Report any failure; do not automatically retry."),
-            )
-        return result
+        result = reporting_status() if args.operation == "status" else activate_reporting()
     except Exception as exc:
-        return _unavailable("reporting_configure", type(exc).__name__)
+        result = _unavailable("reporting_activation", type(exc).__name__)
+    print(json.dumps(result))
+    return int(result.get("status") not in {"running", "disabled"}
+               if args.operation == "activate" else result.get("status") == "unavailable")
 
 
-def effective_reporting(view, saved_reporting):
-    """Expose a stale enabled policy without treating it as a saved choice."""
-    if not isinstance(view, dict) or view.get("enabled") is not True:
-        return view
-    if saved_reporting == "enabled":
-        return view
-    return dict(view, enabled=False, policy_enabled=True,
-                status="consent_mismatch",
-                detail=("The reporter policy is enabled but the saved reporting choice is "
-                        f"{saved_reporting or 'absent'}. Inspect reporting status and explicitly "
-                        "choose reporting-enable or reporting-disable to reconcile them."))
-
-
-def reporting_hint():
-    return {
-        "optional": True, "recommended": True,
-        "independent_of_knowledge_contribution": True,
-        "enable": "/mindie-agent:reporting-enable",
-        "disable": "/mindie-agent:reporting-disable",
-        "later": "/mindie-agent reporting-later",
-        "status": "/mindie-agent:reporting-status",
-        "repository": REPOSITORY,
-        "note": ("Optionally report sanitized product fault code metadata to the public "
-                 "repository. Prompts, transcripts, commands, environment and credentials "
-                 "are excluded. This is a separate shared user choice decided once; the "
-                 "entry also accepts reporting-enable/reporting-disable/reporting-later. "
-                 "Enabled, disabled and later all persist and are never re-asked. "
-                 "Consult its status anytime."),
-    }
+if __name__ == "__main__":
+    raise SystemExit(main())

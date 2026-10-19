@@ -20,12 +20,18 @@ they are not alternative product modes or successful acceptance.
 Report missing configuration, an out-of-scope task or a component failure
 directly. Do not require a deactivate/reactivate recovery cycle.
 
-The independent reporting choice is offered once with the first setup
-(`/mindie-agent reporting-enable`, `reporting-disable`, or
-`reporting-later`); any recorded decision persists.
+Contribution enables both scoped knowledge PRs and sanitized product fault Issues.
+When the native Hook returns `reporting.run_outside_hook=true`, execute its
+`reporting.command_line` now, outside the Hook, in the same setup flow. Use a
+90-second outer timeout. This is part of the user's existing contribution
+request; do not ask for another confirmation or leave the command for the user.
+Only report the reporter ready when the returned status is `running`. Report
+`degraded`, authentication errors, timeouts, and `needs_choice` directly; do not
+retry an uncertain external write. Local configuration alone is not delivery.
 
 There is no automatic yes. A saved choice persists for this installation and
-is never re-asked. Remote-dev works without this binding.
+is reused. A legacy choice without a unified-consent revision requires an
+explicit new contribution choice before fault uploads. Remote-dev works without this binding.
 
 During installation or first-use setup, present the [user notice](../mindie-agent/references/user-notice.md),
 then follow [optional workspace setup](../mindie-agent/references/workspace-setup.md).

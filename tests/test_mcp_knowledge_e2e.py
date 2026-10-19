@@ -46,7 +46,6 @@ class McpKnowledgeEndToEndTests(unittest.TestCase):
             json.dumps(community, indent=2) + "\n", encoding="utf-8"
         )
         consent_store.record_choice(self.tmp / "mindie-consent.json", "disabled")
-        consent_store.record_reporting(self.tmp / "mindie-consent.json", "disabled")
 
         store = Store(self.tmp / "domain", "vllm-ascend")
         try:

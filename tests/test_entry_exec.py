@@ -43,6 +43,8 @@ class EntryExecTests(unittest.TestCase):
             "print('err:retained',file=sys.stderr);raise SystemExit(17)",
             encoding="utf-8")
         entry = tmp_path / "entry.py"
+        (tmp_path / "adapter.json").write_text(
+            json.dumps({"base_config": str(tmp_path / "adapter.json")}))
         with patch.object(setup, "HERE", installed):
             setup.publish_entry(entry, tmp_path / "adapter.json")
         process = subprocess.Popen(

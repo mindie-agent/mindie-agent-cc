@@ -194,7 +194,6 @@ class LiveNpuAcceptanceTests(unittest.TestCase):
             a3_npu_text = self._result_text(a3_probe)
 
         consent_store.record_choice(self.tmp / "mindie-consent.json", "contribute")
-        consent_store.record_reporting(self.tmp / "mindie-consent.json", "disabled")
         prepare_schema(str(self.engine))
 
         transcript = self.tmp / "claude" / "projects" / "live" / f"{self.session}.jsonl"

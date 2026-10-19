@@ -1,6 +1,6 @@
 ---
 name: sharing-disable
-description: Turn off MindIE community contribution. Capture and organizer stop.
+description: Turn off MindIE community contribution. Capture, organizer, and pending fault uploads stop.
 disable-model-invocation: true
 ---
 

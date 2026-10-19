@@ -23,7 +23,6 @@ from paths import base_config_path, community_config_path
 ConsentError = consent_store.ConsentError
 SCHEMA = consent_store.SCHEMA
 CHOICES = consent_store.CHOICES
-REPORTING = consent_store.REPORTING
 
 
 def consent_path(config: Path | str | None = None) -> Path:
@@ -34,14 +33,7 @@ def consent_path(config: Path | str | None = None) -> Path:
 
 def load(config: Path | str | None = None) -> dict:
     """Read the explicit saved choice without import, inference or repair."""
-    raw = consent_store.read(consent_path(config))
-    return dict(
-        state=raw["state"],
-        choice=raw["choice"],
-        reporting=raw["reporting"],
-        path=raw["path"],
-        error=raw["error"],
-    )
+    return consent_store.read(consent_path(config))
 
 
 def record_choice(choice: str, config: Path | str | None = None) -> str:
@@ -52,12 +44,6 @@ def record_choice(choice: str, config: Path | str | None = None) -> str:
     """
     consent_store.record_choice(consent_path(config), choice)
     return choice
-
-
-def record_reporting(value: str, config: Path | str | None = None) -> str:
-    """Explicit reporting choice; preserves the contribution choice."""
-    consent_store.record_reporting(consent_path(config), value)
-    return value
 
 
 def resolve_community_path() -> Path:

@@ -16,7 +16,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 import diagnostic_support
 from mindie_diagnostics.ingestion import ingest
-from mindie_diagnostics.integration import configure_reporting
+import consent
+from mindie_knowledge import consent_store
 from mindie_diagnostics.outbox import Outbox
 from mindie_diagnostics.reporter import TransportError, publish_one
 
@@ -72,10 +73,11 @@ class AutomaticReportingTests(unittest.TestCase):
             with self.subTest(uncertain=uncertain), workspace() as root:
                 logs, policy = root / "logs", root / "policy.json"
                 env = {"MINDIE_DIAGNOSTICS_ROOT": str(logs),
-                       "MINDIE_DIAGNOSTICS_CONFIG": str(policy)}
-                with patch.dict(os.environ, env):
-                    configured = configure_reporting(
-                        True, config=policy, roots=[str(logs)], repository=Publisher.repository)
+                       "MINDIE_DIAGNOSTICS_CONFIG": str(policy),
+                       "MINDIE_CC_CONFIG": str(root / "cc.json")}
+                with patch.dict(os.environ, env), patch.object(diagnostic_support, "REPOSITORY", Publisher.repository):
+                    consent.record_choice("contribute")
+                    configured = diagnostic_support.activate_reporting(ensure=False)
                     self.assertEqual(configured["status"], "configured")
                     original = {"isError": True, "structuredContent": {"outcome": "failed"},
                                 "content": [{"type": "text", "text": "original business result"}]}
@@ -110,15 +112,34 @@ class AutomaticReportingTests(unittest.TestCase):
         with workspace() as root:
             logs, policy = root / "logs", root / "policy.json"
             with patch.dict(os.environ, {"MINDIE_DIAGNOSTICS_ROOT": str(logs),
-                                       "MINDIE_DIAGNOSTICS_CONFIG": str(policy)}):
+                                       "MINDIE_DIAGNOSTICS_CONFIG": str(policy),
+                       "MINDIE_CC_CONFIG": str(root / "cc.json")}):
                 diagnostic = diagnostic_support.failure("mcp.request", "decode", "protocol_mismatch")
                 self.assertTrue(diagnostic["recorded"])
                 queue = Outbox(root / "outbox.db")
                 self.assertEqual(ingest(logs, queue)["enqueued"], 0)
-                self.assertEqual(configure_reporting(
-                    True, config=policy, roots=[str(logs)],
-                    repository=Publisher.repository)["status"], "configured")
+                consent.record_choice("contribute")
+                self.assertEqual(diagnostic_support.activate_reporting(ensure=False)["status"], "configured")
                 self.assertEqual(ingest(logs, Outbox(root / "fresh.db"))["enqueued"], 0)
+
+    def test_disabling_contribution_revokes_a_queued_issue_before_post(self):
+        with workspace() as root:
+            logs, policy = root / "logs", root / "policy.json"
+            with patch.dict(os.environ, {"MINDIE_DIAGNOSTICS_ROOT": str(logs),
+                                         "MINDIE_DIAGNOSTICS_CONFIG": str(policy),
+                                         "MINDIE_CC_CONFIG": str(root / "cc.json")}), \
+                    patch.object(diagnostic_support, "REPOSITORY", Publisher.repository):
+                consent.record_choice("contribute")
+                diagnostic_support.activate_reporting(ensure=False)
+                self.assertTrue(diagnostic_support.failure("mcp.request", "decode", "protocol_mismatch")["recorded"])
+                queue = Outbox(root / "outbox.db")
+                self.assertEqual(ingest(logs, queue)["enqueued"], 1)
+                consent.record_choice("disabled")
+                # The old policy is intentionally not refreshed: the final POST
+                # guard must consult the live master authority itself.
+                publisher = Publisher()
+                self.assertEqual(publish_one(queue, publisher)["status"], "withdrawn")
+                self.assertEqual(publisher.posts, 0)
 
     def test_missing_runtime_reports_unavailable_without_local_shadow_state(self):
         with tempfile.TemporaryDirectory() as raw:

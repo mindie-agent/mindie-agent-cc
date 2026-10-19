@@ -2,7 +2,7 @@
 
 <a href="failure-diagnostics.zh.md">中文</a> | <b>English</b> · <a href="README.en.md">Documentation Index</a>
 
-Following Principle 9 of the [MindIE Agent Engineering Design Principles](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.en.md) (*observable, diagnosable tools; never hide errors*), `mindie-agent-cc` exposes clear read-only diagnostics, deterministic local process cancellation, and an independent opt-in channel for sanitized product fault reporting.
+Following Principle 9 of the [MindIE Agent Engineering Design Principles](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.en.md) (*observable, diagnosable tools; never hide errors*), `mindie-agent-cc` exposes clear read-only diagnostics, deterministic local process cancellation, and sanitized product fault reporting under the contribution switch.
 
 ---
 
@@ -35,7 +35,7 @@ When an isolated native Claude call for block-index generation fails, the adapte
 ## 4. Opt-In Product Fault Reporting (`/mindie-agent:reporting-*`)
 
 `mindie-agent-cc` integrates with the shared `mindie-diagnostics` reporter:
-- **Independent Opt-In**: Product fault reporting is off by default and completely separate from community knowledge sharing. Saving `/mindie-agent:reporting-enable` records your preference and returns a one-time terminal setup command.
+- **One Contribution Choice**: Explicit contribution enables scoped knowledge PRs and sanitized fault Issues together. The Hook returns a pending reporter handoff; the Agent executes it outside the Hook during the same setup flow and checks actual readiness. The legacy reporting mutators only guide to this flow. `/mindie-agent:reporting-status` stays read-only.
 - **Sanitized Public Payload**: Confirmed product defects generate local diagnostic records and—when reporting is enabled—submit redacted GitHub Issues containing **only** static product stages, error categories, and installed code versions. Task prompts, transcripts, raw stack traces, commands, file paths, and credentials are never included.
 - **Deduplication & Reconciliation**: Duplicate faults share a fingerprint, and any uncertain GitHub Issue creation attempt is reconciled before retrying so duplicates are never spammed.
 
