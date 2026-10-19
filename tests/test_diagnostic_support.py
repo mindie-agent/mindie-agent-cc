@@ -48,27 +48,6 @@ class DiagnosticSupportTests(unittest.TestCase):
         with patch.object(support, "_record", return_value=lambda *args, **kw: (True, "a" * 32, False)), patch("sys.stderr", io.StringIO()):
             self.assertEqual(support.failure("mcp", "helper", "protocol"), {"logging_failed": True})
 
-    def test_shared_configuration_is_explicit_and_no_service_is_started(self):
-        calls = []
-        integration = types.ModuleType("mindie_diagnostics.integration")
-        def configure(enabled, **kw):
-            calls.append((enabled, kw))
-            return {"enabled": enabled, "worker": {"status": "not_confirmed"}}
-        integration.configure_reporting = configure
-        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"MINDIE_DIAGNOSTICS_CONFIG": str(Path(tmp) / "choice.json")}), patch.dict(sys.modules, {"mindie_diagnostics.integration": integration}):
-            enabled = support.configure_reporting(True, sys.executable)
-            self.assertTrue(enabled["run_outside_hook"])
-            self.assertEqual(enabled["command"], [sys.executable, "-m", "mindie_diagnostics.cli", "reporting", "ensure", "--config", str((Path(tmp) / "choice.json").resolve())])
-            disabled = support.configure_reporting(False, sys.executable)
-            self.assertFalse(disabled["run_outside_hook"])
-            self.assertNotIn("command", disabled)
-            self.assertEqual([c[0] for c in calls], [True, False])
-            self.assertFalse((Path(tmp) / "choice.json").exists())
-            integration.configure_reporting = lambda *args, **kw: {"enabled": False}
-            unknown = support.configure_reporting(True, sys.executable)
-            self.assertEqual(unknown["status"], "unavailable")
-            self.assertNotIn("command", unknown)
-
     def test_windows_ensure_command_is_powershell_executable(self):
         command = [r"C:\Users\Owner's Name\python.exe", "-m", "mindie_diagnostics.cli",
                    "--config", r"C:\Users\Owner's Name\reporting.json"]
@@ -78,11 +57,11 @@ class DiagnosticSupportTests(unittest.TestCase):
                          "'mindie_diagnostics.cli' '--config' "
                          "'C:\\Users\\Owner''s Name\\reporting.json'")
 
-    def test_stale_policy_is_explicit_and_not_an_effective_saved_choice(self):
+    def test_stale_policy_cannot_override_a_disabled_or_legacy_authority(self):
         policy = dict(status="configured", enabled=True, worker={"status": "idle"})
-        for saved in (None, "later", "disabled"):
+        for saved in ({"state": "ok", "choice": "contribute", "choice_revision": None},
+                      {"state": "ok", "choice": "disabled", "choice_revision": "a" * 32}):
             result = support.effective_reporting(policy, saved)
             self.assertFalse(result["enabled"])
-            self.assertTrue(result["policy_enabled"])
-            self.assertEqual(result["status"], "consent_mismatch")
-        self.assertIs(support.effective_reporting(policy, "enabled"), policy)
+        ready = {"state": "ok", "choice": "contribute", "choice_revision": "a" * 32}
+        self.assertTrue(support.effective_reporting(policy, ready)["enabled"])

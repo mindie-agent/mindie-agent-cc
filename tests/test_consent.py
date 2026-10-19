@@ -97,7 +97,6 @@ class ConsentTests(unittest.TestCase):
         import consent
 
         consent.record_choice("disabled")
-        consent.record_reporting("enabled")
         base = Path(os.environ["MINDIE_CC_CONFIG"])
         authority = consent.consent_path()
         before = authority.read_bytes()
@@ -107,7 +106,7 @@ class ConsentTests(unittest.TestCase):
         os.environ["MINDIE_CC_CONFIG"] = str(fixed)
         assert consent.consent_path() == authority
         assert consent.load()["choice"] == "disabled"
-        assert consent.load()["reporting"] == "enabled"
+        assert consent.load()["choice_revision"]
         assert authority.read_bytes() == before
 
 

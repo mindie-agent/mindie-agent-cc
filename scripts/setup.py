@@ -164,10 +164,16 @@ def prepare_binding(source, config=None, *, root=None, domain="vllm-ascend",
             value = dict(adapter, python=sys.executable, runtime_scripts=str(HERE),
                          adapter_config=str(adapter_file), engine_config=str(engine_file),
                          product_validation=validation)
+            from diagnostic_support import reporting_config_path
+            value["diagnostics_context"] = {
+                "MINDIE_DIAGNOSTICS_CONFIG": str(reporting_config_path(config)),
+            }
             if claude_config_dir:
                 value["claude_config_dir"] = str(Path(claude_config_dir).expanduser().resolve())
             engine["service_launch_context"] = service_launch_context(adapter_file, value)
             value["claude_config_dir"] = engine["service_launch_context"]["paths"]["CLAUDE_CONFIG_DIR"]
+            value["diagnostics_context"]["MINDIE_DIAGNOSTICS_ROOT"] = (
+                engine["service_launch_context"]["paths"]["MINDIE_DIAGNOSTICS_ROOT"])
             require_engine_support(engine, source=source)
             if selected is None:
                 prepare_store(sys.executable, HERE, engine)
@@ -191,7 +197,15 @@ def prepare_binding(source, config=None, *, root=None, domain="vllm-ascend",
                     write_community(Path(current["community_config"]), community, python=sys.executable)
         status = "ready" if current == value else "prepared"
     os.environ["MINDIE_CC_CONFIG"] = str(adapter_file)
-    return dict(config=str(adapter_file), base_config=str(config), status=status)
+    result = dict(config=str(adapter_file), base_config=str(config), status=status)
+    if community is not None:
+        from consent import record_choice
+        from diagnostic_support import activate_reporting
+        record_choice("contribute", config)
+        result["reporting"] = activate_reporting(config)
+        if result["reporting"]["status"] != "running":
+            result["status"] = "degraded"
+    return result
 
 
 def activate_binding(candidate_file, *, observation_seconds=30.0):
@@ -300,9 +314,14 @@ def _publish_bytes(path, value):
 
 def publish_entry(path, adapter_file):
     """Write once: the native version in the Hook binds this exact runtime."""
+    adapter = _read(adapter_file)
+    diagnostics = dict(adapter.get("diagnostics_context", {}))
+    diagnostics.setdefault("MINDIE_DIAGNOSTICS_CONFIG",
+                           str(Path(adapter["base_config"]).parent / "diagnostics.json"))
     value = (
         "import os, sys\n"
         f"os.environ['MINDIE_CC_CONFIG'] = {str(adapter_file)!r}\n"
+        f"os.environ.update({diagnostics!r})\n"
         "os.environ.pop('PYTHONPATH', None)\n"
         f"sys.path.insert(0, {str(HERE)!r})\n"
         "from bounded import exec_or_wait\n"
@@ -341,6 +360,8 @@ def main(argv=None):
         community=community_settings(args, parser),
     )
     print(json.dumps(result, default=str))
+    if result["status"] == "degraded":
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

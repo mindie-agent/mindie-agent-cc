@@ -10,8 +10,8 @@ and diagnostic retention pruning in an owned maintenance worker.
 - Runs independently of plugin release updates.
 
 [Timeouts & Locks]
-- Feed work has 20 seconds and diagnostics 5 seconds; the launcher reserves
-  another 15 seconds for both process-tree drains and result publication.
+- Feed work has 20 seconds, reporter activation 90 seconds, and retention
+  5 seconds; the launcher reserves 15 seconds for drains and result publication.
 
 [Side-Effect Policy]
 - Refreshes local knowledge feed snapshots and prunes expired diagnostics.
@@ -27,7 +27,8 @@ from bounded import run
 # The outer launcher also reserves both owned-process drains and result I/O.
 FEED_BUDGET = 20.0
 REPORTING_BUDGET = 5.0
-TOTAL_BUDGET = FEED_BUDGET + REPORTING_BUDGET + 15.0
+ACTIVATION_BUDGET = 90.0
+TOTAL_BUDGET = FEED_BUDGET + ACTIVATION_BUDGET + REPORTING_BUDGET + 15.0
 
 _FEED_OK = frozenset({"synced", "unchanged"})
 _FEED_PENDING = frozenset({"busy", "deferred"})
@@ -154,7 +155,7 @@ def session_start(event=None):
     from diagnostic_support import reporting_config_path
     from install_state import atomic_write
     from paths import state_dir
-    from paths import engine_config_path
+    from paths import engine_config_path, base_config_path
 
     capture = {"status": "inert"}
     if event is not None:
@@ -167,11 +168,20 @@ def session_start(event=None):
                     exception=exc, reportable=False)
             capture = {"status": "unavailable", "error_type": type(exc).__name__}
     feed = sync_public_feed(sys.executable, engine_config_path(), timeout=FEED_BUDGET)
+    try:
+        raw = run(
+            [sys.executable, str(Path(__file__).with_name("diagnostic_support.py")),
+             "activate", "--config", str(base_config_path())],
+            timeout=ACTIVATION_BUDGET, check=False, allow_service=True,
+        )
+        activation = json.loads(raw)
+    except Exception as exc:
+        activation = dict(status="unavailable", error_type=type(exc).__name__)
     process = {}
     try:
         raw = run(
             [sys.executable, "-m", "mindie_diagnostics.cli", "reporting", "maintain",
-             "--update-running", "--config", str(reporting_config_path())],
+             "--config", str(reporting_config_path())],
             check=False, receipt=process, timeout=REPORTING_BUDGET,
         )
         reporting = json.loads(raw)
@@ -183,10 +193,11 @@ def session_start(event=None):
         reporting = dict(status="unavailable", error_type=type(exc).__name__, process=process)
     ready = (feed["result"] == "ok" and not feed.get("error")
              and reporting.get("status") == "ok"
+             and activation.get("status") in {"running", "disabled", "needs_choice"}
              and not reporting.get("operation_failed")
              and capture["status"] != "unavailable")
     result = dict(status="ready" if ready else "incomplete", feed=feed,
-                  diagnostics=reporting, capture=capture)
+                  diagnostics=reporting, reporting=activation, capture=capture)
     try:
         atomic_write(state_dir() / "session-maintenance.json", result)
     except OSError as exc:

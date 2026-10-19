@@ -53,7 +53,9 @@ def service_launch_context(adapter_file: Path, adapter: dict) -> dict:
     paths = {
         CONFIG_ENV: str(adapter_file.expanduser().absolute()),
         "CLAUDE_CONFIG_DIR": str(profile.expanduser().absolute()),
-        "MINDIE_DIAGNOSTICS_CONFIG": str(reporting_config_path()),
+        "MINDIE_DIAGNOSTICS_CONFIG": str(
+            adapter.get("diagnostics_context", {}).get("MINDIE_DIAGNOSTICS_CONFIG")
+            or reporting_config_path(adapter["base_config"])),
         "MINDIE_DIAGNOSTICS_ROOT": str(default_root().expanduser().absolute()),
     }
     explicit = os.environ.get("MINDIE_CC_BIN")

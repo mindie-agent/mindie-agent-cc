@@ -40,7 +40,6 @@ def capture_fixture(root):
     write_json(Path(binding["adapter_config"]), binding)
     atomic_write(canonical, binding)
     consent_store.record_choice(root / "mindie-consent.json", "contribute")
-    consent_store.record_reporting(root / "mindie-consent.json", "disabled")
     prepare_schema(binding["engine_config"])
     old_retirement = retire_service(binding["engine_config"])
     session = "658e5378-405c-4cd5-a115-55aa9cff771f"

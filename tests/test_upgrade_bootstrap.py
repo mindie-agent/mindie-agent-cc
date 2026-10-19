@@ -21,11 +21,19 @@ def test_release_entry_survives_cache_removal_and_ignores_ambient_modules(tmp_pa
     shutil.copyfile(SCRIPTS / "bounded.py", installed / "bounded.py")
     (installed / "mindie_launch.py").write_text(
         "import json,os,sys;print(json.dumps({'config':os.environ['MINDIE_CC_CONFIG'],"
-        "'args':sys.argv[1:],'pythonpath':os.environ.get('PYTHONPATH')}))")
+        "'args':sys.argv[1:],'pythonpath':os.environ.get('PYTHONPATH'),"
+        "'diagnostics':os.environ['MINDIE_DIAGNOSTICS_CONFIG']}))")
     entry = tmp_path / "plugin-data/releases/0.0.1/entry.py"
     config = tmp_path / "immutable-adapter.json"
+    policy = tmp_path / "profile" / "diagnostics.json"
+    config.write_text(json.dumps({
+        "base_config": str(tmp_path / "profile" / "cc.json"),
+        "diagnostics_context": {"MINDIE_DIAGNOSTICS_CONFIG": str(policy)},
+    }))
     with patch.object(setup, "HERE", installed):
         setup.publish_entry(entry, config)
+    # The entry keeps the known policy even when adapter bytes later break.
+    config.write_text("{broken")
     cache = tmp_path / "native-cache"
     cache.mkdir()
     shutil.rmtree(cache)
@@ -34,11 +42,14 @@ def test_release_entry_survives_cache_removal_and_ignores_ambient_modules(tmp_pa
         result = subprocess.run([sys.executable, str(entry), *role], env=env,
                                 capture_output=True, text=True, check=True)
         value = json.loads(result.stdout)
-        assert value == {"config": str(config), "args": list(role), "pythonpath": None}
+        assert value == {"config": str(config), "args": list(role), "pythonpath": None,
+                         "diagnostics": str(policy)}
 
 
 def test_entry_publication_is_complete_and_same_version_cannot_change_binding(tmp_path):
     entry = tmp_path / "entry.py"
+    for name in ("first.json", "second.json"):
+        (tmp_path / name).write_text(json.dumps({"base_config": str(tmp_path / name)}))
     setup.publish_entry(entry, tmp_path / "first.json")
     before = entry.read_bytes()
     setup.publish_entry(entry, tmp_path / "first.json")

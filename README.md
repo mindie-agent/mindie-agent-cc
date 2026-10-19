@@ -66,6 +66,8 @@ MindIE Agent 采用**「领域知识与 Skill 手动按需触发 + 远端开发�
 > /mindie-agent 帮我结合知识库和远端 NPU 容器完成当前 vllm-ascend 自定义算子的编译与精度对齐验证，并跑通对应的单测。
 > ```
 > **会发生什么**：社区共享**默认关闭**。一旦你在首次配置时开启了社区贡献，后续每次会话结束（`Stop`）时，插件都会在后台静默提取公开可见对话，通过本地确定性规则与 Gitleaks 完成脱敏，生成检索索引并自动整理为开源知识 PR，全程无需额外操作。
+
+贡献使用一个开关，同时控制配置范围内的知识 PR 与脱敏产品故障 Issue。配置过程会实际启动并核验 reporter；只有服务就绪才能报告上报已准备完成。关闭贡献也阻止待发送故障。旧配置未记录统一授权版本时，保留原选择，显示 `needs_choice` 并等待明确重新选择。
 > - 关于共享范围、本地脱敏边界与公开 Git 历史的详细说明，请参阅 **[用户须知](skills/mindie-agent/references/user-notice.md)**。
 > - 如需在本地快速搭建 `vllm` + `vllm-ascend` 多任务 Git Worktree 协同目录，可参考 **[工作区配置指南](skills/mindie-agent/references/workspace-setup.md)** 按需初始化 [vllm-ascend-workspace](https://github.com/mindie-agent/vllm-ascend-workspace.git)。
 

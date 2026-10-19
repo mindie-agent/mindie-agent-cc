@@ -138,6 +138,10 @@ def _child_env(current: dict) -> dict:
     env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
     env["PYTHONIOENCODING"] = "utf-8"
     env[CONFIG_ENV] = current["adapter_config"]
+    adapter = json.loads(Path(current["adapter_config"]).read_text(encoding="utf-8"))
+    env.update(adapter.get("diagnostics_context", {}))
+    env.setdefault("MINDIE_DIAGNOSTICS_CONFIG",
+                   str(Path(adapter["base_config"]).parent / "diagnostics.json"))
     return env
 
 

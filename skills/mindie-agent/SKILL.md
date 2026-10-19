@@ -16,8 +16,17 @@ Users interact with MindIE Agent through a single `/mindie-agent` entry (while `
 
 Do **not** load all reference files during ordinary troubleshooting. Read the relevant reference file **only** when the current turn requires it:
 
-- **First-time onboarding, incomplete contribution configuration (`contribute`), fault reporting setup (`reporting-enable` / `reporting-disable` / `reporting-later`), or capture receipts**: read [Setup & Operations](references/setup-and-operations.md).
+- **First-time onboarding, incomplete contribution configuration (`contribute`), the unified contribution/reporting switch, or capture receipts**: read [Setup & Operations](references/setup-and-operations.md).
 - **Sharing scope, local redaction boundaries, or public Git history questions**: read [用户须知](references/user-notice.md).
 - **Setting up a local `vllm` + `vllm-ascend` multi-task Git worktree workspace**: read [Workspace Setup](references/workspace-setup.md).
 
 $ARGUMENTS
+
+Contribution enables both scoped knowledge PRs and sanitized product fault Issues.
+When the native Hook returns `reporting.run_outside_hook=true`, execute its
+`reporting.command_line` now, outside the Hook, in the same setup flow. Use a
+90-second outer timeout. This is part of the user's existing contribution
+request; do not ask for another confirmation or leave the command for the user.
+Only report the reporter ready when the returned status is `running`. Report
+`degraded`, authentication errors, timeouts, and `needs_choice` directly; do not
+retry an uncertain external write. Local configuration alone is not delivery.

@@ -40,7 +40,9 @@ def preparing(tmp_path):
         stack.enter_context(patch.object(setup, "service_launch_context",
                                         side_effect=lambda path, *args, **kwargs: {
                                             "paths": {"MINDIE_CC_CONFIG": str(path),
-                                                      "CLAUDE_CONFIG_DIR": str(tmp_path / "claude")},
+                                                      "CLAUDE_CONFIG_DIR": str(tmp_path / "claude"),
+                                                      "MINDIE_DIAGNOSTICS_CONFIG": str(config.parent / "diagnostics.json"),
+                                                      "MINDIE_DIAGNOSTICS_ROOT": str(tmp_path / "diagnostics")},
                                             "environment": [],
                                         }))
         yield dict(config=config, root=root, prepare=prepare, community=community)
@@ -296,7 +298,6 @@ def test_default_coinstallation_preserves_shared_authority_bytes(tmp_path):
     consent = tmp_path / "mindie-consent.json"
     community = tmp_path / "mindie-community.json"
     consent_store.record_choice(consent, "contribute")
-    consent_store.record_reporting(consent, "disabled")
     with CommunityWriteContext(community) as context:
         context.configure(community, {
             "enabled": True,

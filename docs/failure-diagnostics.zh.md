@@ -2,7 +2,7 @@
 
 <b>中文</b> | <a href="failure-diagnostics.md">English</a> · <a href="README.md">返回文档索引</a>
 
-遵循 [MindIE Agent 工程设计原则](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.md)中“工具可观察、可定位，禁止隐藏错误”的要求，`mindie-agent-cc` 提供纯只读的状态诊断、确定性的本地子进程取消清理，以及独立授权的脱敏产品故障上报机制。
+遵循 [MindIE Agent 工程设计原则](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.md)中“工具可观察、可定位，禁止隐藏错误”的要求，`mindie-agent-cc` 提供纯只读的状态诊断、确定性的本地子进程取消清理，以及与知识贡献共用授权的脱敏产品故障上报机制。
 
 ---
 
@@ -35,7 +35,7 @@
 ## 4. 可选的产品故障自动上报（`/mindie-agent:reporting-*`）
 
 `mindie-agent-cc` 集成了共享的 `mindie-diagnostics` 故障上报组件：
-- **独立显式授权**：产品故障上报默认关闭，且与“社区知识贡献”开关完全独立。执行 `/mindie-agent:reporting-enable` 会先保存你的偏好，并返回一条一次性终端准备命令。
+- **一个贡献开关**：明确开启贡献同时授权范围内知识 PR 与脱敏故障 Issue。Hook 返回待启动状态，由 Agent 在同次配置中于 Hook 外执行启动并检查真实结果；旧 reporting 开关命令只引导到完整贡献流程，`/mindie-agent:reporting-status` 保持只读。
 - **极简脱敏载荷**：仅针对经确认的产品自身故障生成记录；开启上报后，后台 Worker 会在不调用大模型、不打扰日常任务的情况下提交脱敏 GitHub Issue。公开载荷**仅包含**静态产品阶段、错误类型与已安装代码版本，绝不包含任务对话、命令、路径、环境变量或原始异常栈。
 - **指纹去重与对账**：相同故障共享同一指纹；若 Issue 提交结果因网络中断处于不确定状态，会在后续动作前先完成远端对账，绝不盲目重复建单。
 

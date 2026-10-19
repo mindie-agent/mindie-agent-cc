@@ -1,8 +1,11 @@
 ---
 name: reporting-enable
-description: reporting-enable for independent product failure reporting.
+description: Guide the legacy reporting command to the unified contribution switch.
 disable-model-invocation: true
 ---
 
-Present the reporting result from the UserPromptExpansion Hook. If the native result returns run_outside_hook=true, execute the returned `command_line` once outside the Hook (`command` is the same argument vector). Report readiness from the result; on failure report degraded and do not retry. Knowledge contribution is a separate choice.
-$ARGUMENTS
+Present the native Hook guidance. Product fault reporting and knowledge sharing
+use one contribution choice. This compatibility command changes no authorization.
+Use the existing MindIE contribution flow to configure destination and scope;
+never independently enable or disable a reporter. Read [the user notice](../mindie-agent/references/user-notice.md)
+when explaining the new unified choice. Do not infer consent from legacy reporting preferences.
