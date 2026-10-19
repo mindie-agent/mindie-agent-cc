@@ -30,11 +30,12 @@ Only report the reporter ready when the returned status is `running`. Report
 retry an uncertain external write. Local configuration alone is not delivery.
 
 There is no automatic yes. Reuse the installation's valid saved choice without
-another prompt. Resolve legacy `needs_choice` once at the `/mindie-agent` entry
-using the user's explicit contribution choice; a contribution request already
+another prompt. Only when the entry returns `needs_choice` for legacy
+knowledge-only `contribute`, resolve it once using the user's explicit choice; a contribution request already
 made in this setup flow needs no further confirmation. Startup does not grant
-missing permission, and ordinary tasks do not ask again. Remote-dev works
-without this binding.
+missing permission. Saved `disabled`, `read-only` and `later` choices remain
+unchanged without prompting, and ordinary tasks do not ask again. Remote-dev
+works without this binding.
 
 During installation or first-use setup, present the [user notice](../mindie-agent/references/user-notice.md),
 then follow [optional workspace setup](../mindie-agent/references/workspace-setup.md).

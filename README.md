@@ -66,7 +66,7 @@ MindIE Agent 采用**「领域知识与 Skill 手动按需触发 + 远端开发�
 > /mindie-agent 帮我结合知识库和远端 NPU 容器完成当前 vllm-ascend 自定义算子的编译与精度对齐验证，并跑通对应的单测。
 > ```
 > **会发生什么**：社区共享**默认关闭**。当你显式开启社区贡献后，每次会话结束（`Stop`）时，插件会在后台提取公开可见对话，通过本地确定性规则与 Gitleaks 完成脱敏，生成检索索引并自动整理为开源知识 PR，日常研发无需额外操作。
-> - **统一贡献开关（适配器配置文件同目录的 `mindie-consent.json`）**：社区知识贡献与自动工具故障上报共用同一个持久化开关。显式开启（`contribute`）会配置知识共享并启动原生后台 reporter；关闭（`disabled`）会同时停止两条路径的后续外发，且已有的 `disabled` / `later` / `read-only` 状态在升级后保持关闭。有效的已保存选择直接复用，不重复询问；缺少统一授权版本（`choice_revision`）的旧记录不会自动获得故障上传权限，`needs_choice` 只在 `/mindie-agent` 入口通过一次明确的贡献选择解决，不分开询问知识和故障授权，也不逐次任务确认。系统严格区分**本地授权配置已写入**、**后台 reporter 进程运行中**与**外部 GitHub Issue/PR 已实际创建**三种状态。
+> - **统一贡献开关（适配器配置文件同目录的 `mindie-consent.json`）**：社区知识贡献与自动工具故障上报共用同一个持久化开关。显式开启（`contribute`）会配置知识共享并启动原生后台 reporter；关闭（`disabled`）会同时停止两条路径的后续外发，且已有的 `disabled` / `later` / `read-only` 状态在升级后保持关闭。有效的已保存选择直接复用，不重复询问；仅当入口对旧版仅知识 `contribute` 记录返回 `needs_choice` 时，才在 `/mindie-agent` 中处理一次明确选择，不分开询问知识和故障授权，也不逐次任务确认；旧 `disabled`、`read-only`、`later` 选择直接保留、不提示。系统严格区分**本地授权配置已写入**、**后台 reporter 进程运行中**与**外部 GitHub Issue/PR 已实际创建**三种状态。
 > - 关于共享范围、本地脱敏边界与公开 Git 历史的详细说明，请参阅 **[用户须知](skills/mindie-agent/references/user-notice.md)**。
 > - 如需在本地快速搭建 `vllm` + `vllm-ascend` 多任务 Git Worktree 协同目录，可参考 **[工作区配置指南](skills/mindie-agent/references/workspace-setup.md)** 按需初始化 [vllm-ascend-workspace](https://github.com/mindie-agent/vllm-ascend-workspace.git)。
 
@@ -102,13 +102,8 @@ MindIE Agent 采用**「领域知识与 Skill 手动按需触发 + 远端开发�
    - 确认 `claude --version` 为当前发行版 `v0.0.2` 声明支持的精确版本：`2.1.269` 或 `2.1.299`（定义于 [`harness-compatibility.json`](harness-compatibility.json)）。
    - 若在 **Linux 或 Windows WSL** 下使用后台知识服务，请额外执行 `systemctl --user show --property=Version` 确认 `systemd >= 254` 且可访问（WSL 内须使用 Linux 原生 `claude`、`git`、`uv` 与 `gh`）。
 
-2. **顺带完成主仓 `mindie-agent` 的 Star 与 Fork（收敛 Fork 范围，知识库按需在开启贡献时再 Fork）**：
-   鉴于 `@mindie-agent` 组织下仓库较多，**安装阶段仅对统一入口仓 `mindie-agent/mindie-agent` 执行 Star 与远端 Fork**（不逐一 Fork 各插件仓与知识库）：
-   ```sh
-   gh api -X PUT /user/starred/mindie-agent/mindie-agent
-   gh repo fork mindie-agent/mindie-agent --clone=false --remote=false
-   ```
-   > 说明：`--clone=false --remote=false` 仅在 GitHub 远端创建/同步派生库，不占用本地磁盘、不改写当前目录 Git Remote，且完全幂等。当用户后续通过 `/mindie-agent` 明确开启面向目标公开知识库（如 `mindie-agent/knowledge-vllm-ascend`）的社区经验贡献时，Agent 会再按需对该目标知识库执行 Star 与远端 Fork（`gh repo fork <owner/repo> --clone=false --remote=false`）并绑定 `--fork $GH_USER/<repo>`。
+2. **可选支持与贡献准备**：
+   安装不需要 Star 或 Fork 主仓；是否支持项目由用户决定。只有用户明确开启知识贡献后，Agent 才按需创建目标知识仓的 Fork，并将其绑定到贡献配置。
 
 3. **添加插件源、安装并完成无模型冷启动初始化**：
    ```sh
@@ -124,7 +119,7 @@ MindIE Agent 采用**「领域知识与 Skill 手动按需触发 + 远端开发�
    claude mcp list
    ```
    - 确认 `claude plugin list --json` 中包含 `mindie-agent@mindie-agent-cc`（版本 `0.0.2`，状态已启用）。
-   - 确认 `claude mcp list` 中 `mindie-knowledge` 与 `remote-dev` 两个服务均显示 `Connected`。验证通过后，向用户汇报已验证的 GitHub 账号（`$GH_USER`）、`mindie-agent/mindie-agent` Star/Fork 状态以及插件就绪状态。
+   - 确认 `claude mcp list` 中 `mindie-knowledge` 与 `remote-dev` 两个服务均显示 `Connected`。验证通过后，向用户汇报已验证的 GitHub 账号（`$GH_USER`）以及插件就绪状态。
 
 </details>
 
@@ -134,8 +129,6 @@ MindIE Agent 采用**「领域知识与 Skill 手动按需触发 + 远端开发�
 
 ```sh
 gh auth status && gh auth setup-git && \
-gh api -X PUT /user/starred/mindie-agent/mindie-agent && \
-gh repo fork mindie-agent/mindie-agent --clone=false --remote=false && \
 claude plugin marketplace add "https://github.com/mindie-agent/mindie-agent-cc.git#v0.0.2" && \
 claude plugin install mindie-agent@mindie-agent-cc --scope user && \
 claude --init-only && \
