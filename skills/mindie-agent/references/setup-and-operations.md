@@ -26,16 +26,11 @@ Load this reference **only** when the user is performing first-time setup, confi
 During installation or first-use setup:
 1. Present [用户须知](user-notice.md) (which explains visible-message sharing, redaction limits, model-provider processing, and public Git history).
 2. Follow [optional workspace setup](workspace-setup.md): recommend the multi-worktree workspace (`vllm` + `vllm-ascend`), ask whether and where to create it, and after creation ask whether to initialize it. Reuse prior answers and offer this only during setup rather than ordinary task execution.
-3. Explain the single contribution choice: it authorizes scoped knowledge PRs and sanitized product fault Issues. Legacy choices without a unified-consent revision require a new explicit choice; startup never upgrades consent.
-
-Contribution enables both scoped knowledge PRs and sanitized product fault Issues.
-When the native Hook returns `reporting.run_outside_hook=true`, execute its
-`reporting.command_line` now, outside the Hook, in the same setup flow. Use a
-90-second outer timeout. This is part of the user's existing contribution
-request; do not ask for another confirmation or leave the command for the user.
-Only report the reporter ready when the returned status is `running`. Report
-`degraded`, authentication errors, timeouts, and `needs_choice` directly; do not
-retry an uncertain external write. Local configuration alone is not delivery.
+3. **Unified Contribution & Fault-Reporting Switch**:
+   - Community knowledge sharing and automatic tool fault reporting share a single persistent choice in `<profile>/.mindie/mindie-consent.json`, authorizing both scoped knowledge PRs and sanitized product fault Issues.
+   - Legacy knowledge-only `contribute` records lacking the unified consent revision (`choice_revision`) surface `needs_choice` on upgrade and never gain fault-upload permission until explicitly re-confirmed once.
+   - When the native Hook returns `reporting.run_outside_hook=true`, execute `reporting.command_line` immediately outside the Hook in the same setup flow (using a 90-second outer timeout) as part of the user's contribution request—do not ask for another confirmation or leave the command for the user.
+   - Keep three states strictly separate: (1) local consent configuration written, (2) background reporter worker running (`reporting.status == "running"`), and (3) external GitHub Issue/PR created. Report `degraded`, authentication errors, timeouts, and `needs_choice` directly, and never retry an uncertain external write.
 
 ## 3. Error Handling & Background Worker Rules
 

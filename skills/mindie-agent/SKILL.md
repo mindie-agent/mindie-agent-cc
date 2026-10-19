@@ -12,6 +12,8 @@ Users interact with MindIE Agent through a single `/mindie-agent` entry (while `
 2. **Status & Hook Context**: When `/mindie-agent` is invoked explicitly for status or setup, present the MindIE status from the `UserPromptExpansion` hook context. Never invent a session ID, repository, account, or project scope.
 3. **Automatic Experience Loop by Default**: Once community contribution is configured and enabled for the project scope, eligible native `Stop` events are captured, redacted, and packaged automatically in the background—users never need to ask to save experience at the end of a session.
 
+4. **Unified Contribution & Fault-Reporting Switch**: Community knowledge sharing and sanitized product fault reporting share a single persistent choice in `<profile>/.mindie/mindie-consent.json`. When the native Hook returns `reporting.run_outside_hook=true`, execute its `reporting.command_line` immediately outside the Hook in the same setup flow (using a 90-second outer timeout) without asking for another confirmation or leaving the command for the user. Legacy knowledge-only `contribute` records lacking the unified consent revision (`choice_revision`) surface `needs_choice` on upgrade until explicitly re-confirmed once. Keep three states strictly separate: (1) local consent configuration saved, (2) background reporter worker running (`reporting.status == "running"`), and (3) external GitHub Issue/PR created. Report `degraded`, authentication errors, timeouts, and `needs_choice` directly, and never retry an uncertain external write.
+
 ## Progressive Context Disclosure (Read Only on Demand)
 
 Do **not** load all reference files during ordinary troubleshooting. Read the relevant reference file **only** when the current turn requires it:
@@ -21,12 +23,3 @@ Do **not** load all reference files during ordinary troubleshooting. Read the re
 - **Setting up a local `vllm` + `vllm-ascend` multi-task Git worktree workspace**: read [Workspace Setup](references/workspace-setup.md).
 
 $ARGUMENTS
-
-Contribution enables both scoped knowledge PRs and sanitized product fault Issues.
-When the native Hook returns `reporting.run_outside_hook=true`, execute its
-`reporting.command_line` now, outside the Hook, in the same setup flow. Use a
-90-second outer timeout. This is part of the user's existing contribution
-request; do not ask for another confirmation or leave the command for the user.
-Only report the reporter ready when the returned status is `running`. Report
-`degraded`, authentication errors, timeouts, and `needs_choice` directly; do not
-retry an uncertain external write. Local configuration alone is not delivery.

@@ -8,7 +8,7 @@ This document describes the everyday usage invariants, cross-platform atomic con
 
 ## 1. Everyday Usage & Persistent User Preferences
 
-- **Set Once, Persist Everywhere**: Your community contribution choice, approved project scope, and independent fault-reporting preference persist across sessions, `--fork-session` branches, restarts, plugin updates, and transient failures. Ordinary tasks require no per-task activation or renewal step.
+- **Set Once, Persist Everywhere**: Community knowledge sharing and automatic tool fault reporting share a single unified contribution switch in `<profile>/.mindie/mindie-consent.json`. Your unified contribution choice and approved project scope persist across sessions, `--fork-session` branches, restarts, plugin updates, and transient failures. Legacy knowledge-only `contribute` records lacking the unified consent revision (`choice_revision`) do not automatically gain fault-upload permission on upgrade—they surface `needs_choice` until explicitly re-confirmed once.
 - **Zero Overhead When Sharing Is Off**: When community sharing is disabled, the `Stop` hook performs no transcript collection or organizer model calls, while domain knowledge search (`mindie-knowledge`) and remote Ascend execution (`remote-dev`) remain fully available.
 - **Explicit Fault Visibility**: Transient network or service issues are recovered using persisted worker state, whereas a corrupted configuration file is reported explicitly as a diagnostic error and never triggers a fresh onboarding prompt.
 
@@ -21,7 +21,7 @@ This document describes the everyday usage invariants, cross-platform atomic con
 
 ---
 
-## 3. Reproducible Component Testing
+## 3. Reproducible Component Testing & Benchmarks
 
 Component and contract tests use committed parser fixtures and exact Git commits pinned in [`uv.lock`](../uv.lock). They never probe or mutate your production installation.
 
@@ -37,10 +37,11 @@ uv run --locked --no-editable --group test python -m pytest tests -m "not live_n
 ### How the Local Candidate Identity Test Works
 - `MINDIE_TEST_KNOWLEDGE_CHECKOUT` must point to an absolute local Git checkout whose `HEAD` matches the `mindie-knowledge` commit in `uv.lock`.
 - The test verifies that commit using local `git` only (without fetching from GitHub or scanning parent directories), creates an isolated virtual environment reusing the locked wheels, and performs a single offline `pip install --no-deps --no-build-isolation` from `git+file://` to verify `direct_url.json` provenance.
+- **Per-Release CPU Microbenchmark**: Each `0.0.2` release runs [`benchmarks/release.json`](../benchmarks/release.json) ([`benchmarks/release.py`](../benchmarks/release.py)) to measure `public-transcript` extraction and sanitization latency in `us/op`, publishing `benchmark-results.json`, `benchmark-results.md`, `benchmark-SHA256SUMS`, and `SHA256SUMS` as a reproducible CPU baseline.
 
 ---
 
 ## 4. Integration & Release Ordering
 
 - **Paired Release Order**: When updating shared runtime dependencies, publish component Releases first (`mindie-knowledge`, `remote-dev`, `mindie-diagnostics`) before updating and releasing the native plugin adapters (`mindie-agent-cc`, `mindie-agent-codex`, `mindie-agent-kimi`).
-- **Clear Acceptance Boundaries**: Automated CI verifies locked dependencies, parser fixtures, and cross-platform filesystem contracts; live host acceptance and remote Ascend NPU verification are recorded separately.
+- **Clear Acceptance Boundaries**: Automated CI and CPU microbenchmarks verify locked dependencies, parser fixtures, and cross-platform filesystem contracts; live host acceptance and remote Ascend NPU verification are recorded separately.
