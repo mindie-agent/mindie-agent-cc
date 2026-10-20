@@ -225,15 +225,15 @@ class DomainRoutingEntryTests(unittest.TestCase):
 
         default_hit = self._query(100)
         self.assertEqual(default_hit["revision"], 1)
-        self.assertTrue(default_hit["ref"].startswith(
-            f"mindie://{DEFAULT_DOMAIN}/units/{UNIT_ID}@"))
+        self.assertEqual(default_hit["ref"],
+                         f"mindie://{DEFAULT_DOMAIN}/units/{UNIT_ID}@1")
+        self.assertEqual(default_hit["feedback_ref"], default_hit["ref"])
 
         target_hit = self._query(101, domain=TARGET_DOMAIN)
         self.assertEqual(target_hit["revision"], 9)
-        self.assertEqual(target_hit["content_digest"],
-                         target_unit.metadata["content_digest"])
-        self.assertTrue(target_hit["ref"].startswith(
-            f"mindie://{TARGET_DOMAIN}/units/{UNIT_ID}@"))
+        self.assertEqual(target_hit["ref"],
+                         f"mindie://{TARGET_DOMAIN}/units/{UNIT_ID}@9")
+        self.assertEqual(target_hit["feedback_ref"], target_hit["ref"])
         self.assertNotEqual(default_hit["ref"], target_hit["ref"])
 
         default_read = self._call(
@@ -309,7 +309,7 @@ class DomainRoutingEntryTests(unittest.TestCase):
         self.assertIn("unknown domain", unknown["content"][0]["text"])
 
         missing_uri = self._call(111, "knowledge_explain", {
-            "ref": f"mindie://older-operators/units/{UNIT_ID}@{'a' * 64}",
+            "ref": f"mindie://older-operators/units/{UNIT_ID}@1",
         })
         self.assertTrue(missing_uri["isError"])
         self.assertIn("unknown domain", missing_uri["content"][0]["text"])
@@ -319,7 +319,7 @@ class DomainRoutingEntryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "conflicts"):
             select_engine(
                 domain=TARGET_DOMAIN,
-                ref=f"mindie://{DEFAULT_DOMAIN}/units/{UNIT_ID}@{'b' * 64}",
+                ref=f"mindie://{DEFAULT_DOMAIN}/units/{UNIT_ID}@1",
             )
 
     def test_missing_target_distill_lease_fails_before_service_or_model(self):
@@ -348,8 +348,8 @@ class DomainRoutingEntryTests(unittest.TestCase):
         from knowledge_service import select_engine
 
         real_import = builtins.__import__
-        default_ref = f"mindie://{DEFAULT_DOMAIN}/units/{UNIT_ID}@{'c' * 64}"
-        target_ref = f"mindie://{TARGET_DOMAIN}/units/{UNIT_ID}@{'d' * 64}"
+        default_ref = f"mindie://{DEFAULT_DOMAIN}/units/{UNIT_ID}@1"
+        target_ref = f"mindie://{TARGET_DOMAIN}/units/{UNIT_ID}@9"
 
         def missing_helper(name, *args, **kwargs):
             if name == "mindie_knowledge.loop.domain_routes":

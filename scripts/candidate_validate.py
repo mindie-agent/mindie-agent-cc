@@ -30,7 +30,9 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from product_contract import identity, native_version, package_files, read_json, validate_receipt
+from product_contract import (
+    identity, native_version, package_files, read_json, validate_receipt,
+)
 from runtime_probe import build_probe_script
 
 
@@ -229,8 +231,7 @@ def publication_contract(publication):
             raise CheckFailure("publication_fetch", "revision_mismatch")
         try:
             return read_git_contract(
-                directory, observed, publication["domain"],
-                expected_sha256=publication["contract_sha256"], env=env,
+                directory, observed, publication["domain"], env=env,
             )
         except Exception as exc:
             code = "contract_mismatch" if getattr(exc, "code", None) == "contract_mismatch" else "read_failed"
@@ -249,7 +250,8 @@ def validate(source, expected, verified_receipt=None):
         raise CheckFailure("adapter", "release_version_mismatch")
     checked("runtime_api", "api_incompatible", lambda: runtime_check(Path(__file__).resolve().parent))
     if verified_receipt is None:
-        checked("publication_contract", "read_failed", lambda: publication_contract(actual["publication"]))
+        checked("publication_contract", "read_failed",
+                lambda: publication_contract(actual["publication"]))
     else:
         checked("receipt", "receipt_mismatch", lambda: validate_receipt(json.dumps(verified_receipt), actual))
     if checked("source", "source_invalid", lambda: identity(source, actual["candidate_revision"])) != actual:

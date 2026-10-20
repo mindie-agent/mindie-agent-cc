@@ -40,7 +40,7 @@ from install_state import (
 )
 from maintenance import sync_public_feed
 from paths import config_path as default_config_path, service_launch_context
-from product_contract import identity
+from product_contract import identity, official_feeds, publication_feed
 
 def community_settings(args, parser):
     selected = any(
@@ -166,9 +166,9 @@ def prepare_binding(source, config=None, *, root=None, domain="vllm-ascend",
                           **prepare(sys.executable, HERE),
                           community_config=adapter["community_config"],
                           product_validation=validation)
-            if selected is None and not no_public_feed and domain == validation["publication"]["domain"]:
-                from product_contract import publication_feed
-                engine["feeds"] = [publication_feed(validation)]
+            feed = publication_feed(validation, domain=domain)
+            if selected is None and feed is not None and not no_public_feed:
+                engine["feeds"] = [feed]
             value = dict(adapter, python=sys.executable, runtime_scripts=str(HERE),
                          adapter_config=str(adapter_file), engine_config=str(engine_file),
                          product_validation=validation)
@@ -192,7 +192,8 @@ def prepare_binding(source, config=None, *, root=None, domain="vllm-ascend",
                 sys.executable, value, engine, config_directory=str(binding / 'domains'),
                 authority_directory=str(config.parent / 'knowledge-domains'),
                 consent_config=str(consent_path(config)),
-                public_feeds=not no_public_feed if selected is None else bool(engine.get('feeds')))
+                public_feeds=not no_public_feed if selected is None else bool(engine.get('feeds')),
+                domains=official_feeds())
             _publish_bytes(engine_file, (json.dumps(engine, indent=2) + "\n").encode())
             _publish_bytes(adapter_file, (json.dumps(value, indent=2) + "\n").encode())
 

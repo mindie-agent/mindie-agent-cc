@@ -53,6 +53,29 @@ def _source(root, version="0.0.1"):
 
 
 class ProductContractTests(unittest.TestCase):
+    def test_product_contract_has_no_fixed_publication_digest(self):
+        declared = json.loads((ROOT / "product-contract.json").read_text())
+        self.assertEqual(set(declared["publication"]),
+                         {"repository", "ref", "domain", "verified_commit"})
+        self.assertEqual(declared["publication"]["ref"], "main")
+
+    def test_publication_read_preserves_git_revision_without_digest_gate(self):
+        validator = _load_validator()
+        publication = {"repository": "mindie-agent/knowledge-vllm-ascend",
+                       "ref": "main", "domain": "vllm-ascend",
+                       "verified_commit": "1" * 40}
+        contract = {"contract": {"schema": "mindie-publication-contract/1"},
+                    "sha256": "a" * 64}
+        with patch.object(validator, "publication_git",
+                          side_effect=["", "", publication["verified_commit"]]):
+            with patch("mindie_knowledge.publication_contract.read_git_contract",
+                       return_value=contract) as read:
+                parsed = validator.publication_contract(publication)
+        self.assertEqual(parsed, contract)
+        self.assertEqual(read.call_args.args[1], publication["verified_commit"])
+        self.assertEqual(read.call_args.args[2], publication["domain"])
+        self.assertNotIn("expected_sha256", read.call_args.kwargs)
+
     def test_candidate_requires_owner_death_guard_before_install(self):
         import shutil
 
@@ -91,8 +114,7 @@ class ProductContractTests(unittest.TestCase):
             self.assertEqual(first["schema"], product_contract.RECEIPT_SCHEMA)
             self.assertEqual(first["candidate_revision"], "a" * 40)
             declared = json.loads((source / "product-contract.json").read_text())
-            self.assertEqual(first["publication"]["contract_sha256"],
-                             declared["publication"]["contract_sha256"])
+            self.assertEqual(first["publication"], declared["publication"])
             self.assertEqual(set(first["runtime"]), {"mindie-knowledge", "remote-dev", "mindie-diagnostics"})
             (source / "scripts" / "marker.py").write_text("value = 2\n", encoding="utf-8")
             second = product_contract.identity(source, "a" * 40)

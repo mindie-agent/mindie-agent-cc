@@ -12,7 +12,15 @@ import setup
 from mindie_knowledge.git_layout import validate_config_feed_layout
 from mindie_knowledge.loop.store import Store
 
-validation = {"schema": "mindie-candidate-check/1", "publication": {"domain": "fixture"}}
+validation = {
+    "schema": "mindie-candidate-check/1",
+    "publication": {
+        "repository": "mindie-agent/knowledge-vllm-ascend",
+        "ref": "main",
+        "domain": "fixture",
+        "verified_commit": "a" * 40,
+    },
+}
 original_open = Store._open_state
 
 
