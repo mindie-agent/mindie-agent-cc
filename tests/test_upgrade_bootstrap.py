@@ -80,6 +80,7 @@ def test_completed_runtime_corruption_never_invokes_uv_to_repair(tmp_path):
             patch.object(bootstrap.bounded, "run") as run:
         bootstrap.ensure_runtime(source)
         run.assert_called_once()
+        assert run.call_args.kwargs["env"]["UV_NATIVE_TLS"] == "true"
         assert runtime.with_suffix(".ready.json").is_file()
         readback.side_effect = ValueError("installed bytes differ")
         with pytest.raises(ValueError, match="installed bytes differ"):
