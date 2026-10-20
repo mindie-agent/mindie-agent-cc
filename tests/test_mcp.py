@@ -47,7 +47,8 @@ class McpTests(unittest.TestCase):
         names = {item["name"] for item in tools}
         self.assertEqual(
             names,
-            {"mindie_status", "knowledge_query", "knowledge_explain", "knowledge_feedback"},
+            {"mindie_status", "knowledge_query", "knowledge_explain",
+             "knowledge_feedback", "knowledge_distill"},
         )
         for item in tools:
             props = item["inputSchema"].get("properties") or {}

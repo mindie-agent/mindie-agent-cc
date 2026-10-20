@@ -390,7 +390,8 @@ def _dispatch(surface: str, raw: bytes, ident, cancel=None, *, binding=None):
     message = json.loads(raw)
     allow_service = (surface == "knowledge" and message.get("method") == "tools/call"
                      and _local_tool_name(message) in {
-                         "knowledge_query", "knowledge_explain", "knowledge_feedback"})
+                         "knowledge_query", "knowledge_explain", "knowledge_feedback",
+                         "knowledge_distill"})
     try:
         # All operations, including cancellation/status tools, take a shared
         # OS lock. Activation never interrupts a helper admitted here.

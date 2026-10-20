@@ -113,10 +113,15 @@ class KnowledgePageTests(unittest.TestCase):
         self.assertNotIn("offset", query["inputSchema"]["properties"])
         self.assertEqual(query["inputSchema"]["properties"]["limit"]["maximum"], 20)
         self.assertEqual(set(query["inputSchema"]["properties"]),
-                         {"query", "limit", "conditions", "continuation"})
+                         {"query", "limit", "conditions", "continuation", "domain",
+                          "domain_path", "token_budget", "include_unknown"})
         from jsonschema import validate
         validate({"query": "synthetic material"}, query["inputSchema"])
         validate({"continuation": "opaque-next-page", "limit": 3}, query["inputSchema"])
+        validate({"query": "synthetic material", "domain_path": "ops/probes",
+                  "token_budget": 512, "include_unknown": True},
+                 query["inputSchema"])
+        self.assertEqual(query["inputSchema"]["properties"]["token_budget"]["maximum"], 16000)
         for unsupported in ("oneOf", "anyOf", "allOf"):
             self.assertNotIn(unsupported, query["inputSchema"])
 

@@ -12,7 +12,15 @@ import setup
 from mindie_knowledge.git_layout import validate_config_feed_layout
 from mindie_knowledge.loop.store import Store
 
-validation = {"schema": "mindie-candidate-check/1", "publication": {"domain": "fixture"}}
+validation = {
+    "schema": "mindie-candidate-check/1",
+    "publication": {
+        "repository": "mindie-agent/knowledge-vllm-ascend",
+        "ref": "main",
+        "domain": "fixture",
+        "verified_commit": "a" * 40,
+    },
+}
 original_open = Store._open_state
 
 
@@ -41,7 +49,10 @@ with ExitStack() as stack:
     stack.enter_context(patch.object(setup, "identity", return_value={}))
     stack.enter_context(patch("harness.require_engine_support", return_value="2.1.269"))
     stack.enter_context(patch("release_update.disable_unfiltered_updates"))
-    stack.enter_context(patch("capture_config.prepare", return_value={}))
+    stack.enter_context(patch("capture_config.prepare", return_value={
+        "redactor_executable": sys.executable,
+        "summary_command": [sys.executable, str(scripts / "organizer.py")],
+    }))
     stack.enter_context(patch("capture_config.prepare_store", side_effect=prepare_store))
     stack.enter_context(patch.object(Store, "_open_state", open_state))
     stack.enter_context(patch.object(setup, "write_community"))

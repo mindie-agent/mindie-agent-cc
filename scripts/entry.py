@@ -3,11 +3,15 @@
 [Role]
 Handles `/mindie-agent` slash commands (`activate`, `deactivate`, `status`,
 `sharing-enable`, `sharing-disable`, `sharing-status`) from the Claude Code
-`UserPromptExpansion` hook.
+`UserPromptExpansion` hook. An optional native `--domain DOMAIN` activates one
+existing configured domain through the shared domain-routing helper.
 
 [Invariants]
 - Activation occurs exclusively through this hook; MCP `status` never activates
   a lease or enables sharing.
+- `--domain` uses only the verified native session/cwd/root-session binding; it
+  activates the target Admission and never overwrites the default host token or
+  consent authority.
 - If lease activation succeeds but background service/maintenance fails,
   returns `status="degraded"` (preserving the active lease).
 
@@ -24,7 +28,6 @@ from __future__ import annotations
 import json
 import os
 import shlex
-import stat
 from pathlib import Path
 
 from entry_state import consume_prompt, set_choice, configuration_required
@@ -258,7 +261,7 @@ def status_payload(session=None):
 
     payload = dict(_knowledge_status_payload(session))
     try:
-        saved = consent_mod.load()
+        consent_mod.load()
     except (OSError, ValueError) as exc:
         payload["reporting"] = dict(status="unavailable",
                                     error=dict(stage="consent_path", type=type(exc).__name__))
@@ -284,6 +287,46 @@ def _init_choice_from_native(arguments):
     if token in {"contribute", "disabled"}:
         return token
     return None
+
+
+def _domain_from_native(arguments):
+    """Read the optional native ``--domain`` selector.
+
+    The value is only a canonical domain name; engine paths, mappings, session
+    ids and tokens are never accepted from slash-command arguments. Plain
+    whitespace tokenization preserves the existing no-domain init behavior.
+    Mixed install-level choices are rejected only after a domain was selected;
+    a consumed ``--domain`` value is never treated as a choice.
+    """
+    tokens = (arguments or "").split()
+    selected = None
+    choice = None
+    index = 0
+    while index < len(tokens):
+        item = tokens[index]
+        index += 1
+        if item == "--domain":
+            if index >= len(tokens):
+                raise ValueError("--domain requires one canonical domain")
+            if selected is not None:
+                raise ValueError("--domain may be specified once")
+            selected = tokens[index]
+            index += 1
+        elif item.startswith("--domain="):
+            if selected is not None:
+                raise ValueError("--domain may be specified once")
+            selected = item.split("=", 1)[1]
+        elif item in {
+            "contribute", "disabled",
+            "reporting-enable", "reporting-disable", "reporting-later",
+        }:
+            choice = item
+    if selected is not None and choice is not None:
+        raise ValueError(
+            "--domain activates a selected domain and cannot be combined "
+            "with contribute/disabled/reporting choices"
+        )
+    return selected
 
 
 def _reporting_token_from_native(arguments):
@@ -425,11 +468,63 @@ def _apply_reporting_token(payload, token, configured):
     return payload
 
 
-def _configured_init_activation(session, cwd, ident):
+def _configured_domain_activation(session, root, ident, domain):
+    """Activate one explicitly selected domain without touching the default.
+
+    The shared helper validates the trusted target engine config, target
+    settings/consent and project scope, then calls that target Admission. The
+    returned target lease is never written into the default host binding.
+    """
+    try:
+        from mindie_knowledge.loop.domain_routes import activate_selected_domain
+    except ModuleNotFoundError as exc:
+        if exc.name != "mindie_knowledge.loop.domain_routes":
+            raise
+        raise ValueError(
+            "multi-domain native activation is unavailable in the installed knowledge runtime"
+        ) from exc
+    from admission import gate
+    from mindie_knowledge.loop.cli import config_at
+    from paths import engine_config_path
+
+    adapter = load_adapter_config()
+    selected = activate_selected_domain(
+        engine_config_path(adapter),
+        domain=domain,
+        domain_configs=adapter.get("domain_configs"),
+        session=session,
+        project_root=root,
+        root_session=session,
+    )
+    lease = selected["lease"]
+    target_gate = gate(config_at(selected["engine_config"]))
+    claimed = target_gate.claim(
+        session, "plugin_command", ident[:256], token=lease["token"]) is True
+    payload = status_payload(session)
+    if not claimed:
+        payload["already"] = True
+    payload["domain"] = selected["domain"]
+    payload["engine_config"] = selected["engine_config"]
+    payload["generation"] = selected["generation"]
+    payload["binding"] = dict(
+        session=lease["session"],
+        enabled=bool(lease.get("enabled")),
+        project_root=lease["project_root"],
+        root_session=lease.get("root_session"),
+        domain=selected["domain"],
+        engine_config=selected["engine_config"],
+        generation=selected["generation"],
+    )
+    return payload
+
+
+def _configured_init_activation(session, cwd, ident, domain=None):
     """Entry binding for a configured task: automatic, idempotent, and never
     a consent prompt. The persistent install-level choice is untouched."""
     from admission import activate, gate
     root = _project_root(cwd)
+    if domain is not None:
+        return _configured_domain_activation(session, root, ident, domain)
     lease = activate(session, project_root=root, root_session=session)
     claimed = gate().claim(session, "plugin_command", ident[:256], token=lease["token"]) is True
     payload = status_payload(session)
@@ -453,6 +548,7 @@ def op_init(session, event):
     slash_command(event)
     native_choice = _init_choice_from_native(event.get("command_args"))
     reporting_token = _reporting_token_from_native(event.get("command_args"))
+    domain = _domain_from_native(event.get("command_args"))
     ident = f"init:{_prompt_id(event)}"
     cwd = event.get("cwd")
     if not _configured():
@@ -467,15 +563,15 @@ def op_init(session, event):
             payload["runtime"] = "unconfigured"
         else:
             payload = _apply_native_choice(status_payload(session), native_choice, session)
-        if reporting_token is not None:
+        if reporting_token is not None and domain is None:
             payload = _apply_reporting_token(payload, reporting_token, False)
         return payload
-    payload = _configured_init_activation(session, cwd, ident)
+    payload = _configured_init_activation(session, cwd, ident, domain)
     if native_choice == "contribute":
         payload = _apply_contribute(payload, session, event, True)
     else:
         payload = _apply_native_choice(payload, native_choice, session)
-    if reporting_token is not None:
+    if reporting_token is not None and domain is None:
         payload = _apply_reporting_token(payload, reporting_token, True)
     return payload
 
@@ -485,13 +581,55 @@ def op_status(session, event):
     return status_payload(session)
 
 
+def _deactivate_domains(session, adapter, mappings):
+    try:
+        from mindie_knowledge.loop.domain_routes import deactivate_registered_domains
+    except ModuleNotFoundError as exc:
+        if exc.name != "mindie_knowledge.loop.domain_routes":
+            raise
+        raise ValueError(
+            "multi-domain native deactivation is unavailable in the installed knowledge runtime"
+        ) from exc
+    from paths import engine_config_path
+
+    return deactivate_registered_domains(
+        engine_config_path(adapter), domain_configs=mappings, session=session)
+
+
 def op_deactivate(session, event):
-    consume_slash(session, event, "deactivate")
+    found = slash_command(event)
+    if found != "deactivate":
+        raise ValueError("current slash command does not match this operation")
+    _prompt_id(event)
+    if (event.get("command_args") or "").strip():
+        raise ValueError("deactivate takes no arguments; it revokes this session across registered domains")
     if not _configured():
         return dict(session=session, deactivated=False, configured=False)
-    from admission import deactivate
+    adapter = load_adapter_config()
+    mappings = adapter.get("domain_configs")
+    if mappings is None:
+        mappings = {}
+    elif not isinstance(mappings, dict):
+        raise ValueError("domain_configs must be a mapping")
+    if not mappings:
+        from admission import deactivate
 
-    return dict(session=session, deactivated=bool(deactivate(session)))
+        return dict(session=session, deactivated=bool(deactivate(session)))
+    result = _deactivate_domains(session, adapter, mappings)
+    status = result["status"]
+    payload = dict(
+        session=session,
+        deactivated=status == "inactive",
+        status=status,
+        changed=bool(result["changed"]),
+        domains=result["domains"],
+    )
+    if status == "partial":
+        payload["partial"] = True
+        payload["warning"] = (
+            "Deactivation was partial; some registered domain scopes could not be confirmed inactive."
+        )
+    return payload
 
 
 def op_sharing_enable(session, event):

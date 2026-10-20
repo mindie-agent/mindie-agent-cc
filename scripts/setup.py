@@ -21,6 +21,7 @@ configuration, and records the atomic `installation.json` binding for
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -39,7 +40,7 @@ from install_state import (
 )
 from maintenance import sync_public_feed
 from paths import config_path as default_config_path, service_launch_context
-from product_contract import identity
+from product_contract import identity, official_feeds, publication_feed
 
 def community_settings(args, parser):
     selected = any(
@@ -138,6 +139,13 @@ def prepare_binding(source, config=None, *, root=None, domain="vllm-ascend",
         adapter = selected or initial
         binding = Path(adapter["state_dir"]) / "installations" / key
         adapter_file, engine_file = binding / "cc.adapter.json", binding / "cc.engine.json"
+        if adapter_file.exists() and selected is not None:
+            prepared = read_binding(adapter_file)
+            if (prepared != selected and prepared.get('domain_source_configs')
+                    != (selected.get('domain_configs') or {})):
+                routes = json.dumps(selected.get('domain_configs') or {}, sort_keys=True).encode()
+                binding = binding.with_name(key + '-' + hashlib.sha256(routes).hexdigest()[:16])
+                adapter_file, engine_file = binding / 'cc.adapter.json', binding / 'cc.engine.json'
         if adapter_file.exists():
             value = read_binding(adapter_file)
             from candidate_validate import validate
@@ -158,12 +166,13 @@ def prepare_binding(source, config=None, *, root=None, domain="vllm-ascend",
                           **prepare(sys.executable, HERE),
                           community_config=adapter["community_config"],
                           product_validation=validation)
-            if selected is None and not no_public_feed and domain == validation["publication"]["domain"]:
-                from product_contract import publication_feed
-                engine["feeds"] = [publication_feed(validation)]
+            feed = publication_feed(validation, domain=domain)
+            if selected is None and feed is not None and not no_public_feed:
+                engine["feeds"] = [feed]
             value = dict(adapter, python=sys.executable, runtime_scripts=str(HERE),
                          adapter_config=str(adapter_file), engine_config=str(engine_file),
                          product_validation=validation)
+            value['domain_source_configs'] = dict(adapter.get('domain_configs') or {})
             from diagnostic_support import reporting_config_path
             value["diagnostics_context"] = {
                 "MINDIE_DIAGNOSTICS_CONFIG": str(reporting_config_path(config)),
@@ -177,6 +186,14 @@ def prepare_binding(source, config=None, *, root=None, domain="vllm-ascend",
             require_engine_support(engine, source=source)
             if selected is None:
                 prepare_store(sys.executable, HERE, engine)
+            from capture_config import prepare_domains
+            from consent import consent_path
+            value['domain_configs'] = prepare_domains(
+                sys.executable, value, engine, config_directory=str(binding / 'domains'),
+                authority_directory=str(config.parent / 'knowledge-domains'),
+                consent_config=str(consent_path(config)),
+                public_feeds=not no_public_feed if selected is None else bool(engine.get('feeds')),
+                domains=official_feeds())
             _publish_bytes(engine_file, (json.dumps(engine, indent=2) + "\n").encode())
             _publish_bytes(adapter_file, (json.dumps(value, indent=2) + "\n").encode())
 
@@ -236,6 +253,9 @@ def activate_binding(candidate_file, *, observation_seconds=30.0):
             previous = read_binding(config)
             if previous == candidate:
                 return dict(status="current", switched=False)
+            if ('domain_source_configs' in candidate
+                    and (previous.get('domain_configs') or {}) != candidate['domain_source_configs']):
+                return dict(status='deferred', stage='domain_routes_changed', switched=False)
             for key in ("base_config", "state_dir", "community_config"):
                 if previous[key] != candidate[key]:
                     raise InstallationUnavailable("candidate changes installation data identity")
@@ -274,11 +294,17 @@ def activate_binding(candidate_file, *, observation_seconds=30.0):
                     return incomplete("new_readiness", service=state, retirement=retirement)
                 if state == "ready":
                     connect(engine, config_path=candidate["engine_config"])
+                    from mindie_knowledge.loop.domain_catalog import retire_changed, restore_changed
+                    domains = retire_changed(previous, candidate, timeout=remaining())
+                    if domains['status'] != 'retired':
+                        return dict(status=domains['status'], stage='domain_retirement',
+                                    domains=domains, switched=False)
                     try:
                         atomic_write(config, candidate)
                     except OSError as exc:
                         return dict(status="incomplete", stage="canonical_publish",
                                     service="ready", retirement=retirement,
+                                    domain_restoration=restore_changed(domains, timeout=remaining()),
                                     error_type=type(exc).__name__, switched=False)
                     return dict(status="activated", switched=True,
                                 seconds=time.monotonic() - started, retirement=retirement)

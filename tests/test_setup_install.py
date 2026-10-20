@@ -20,7 +20,15 @@ from install_state import InstallationUnavailable, OperationLock, installed_bind
 def preparing(tmp_path):
     config = tmp_path / "profile" / "cc.json"
     root = tmp_path / "data"
-    validation = {"schema": "mindie-candidate-check/1", "publication": {"domain": "fixture"}}
+    validation = {
+        "schema": "mindie-candidate-check/1",
+        "publication": {
+            "repository": "mindie-agent/knowledge-vllm-ascend",
+            "ref": "main",
+            "domain": "fixture",
+            "verified_commit": "a" * 40,
+        },
+    }
     with ExitStack() as stack:
         stack.enter_context(patch.dict(os.environ, {"MINDIE_CC_CONFIG": str(config)}))
         stack.enter_context(patch("bootstrap.runtime_key", return_value="release-a"))
@@ -45,12 +53,109 @@ def preparing(tmp_path):
                                                       "MINDIE_DIAGNOSTICS_ROOT": str(tmp_path / "diagnostics")},
                                             "environment": [],
                                         }))
-        yield dict(config=config, root=root, prepare=prepare, community=community)
+        yield dict(config=config, root=root, prepare=prepare, community=community,
+                   validation=validation)
 
 
 def install(f):
     return setup.prepare_binding(SCRIPTS.parent, f["config"], root=f["root"],
                                  domain="fixture", no_public_feed=True)
+
+
+def install_graded(f, *, runtime=None, domain="vllm-ascend", no_public_feed=False):
+    with patch("bootstrap.runtime_key", return_value=runtime or "release-a"):
+        return setup.prepare_binding(
+            SCRIPTS.parent, f["config"], root=f["root"], domain=domain,
+            no_public_feed=no_public_feed)
+
+
+OFFICIAL_ROWS = [
+    dict(repository="mindie-agent/knowledge-vllm-ascend", ref="main",
+         domain="vllm-ascend", interval_seconds=300),
+    dict(repository="mindie-agent/knowledge-operators", ref="main",
+         domain="operators", interval_seconds=300),
+]
+
+
+def install_official(f, *, runtime="release-a", domain="vllm-ascend",
+                     no_public_feed=False):
+    with patch("bootstrap.runtime_key", return_value=runtime):
+        return setup.prepare_binding(
+            SCRIPTS.parent, f["config"], root=f["root"], domain=domain,
+            no_public_feed=no_public_feed)
+
+
+def use_publication(f, publication):
+    f["validation"].clear()
+    f["validation"].update(schema="mindie-candidate-check/1",
+                           publication=publication)
+
+
+def test_fresh_install_writes_two_official_main_feeds(preparing):
+    from mindie_knowledge import consent_store
+
+    f = preparing
+    consent = f["config"].with_name("mindie-consent.json")
+    consent_store.record_choice(consent, "disabled")
+    before = consent.read_bytes()
+    use_publication(f, dict(repository="mindie-agent/knowledge-vllm-ascend",
+                            ref="main", domain="vllm-ascend",
+                            verified_commit="1" * 40))
+    result = install_official(f)
+    binding = setup._read(result["config"])
+    engine = setup._read(binding["engine_config"])
+    assert engine["feeds"] == [OFFICIAL_ROWS[0]]
+    assert "contract_sha256" not in engine["feeds"][0]
+    operators = setup._read(binding["domain_configs"]["operators"])
+    assert operators["feeds"] == [OFFICIAL_ROWS[1]]
+    settings = setup._read(operators["community_config"])
+    assert settings["branch"] == "main"
+    assert settings["repository"] == "mindie-agent/knowledge-operators"
+    assert settings["enabled"] is False
+    assert settings["consent_config"] == str(consent)
+    assert consent.read_bytes() == before
+
+
+def test_custom_root_ref_and_route_survive_update(preparing):
+    from mindie_knowledge import consent_store
+
+    f = preparing
+    use_publication(f, dict(repository="mindie-agent/knowledge-vllm-ascend",
+                            ref="main", domain="vllm-ascend",
+                            verified_commit="1" * 40))
+    installed = install_official(f, runtime="release-a")
+    current = setup._read(installed["config"])
+    engine_path = Path(current["engine_config"])
+    operators_path = Path(current["domain_configs"]["operators"])
+    engine = setup._read(engine_path)
+    operators = setup._read(operators_path)
+    custom_root = dict(repository="owner/custom-vllm", ref="topic",
+                       domain="vllm-ascend", interval_seconds=300)
+    custom_operators = dict(repository="owner/custom-operators", ref="review",
+                            domain="operators", interval_seconds=300)
+    engine["feeds"] = [custom_root]
+    operators["feeds"] = [custom_operators]
+    engine_path.write_text(json.dumps(engine), encoding="utf-8")
+    operators_path.write_text(json.dumps(operators), encoding="utf-8")
+    settings_path = Path(operators["community_config"])
+    settings = setup._read(settings_path)
+    settings.update(repository=custom_operators["repository"],
+                    branch=custom_operators["ref"])
+    settings_path.write_text(json.dumps(settings), encoding="utf-8")
+    consent = f["config"].with_name("mindie-consent.json")
+    consent_store.record_choice(consent, "contribute")
+    before = consent.read_bytes()
+    settings_before = settings_path.read_bytes()
+
+    upgraded = install_official(f, runtime="release-b")
+    upgraded_binding = setup._read(upgraded["config"])
+    upgraded_engine = setup._read(upgraded_binding["engine_config"])
+    assert upgraded_engine["feeds"] == [custom_root]
+    upgraded_operators = setup._read(
+        upgraded_binding["domain_configs"]["operators"])
+    assert upgraded_operators["feeds"] == [custom_operators]
+    assert settings_path.read_bytes() == settings_before
+    assert consent.read_bytes() == before
 
 
 def test_cold_setup_publishes_fixed_binding_without_an_update_selector(preparing):
@@ -193,6 +298,26 @@ def test_busy_owner_keeps_selected_binding_and_choices(preparing):
     assert f["config"].read_bytes() == before
     retirement.assert_called_once()
     start.assert_not_called()
+
+
+def test_domain_registration_after_prepare_defers_and_can_be_reprepared(preparing):
+    f = preparing
+    original, candidate = new_candidate(f)
+    previous = setup._read(f['config'])
+    custom = f['root'] / 'custom.engine.json'
+    engine = setup._read(previous['engine_config'])
+    custom.write_text(json.dumps({**engine, 'domain': 'custom'}))
+    changed = {**previous, 'domain_configs': {**previous.get('domain_configs', {}), 'custom': str(custom)}}
+    setup.atomic_write(f['config'], changed)
+    result = setup.activate_binding(candidate['config'])
+    assert result['status'] == 'deferred' and result['stage'] == 'domain_routes_changed'
+    assert setup._read(f['config']) == changed
+    with patch('bootstrap.runtime_key', return_value='release-b'):
+        refreshed = install(f)
+    value = setup._read(refreshed['config'])
+    assert refreshed['config'] != candidate['config']
+    assert value['domain_configs']['custom'] == str(custom)
+    assert value['domain_source_configs'] == changed['domain_configs']
 
 
 def test_ready_candidate_is_selected_only_after_exact_idle_retirement(preparing):

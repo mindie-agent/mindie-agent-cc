@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/mindie-agent/mindie-agent-cc/releases"><img src="https://img.shields.io/badge/release-v0.0.2-0F766E.svg" alt="Release v0.0.2"></a>
+  <a href="https://github.com/mindie-agent/mindie-agent-cc/releases"><img src="https://img.shields.io/badge/release-v0.0.3-0F766E.svg" alt="Release v0.0.3"></a>
   <a href="harness-compatibility.json"><img src="https://img.shields.io/badge/Claude_Code-2.1.269_%7C_2.1.299-D97757.svg" alt="Claude Code 2.1.269 | 2.1.299"></a>
   <a href="pyproject.toml"><img src="https://img.shields.io/badge/python-3.13-3776AB.svg" alt="Python 3.13"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-0F766E.svg" alt="License: MIT"></a>
@@ -27,7 +27,7 @@
 
 ---
 
-**MindIE Agent for Claude Code**（`mindie-agent-cc`）是 [MindIE Agent](https://github.com/mindie-agent/mindie-agent) 面向 Claude Code 的原生插件，服务于**昇腾（Ascend）NPU 上的 AI Infra 设计、开发与测试全流程**。当前 `v0.0.2` 已交付三大核心能力：**本地与社区知识库检索及隐私脱敏**（优先覆盖 `vLLM-Ascend` 特性开发与 `AscendC` / `Triton` 算子工程）、**远端 SSH / Docker 开发与 NPU 状态巡检**，以及**统一故障诊断与脱敏上报**；更多昇腾基础软件领域将随演进路线图持续扩展。
+**MindIE Agent for Claude Code**（`mindie-agent-cc`）是 [MindIE Agent](https://github.com/mindie-agent/mindie-agent) 面向 Claude Code 的原生插件，服务于**昇腾（Ascend）NPU 上的 AI Infra 设计、开发与测试全流程**。当前 `v0.0.3` 已交付三大核心能力：**本地与社区知识库检索及隐私脱敏**（优先覆盖 `vLLM-Ascend` 特性开发与 `AscendC` / `Triton` 算子工程）、**远端 SSH / Docker 开发与 NPU 状态巡检**，以及**统一故障诊断与脱敏上报**；更多昇腾基础软件领域将随演进路线图持续扩展。
 
 项目设计遵循 [MindIE Agent 工程设计原则](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.md)：**领域知识与 Skill 体系通过 `/mindie-agent` 手动按需唤醒**，不干扰非昇腾常规任务；**`remote-dev` 远端昇腾开发与测试工具默认常驻自动触发**；所有状态与报错真实透明，不做静默降级或盲目重试。
 
@@ -99,7 +99,7 @@ MindIE Agent 采用**「领域知识与 Skill 手动按需触发 + 远端开发�
    claude --version
    ```
    - **硬性门禁（严禁跳过或静默忽略）**：若未安装 `gh`，请先协助安装（macOS：`brew install gh`；Windows：`winget install --id GitHub.cli`；Ubuntu / WSL：`sudo apt update && sudo apt install -y gh`）；若 `gh auth status` 未登录或 `gh api user` 失败，**请勿继续执行后续步骤**，立即引导用户完成 `gh auth login` 并运行 `gh auth setup-git`，直至 `gh api user --jq .login` 稳定返回当前 GitHub 账号名。
-   - 确认 `claude --version` 为当前发行版 `v0.0.2` 声明支持的精确版本：`2.1.269` 或 `2.1.299`（定义于 [`harness-compatibility.json`](harness-compatibility.json)）。
+   - 确认 `claude --version` 为当前发行版 `v0.0.3` 声明支持的精确版本：`2.1.269` 或 `2.1.299`（定义于 [`harness-compatibility.json`](harness-compatibility.json)）。
    - 若在 **Linux 或 Windows WSL** 下使用后台知识服务，请额外执行 `systemctl --user show --property=Version` 确认 `systemd >= 254` 且可访问（WSL 内须使用 Linux 原生 `claude`、`git`、`uv` 与 `gh`）。
 
 2. **可选支持与贡献准备**：
@@ -107,7 +107,7 @@ MindIE Agent 采用**「领域知识与 Skill 手动按需触发 + 远端开发�
 
 3. **添加插件源、安装并完成无模型冷启动初始化**：
    ```sh
-   claude plugin marketplace add "https://github.com/mindie-agent/mindie-agent-cc.git#v0.0.2"
+   claude plugin marketplace add "https://github.com/mindie-agent/mindie-agent-cc.git#v0.0.3"
    claude plugin install mindie-agent@mindie-agent-cc --scope user
    claude --init-only
    ```
@@ -118,7 +118,7 @@ MindIE Agent 采用**「领域知识与 Skill 手动按需触发 + 远端开发�
    claude plugin list --json
    claude mcp list
    ```
-   - 确认 `claude plugin list --json` 中包含 `mindie-agent@mindie-agent-cc`（版本 `0.0.2`，状态已启用）。
+   - 确认 `claude plugin list --json` 中包含 `mindie-agent@mindie-agent-cc`（版本 `0.0.3`，状态已启用）。
    - 确认 `claude mcp list` 中 `mindie-knowledge` 与 `remote-dev` 两个服务均显示 `Connected`。验证通过后，向用户汇报已验证的 GitHub 账号（`$GH_USER`）以及插件就绪状态。
 
 </details>
@@ -129,14 +129,14 @@ MindIE Agent 采用**「领域知识与 Skill 手动按需触发 + 远端开发�
 
 ```sh
 gh auth status && gh auth setup-git && \
-claude plugin marketplace add "https://github.com/mindie-agent/mindie-agent-cc.git#v0.0.2" && \
+claude plugin marketplace add "https://github.com/mindie-agent/mindie-agent-cc.git#v0.0.3" && \
 claude plugin install mindie-agent@mindie-agent-cc --scope user && \
 claude --init-only && \
 claude mcp list
 ```
 
 #### 环境要求说明
-- **基础工具与硬性指标**：已安装 `git`、`uv`、已登录认证的 **`gh`（GitHub CLI）**，以及已登录的 Claude Code（当前 `v0.0.2` 发行版经实机验证支持 Claude Code `2.1.269` 与 `2.1.299`，详见 [`harness-compatibility.json`](harness-compatibility.json)）。
+- **基础工具与硬性指标**：已安装 `git`、`uv`、已登录认证的 **`gh`（GitHub CLI）**，以及已登录的 Claude Code（兼容接口声明支持 Claude Code `2.1.269` 与 `2.1.299`，详见 [`harness-compatibility.json`](harness-compatibility.json)）。
 - **Windows 原生环境**：由 Git for Windows 提供远端开发所需的 SSH 客户端，完全保留你现有的 SSH 与模型配置。
 - **Linux 与 WSL 环境**：在 WSL 中请使用 Linux 原生 `claude`、`git`、`uv` 与 `gh`，并将配置与数据保存在 Linux 文件系统内。Linux / WSL 下的后台知识服务依赖用户态 `systemd`（`systemd >= 254` 且启用统一 cgroup v2 层级）；若环境缺少 `systemd --user`，知识服务会明确报告错误而不做静默降级，但独立的 `remote-dev` 远端开发仍可正常使用。
 
@@ -187,7 +187,7 @@ flowchart LR
 ### 本地目录说明
 
 - **锁定运行时目录**：macOS / Linux / WSL 下位于 `${XDG_DATA_HOME:-$HOME/.local/share}/mindie-agent/runtimes/cc`，Windows 下位于 `%LOCALAPPDATA%/mindie-agent/runtimes/cc`（按源码、锁文件与平台哈希隔离存储，构建后不可变）。
-- **持久化发行版入口**：`CLAUDE_PLUGIN_DATA/releases/0.0.2/entry.py`（脱离宿主易失缓存，确保长会话期间入口稳定可用）。
+- **持久化发行版入口**：`CLAUDE_PLUGIN_DATA/releases/0.0.3/entry.py`（脱离宿主易失缓存，确保长会话期间入口稳定可用）。
 - **适配器配置文件**：`${XDG_CONFIG_HOME:-$HOME/.config}/mindie-agent/cc.json`（记录当前安装绑定；用户的贡献授权与范围作为持久数据独立保存）。
 
 ---
@@ -210,7 +210,7 @@ uv run --locked --no-editable --group test python scripts/product_contract.py --
 uv run --locked --no-editable --group test python scripts/harness.py --source . --tests tests --revision "$(git rev-parse HEAD)"
 ```
 
-- **发行版微基准测试（Release Microbenchmark）**：每个 `0.0.2` 插件 Release 均随附 `benchmark-results.json` 和 `benchmark-results.md`，按 [`benchmarks/release.json`](benchmarks/release.json) 测量 `public-transcript` 公开消息解析与隐藏推理过滤的耗时（单位 `us/op`）。该指标作为可复现的本地 CPU 微基准基线，与远端 A2/A3 NPU 实机集成验收及端到端 Agent 研发效率评估相互独立。
+- **发行版微基准测试（Release Microbenchmark）**：每个 `0.0.3` 插件 Release 均随附 `benchmark-results.json` 和 `benchmark-results.md`，按 [`benchmarks/release.json`](benchmarks/release.json) 测量 `public-transcript` 公开消息解析与隐藏推理过滤的耗时（单位 `us/op`）。该指标作为可复现的本地 CPU 微基准基线，与远端 A2/A3 NPU 实机集成验收及端到端 Agent 研发效率评估相互独立。
 
 ---
 
