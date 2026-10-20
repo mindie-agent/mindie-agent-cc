@@ -323,13 +323,12 @@ def claim_bind(tool_use_id: str, tool_name: str, arguments, *, config=None) -> d
 
 
 def finish_bind(tool_use_id: str, succeeded: bool, *, config=None) -> None:
+    """Persist the claimant's result; storage failures remain visible to MCP."""
     try:
         tool_use_id = require_call_id(tool_use_id)
     except ValueError:
         return
     path = bind_db_path(config)
-    if not path.is_file():
-        return
     db = _connect(path, create=False)
     try:
         with db:
@@ -337,8 +336,6 @@ def finish_bind(tool_use_id: str, succeeded: bool, *, config=None) -> None:
                 "UPDATE binds SET status=?, updated=? WHERE tool_use_id=? AND status='claimed'",
                 ("succeeded" if succeeded else "failed", time.time(), tool_use_id),
             )
-    except sqlite3.Error:
-        pass
     finally:
         db.close()
 

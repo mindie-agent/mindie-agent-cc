@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -534,6 +535,7 @@ def handle(surface, message):
     call_id = None
     claimed = False
     succeeded = False
+    result = {}
     try:
         if not isinstance(args, dict):
             raise ValueError("invalid tool arguments")
@@ -577,10 +579,11 @@ def handle(surface, message):
             try:
                 payload = remote_call(local, args, session)
             except (ValueError, OSError, RuntimeError, KeyError, TypeError) as exc:
+                result = remote_stage_failure(args, local, "helper_failed", exc)
                 return dict(
                     jsonrpc="2.0",
                     id=ident,
-                    result=remote_stage_failure(args, local, "helper_failed", exc),
+                    result=result,
                 )
             text = payload.get("text") if isinstance(payload, dict) else canonical(payload)
             result = dict(
@@ -600,13 +603,22 @@ def handle(surface, message):
         succeeded = result.get("isError") is not True
         return dict(jsonrpc="2.0", id=ident, result=result)
     except (ValueError, OSError, RuntimeError, KeyError, TypeError) as exc:
-        return dict(jsonrpc="2.0", id=ident, result=failure(exc))
+        result = failure(exc)
+        return dict(jsonrpc="2.0", id=ident, result=result)
     finally:
         if claimed:
             try:
                 finish_bind(call_id, succeeded)
-            except Exception:
-                pass
+            except (OSError, sqlite3.Error) as exc:
+                from diagnostic_support import failure as record_failure
+
+                diagnostic = record_failure("mcp.call", "finish_bind", "local_storage", exception=exc)
+                warning = "Local bind receipt could not be saved. The tool result is unchanged; do not repeat the call."
+                result["structuredContent"] = dict(
+                    result.get("structuredContent") or {},
+                    bind_warning=warning, diagnostic_ref=diagnostic,
+                )
+                result["content"] = [*result.get("content", []), dict(type="text", text=warning)]
 
 
 def _read_line(stdin):
