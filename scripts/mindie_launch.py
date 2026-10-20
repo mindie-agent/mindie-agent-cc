@@ -50,6 +50,8 @@ WORK_LIMIT = 3
 CONTROL_LIMIT = 1
 EOF_JOIN = 3.0
 OUTPUT_BUDGET = 1.0
+CALL_CHILD_BUDGET = 60.0
+ENTRY_CHILD_BUDGET = 180.0
 CONTROL_TOOLS = {"remote_job_status", "remote_job_stop", "remote_job_tail"}
 JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{2,95}$")
 CONFIG_ENV = "MINDIE_CC_CONFIG"
@@ -381,15 +383,22 @@ def _stage_error(ident, message, stage: str, surface: str):
     )
 
 
-def _dispatch(surface: str, raw: bytes, ident, cancel=None, *, binding=None):
+def _dispatch_budget(message):
+    if _local_tool_name(message) == "mindie_entry":
+        return ENTRY_CHILD_BUDGET
+    return CALL_CHILD_BUDGET
+
+
+def _dispatch(surface: str, raw: bytes, ident, cancel=None, *, binding=None, deadline=None):
     if cancel is not None and cancel.is_set():
         raise bounded.CommandCancelled("command cancelled")
     selected = {}
     started = time.monotonic()
     payload = raw if raw.endswith(b"\n") else raw + b"\n"
     message = json.loads(raw)
+    name = _local_tool_name(message)
     allow_service = (surface == "knowledge" and message.get("method") == "tools/call"
-                     and _local_tool_name(message) in {
+                     and name in {
                          "knowledge_query", "knowledge_explain", "knowledge_feedback",
                          "knowledge_distill"})
     try:
@@ -398,9 +407,17 @@ def _dispatch(surface: str, raw: bytes, ident, cancel=None, *, binding=None):
         with installed_binding(binding) as current:
             selected = _runtime(current)
             script = Path(selected["scripts"]) / "mcp_server.py"
+            process = {}
+            timeout = (
+                (ENTRY_CHILD_BUDGET if name == "mindie_entry" else CALL_CHILD_BUDGET)
+                if deadline is None
+                else max(0.01, deadline - time.monotonic())
+            )
             out = bounded.run(
                 [selected["python"], str(script), surface, "--once"], payload,
+                timeout=timeout,
                 env=_child_env(selected), cwd=str(script.parent), cancel=cancel,
+                receipt=process,
                 allow_service=allow_service,
                 **({"max_output": KNOWLEDGE_MAX_OUTPUT} if surface == "knowledge" else {}),
             )
@@ -419,6 +436,10 @@ def _dispatch(surface: str, raw: bytes, ident, cancel=None, *, binding=None):
         raise _dispatch_failure(selected, "helper_protocol", "protocol_mismatch", None, started) from None
     if not isinstance(response, dict) or response.get("id") != ident:
         raise _dispatch_failure(selected, "helper_protocol", "protocol_mismatch", None, started)
+    if process.get("cleanup_failed") and isinstance(response.get("result"), dict):
+        response["result"].setdefault("structuredContent", {})["cleanup_warning"] = (
+            "owned MCP helper cleanup did not complete; the tool result is preserved"
+        )
     return response
 
 

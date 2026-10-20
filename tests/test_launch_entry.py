@@ -33,7 +33,7 @@ def test_mcp_dispatch_has_no_total_deadline_and_keeps_caller_cancel(tmp_path):
                 patch.object(mindie_launch.bounded, "run",
                              return_value=json.dumps(response)) as runner:
             assert mindie_launch._dispatch(surface, raw, "slow-read", cancel) == response
-        assert runner.call_args.kwargs.get("timeout") is None
+        assert runner.call_args.kwargs.get("timeout") == mindie_launch.CALL_CHILD_BUDGET
         assert runner.call_args.kwargs["cancel"] is cancel
         assert runner.call_args.args[0][-2:] == [surface, "--once"]
         if surface == "knowledge":

@@ -352,7 +352,7 @@ def validate_receipt(output, expected):
 
 def _completed(command, argv):
     """Accept this adapter's stdout-only runner and a Codex-style completed result."""
-    result = command(argv, timeout=None, max_output=65536)
+    result = command(argv, timeout=60.0, max_output=65536)
     if isinstance(result, str):
         if not result.strip():
             raise CandidateValidationError(dict(stage="process", code="nonzero_exit"))
@@ -394,7 +394,7 @@ def probe(python, scripts, command, *, revision=None, verified_receipt=None):
         # validator JSON attached as mindie_output.
         try:
             output = command(
-                argv, timeout=None, max_output=65536,
+                argv, timeout=60.0, max_output=65536,
                 on_failure=lambda text, status: failure_receipt(text, expected, status),
             )
         except CandidateValidationError:

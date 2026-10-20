@@ -8,7 +8,7 @@ tools in Claude Code.
 [Invariants]
 - Session identity is never taken from model-supplied tool arguments; `PreToolUse`
   binds `claudecode/toolUseId` and this server consumes it at most once via
-  `claim_bind` / `finish_bind`.
+  `claim_bind` / `finish_bind`. Only the successful claimant finalizes its receipt.
 - Once a remote or knowledge tool call succeeds, a local SQLite bind-accounting
   failure (`finish_bind`) attaches `bind_warning` + `diagnostic_ref` and never
   flips `isError=True` on the succeeded result.
@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -46,6 +47,7 @@ from product_contract import installed_version
 import rsi_explore
 
 MAX_YIELD_TIME_MS = 30000
+KNOWLEDGE_RPC_TIMEOUT = 30.0
 REMOTE_ERROR_CATEGORIES = frozenset({
     "internal", "caller", "validation", "permission", "remote_execution",
     "cancelled", "connection_capacity", "connection_timeout",
@@ -411,7 +413,10 @@ def _read_or_feedback_call(name, args, session, ensure_service, rpc):
     if routed_domain is not None and "domain" not in payload:
         payload["domain"] = routed_domain
     connection = ensure_service() if selected is None else ensure_service(selected)
-    result = rpc(connection, name.removeprefix("knowledge_"), payload, timeout=None)
+    result = rpc(
+        connection, name.removeprefix("knowledge_"), payload,
+        timeout=KNOWLEDGE_RPC_TIMEOUT,
+    )
     return rsi_explore.attach(result, body) if name == "knowledge_explain" else result
 
 
@@ -434,7 +439,9 @@ def knowledge_call(name, args, session):
         if routed_domain is not None:
             payload["domain"] = routed_domain
         connection = ensure_service() if selected is None else ensure_service(selected)
-        return rsi_explore.attach(rpc(connection, "query", payload, timeout=None), body)
+        return rsi_explore.attach(
+            rpc(connection, "query", payload, timeout=KNOWLEDGE_RPC_TIMEOUT), body
+        )
     if name == "knowledge_distill":
         return _knowledge_distill_call(args, session, ensure_service, rpc)
     if name in {"knowledge_explain", "knowledge_feedback"}:
@@ -451,7 +458,7 @@ def knowledge_call(name, args, session):
         connection,
         method,
         dict(args, _session_id=session, _session_verified=True),
-        timeout=None,
+        timeout=KNOWLEDGE_RPC_TIMEOUT,
     )
 
 
@@ -532,7 +539,9 @@ def handle(surface, message):
     name = params.get("name")
     args = params.get("arguments") or {}
     call_id = None
+    claimed = False
     succeeded = False
+    result = {}
     try:
         if not isinstance(args, dict):
             raise ValueError("invalid tool arguments")
@@ -547,6 +556,7 @@ def handle(surface, message):
         call_id = meta_tool_use_id(params)
         native_name = canonical_native_name(surface, name)
         bound = claim_bind(call_id, native_name, args)
+        claimed = True
         session = bound["session"]
         local = name.rsplit("__", 1)[-1] if isinstance(name, str) else name
         if surface == "knowledge" and local == "mindie_status":
@@ -575,10 +585,11 @@ def handle(surface, message):
             try:
                 payload = remote_call(local, args, session)
             except (ValueError, OSError, RuntimeError, KeyError, TypeError) as exc:
+                result = remote_stage_failure(args, local, "helper_failed", exc)
                 return dict(
                     jsonrpc="2.0",
                     id=ident,
-                    result=remote_stage_failure(args, local, "helper_failed", exc),
+                    result=result,
                 )
             text = payload.get("text") if isinstance(payload, dict) else canonical(payload)
             result = dict(
@@ -598,13 +609,22 @@ def handle(surface, message):
         succeeded = result.get("isError") is not True
         return dict(jsonrpc="2.0", id=ident, result=result)
     except (ValueError, OSError, RuntimeError, KeyError, TypeError) as exc:
-        return dict(jsonrpc="2.0", id=ident, result=failure(exc))
+        result = failure(exc)
+        return dict(jsonrpc="2.0", id=ident, result=result)
     finally:
-        if call_id is not None:
+        if claimed:
             try:
                 finish_bind(call_id, succeeded)
-            except Exception:
-                pass
+            except (OSError, sqlite3.Error) as exc:
+                from diagnostic_support import failure as record_failure
+
+                diagnostic = record_failure("mcp.call", "finish_bind", "local_storage", exception=exc)
+                warning = "Local bind receipt could not be saved. The tool result is unchanged; do not repeat the call."
+                result["structuredContent"] = dict(
+                    result.get("structuredContent") or {},
+                    bind_warning=warning, diagnostic_ref=diagnostic,
+                )
+                result["content"] = [*result.get("content", []), dict(type="text", text=warning)]
 
 
 def _read_line(stdin):
