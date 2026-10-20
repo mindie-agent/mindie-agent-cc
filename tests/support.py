@@ -28,6 +28,22 @@ def write_json(path: Path, value):
 _REDACTOR = None
 
 
+def native_fixture(path, source):
+    """Run the same Python CLI fixture through each platform's executable entry."""
+    path = Path(path)
+    script = path.with_suffix(".py")
+    script.write_text(source, encoding="utf-8", newline="\n")
+    if os.name == "nt":
+        path = path.with_suffix(".cmd")
+        command = f'@echo off\n"{sys.executable}" "{script}" %*\n'
+    else:
+        import shlex
+        command = "#!/bin/sh\nexec " + shlex.join([sys.executable, str(script)]) + ' "$@"\n'
+    path.write_text(command, encoding="utf-8", newline="\n")
+    path.chmod(0o700)
+    return path
+
+
 def redactor_path():
     """The real verified redactor binary, installed once per test process.
 
