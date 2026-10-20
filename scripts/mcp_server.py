@@ -43,6 +43,7 @@ from identity import (
 )
 from paths import state_dir
 from product_contract import installed_version
+import rsi_explore
 
 MAX_YIELD_TIME_MS = 30000
 REMOTE_ERROR_CATEGORIES = frozenset({
@@ -100,6 +101,7 @@ KNOWLEDGE_TOOL_DEFS = [
                     "type": "string",
                     "description": "Bind delivery and discovered events to this run for deduplicated usage accounting.",
                 },
+                **rsi_explore.schema_properties(),
             ),
             additionalProperties=False,
         ),
@@ -129,6 +131,7 @@ KNOWLEDGE_TOOL_DEFS = [
                     "type": "string",
                     "description": "Bind delivery and loaded events to this run for deduplicated usage accounting.",
                 },
+                **rsi_explore.schema_properties(),
             ),
             required=[],
             additionalProperties=False,
@@ -401,13 +404,15 @@ def _read_or_feedback_call(name, args, session, ensure_service, rpc):
 
     # A single ref keeps its URI authority. A batch routes by its first ref,
     # but two different mindie:// authorities must never share one response.
+    body = rsi_explore.forwarded(args) if name == "knowledge_explain" else dict(args)
     selected, routed_domain = select_engine_for_refs(
-        args.get("refs"), ref=args.get("ref"))
-    payload = dict(args, _session_id=session, _session_verified=True)
+        body.get("refs"), ref=body.get("ref"))
+    payload = dict(body, _session_id=session, _session_verified=True)
     if routed_domain is not None and "domain" not in payload:
         payload["domain"] = routed_domain
     connection = ensure_service() if selected is None else ensure_service(selected)
-    return rpc(connection, name.removeprefix("knowledge_"), payload, timeout=None)
+    result = rpc(connection, name.removeprefix("knowledge_"), payload, timeout=None)
+    return rsi_explore.attach(result, body) if name == "knowledge_explain" else result
 
 
 def knowledge_call(name, args, session):
@@ -420,15 +425,16 @@ def knowledge_call(name, args, session):
         # parameters are forwarded unchanged and validated by the shared Store.
         from mindie_knowledge.materials.provenance import query_request
 
-        query_request(args.get("query"), args.get("limit", 5),
-                      args.get("conditions"), args.get("continuation"))
-        domain = _public_domain(args)
+        body = rsi_explore.forwarded(args)
+        query_request(body.get("query"), body.get("limit", 5),
+                      body.get("conditions"), body.get("continuation"))
+        domain = _public_domain(body)
         selected, routed_domain = select_engine(domain=domain)
-        payload = dict(args, _session_id=session, _session_verified=True)
+        payload = dict(body, _session_id=session, _session_verified=True)
         if routed_domain is not None:
             payload["domain"] = routed_domain
         connection = ensure_service() if selected is None else ensure_service(selected)
-        return rpc(connection, "query", payload, timeout=None)
+        return rsi_explore.attach(rpc(connection, "query", payload, timeout=None), body)
     if name == "knowledge_distill":
         return _knowledge_distill_call(args, session, ensure_service, rpc)
     if name in {"knowledge_explain", "knowledge_feedback"}:
