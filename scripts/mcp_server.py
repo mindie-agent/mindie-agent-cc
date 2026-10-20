@@ -8,7 +8,7 @@ tools in Claude Code.
 [Invariants]
 - Session identity is never taken from model-supplied tool arguments; `PreToolUse`
   binds `claudecode/toolUseId` and this server consumes it at most once via
-  `claim_bind` / `finish_bind`.
+  `claim_bind` / `finish_bind`. Only the successful claimant finalizes its receipt.
 - Once a remote or knowledge tool call succeeds, a local SQLite bind-accounting
   failure (`finish_bind`) attaches `bind_warning` + `diagnostic_ref` and never
   flips `isError=True` on the succeeded result.
@@ -532,6 +532,7 @@ def handle(surface, message):
     name = params.get("name")
     args = params.get("arguments") or {}
     call_id = None
+    claimed = False
     succeeded = False
     try:
         if not isinstance(args, dict):
@@ -547,6 +548,7 @@ def handle(surface, message):
         call_id = meta_tool_use_id(params)
         native_name = canonical_native_name(surface, name)
         bound = claim_bind(call_id, native_name, args)
+        claimed = True
         session = bound["session"]
         local = name.rsplit("__", 1)[-1] if isinstance(name, str) else name
         if surface == "knowledge" and local == "mindie_status":
@@ -600,7 +602,7 @@ def handle(surface, message):
     except (ValueError, OSError, RuntimeError, KeyError, TypeError) as exc:
         return dict(jsonrpc="2.0", id=ident, result=failure(exc))
     finally:
-        if call_id is not None:
+        if claimed:
             try:
                 finish_bind(call_id, succeeded)
             except Exception:
