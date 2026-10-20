@@ -3,6 +3,7 @@
     "knowledge": {
       "command": "uv",
       "args": [
+        "--native-tls",
         "run",
         "--no-project",
         "--python",
@@ -17,6 +18,7 @@
     "remote": {
       "command": "uv",
       "args": [
+        "--native-tls",
         "run",
         "--no-project",
         "--python",

@@ -16,7 +16,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from support import SCRIPTS, make_config
+from support import SCRIPTS, make_config, native_fixture, redactor_path
 
 try:
     from mindie_knowledge.graded import distill
@@ -48,37 +48,8 @@ INPUTS = [{
 }]
 
 
-def fake_redactor(root):
-    path = Path(root) / "redactor"
-    path.write_text(
-        "#!" + sys.executable + "\n"
-        "import sys\n"
-        "sys.stdin.buffer.read()\n"
-        "print('[]')\n",
-        encoding="utf-8",
-    )
-    path.chmod(0o700)
-    return path
-
-
-def _redactor_for_test(root):
-    """Prefer the pinned scanner binary; fall back only when the cache is unavailable."""
-    from support import ROOT
-
-    for base in (
-        Path.home() / ".cache" / "mindie-agent" / "gitleaks" / "8.30.1",
-        ROOT.parent / "state" / "component-tests" / "redactor-cache" / "8.30.1",
-    ):
-        for candidate in base.glob("*/gitleaks"):
-            if os.access(candidate, os.X_OK):
-                return candidate
-    return fake_redactor(root)
-
-
 def fake_native(root):
-    path = Path(root) / "fake-claude"
-    path.write_text(
-        "#!" + sys.executable + "\n"
+    return native_fixture(Path(root) / "fake-claude",
         "import json, os, sys\n"
         "prompt = sys.stdin.buffer.read().decode()\n"
         "payload = json.loads(prompt.split('\\n\\n', 1)[1])\n"
@@ -111,11 +82,8 @@ def fake_native(root):
         "print(json.dumps(dict(type='result', subtype='success', is_error=False,\n"
         "    num_turns=1, result='', structured_output=decision,\n"
         "    usage=dict(input_tokens=10, cache_creation_input_tokens=0,\n"
-        "               cache_read_input_tokens=0, output_tokens=5))), flush=True)\n",
-        encoding="utf-8",
+        "               cache_read_input_tokens=0, output_tokens=5))), flush=True)\n"
     )
-    path.chmod(0o700)
-    return path
 
 
 def missing_distill_api():
@@ -281,7 +249,7 @@ class DistillCallUnitTests(unittest.TestCase):
 class DistillEndToEndTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="cc-mcp-distill-")).resolve()
-        self.redactor = _redactor_for_test(self.tmp)
+        self.redactor = redactor_path()
         self.native = fake_native(self.tmp)
         self.calls = self.tmp / "native-calls"
         profile = self.tmp / "profile"

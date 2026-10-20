@@ -13,6 +13,7 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+from support import native_fixture, redactor_path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import organizer  # noqa: E402
@@ -49,33 +50,17 @@ def missing_distill_api():
     return patch("builtins.__import__", side_effect=guarded)
 
 
-def fake_redactor(root):
-    """A local scanner double; no network or real secret scanning."""
-    path = Path(root) / "redactor"
-    path.write_text(
-        "#!" + sys.executable + "\n"
-        "import sys\n"
-        "sys.stdin.buffer.read()\n"
-        "print('[]')\n",
-        encoding="utf-8",
-    )
-    path.chmod(0o700)
-    return path
-
-
 def make_request(task_state="verified_milestone", outcome="verified", repetitions=2):
-    with tempfile.TemporaryDirectory() as tmp:
-        request = distill.prepare_request(
-            [dict(kind="experiment_ledger", outcome=outcome,
-                  source_locator="ledger://fixture-run-1",
-                  content="Observed the fixture rule under the stated conditions.",
-                  evidence_refs=["run-1"], repetitions=repetitions)],
-            session_digest=summarizer.digest(["distill-fixture", task_state, outcome]),
-            task_state=task_state,
-            redactor_executable=str(fake_redactor(tmp)),
-            redaction_key="k" * 32,
-        )
-    return request
+    return distill.prepare_request(
+        [dict(kind="experiment_ledger", outcome=outcome,
+              source_locator="ledger://fixture-run-1",
+              content="Observed the fixture rule under the stated conditions.",
+              evidence_refs=["run-1"], repetitions=repetitions)],
+        session_digest=summarizer.digest(["distill-fixture", task_state, outcome]),
+        task_state=task_state,
+        redactor_executable=str(redactor_path()),
+        redaction_key="k" * 32,
+    )
 
 
 def decision_for(request):
@@ -451,15 +436,11 @@ class DistillProcessTests(unittest.TestCase):
             adapter.write_text(json.dumps({
                 "claude_config_dir": str(profile),
             }), encoding="utf-8")
-            fake = Path(tmp) / "fake-claude"
-            fake.write_text(
-                "#!" + sys.executable + "\n"
+            fake = native_fixture(Path(tmp) / "fake-claude",
                 "import sys\n"
                 "sys.stdin.buffer.read()\n"
-                "print(" + repr(native_envelope(decision)) + ", flush=True)\n",
-                encoding="utf-8",
+                "print(" + repr(native_envelope(decision)) + ", flush=True)\n"
             )
-            fake.chmod(0o700)
             env = dict(os.environ)
             env["MINDIE_CC_CONFIG"] = str(adapter)
             env["MINDIE_CC_BIN"] = str(fake)
