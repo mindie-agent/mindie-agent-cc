@@ -103,8 +103,10 @@ def consume_slash(session, event, command):
         lease = gate().active_lease(session)
         if lease and isinstance(lease.get("token"), str):
             token = lease["token"]
-    except Exception:
-        token = None
+    except Exception as exc:
+        raise ValueError(
+            f"admission is unavailable: {type(exc).__name__}: {exc}"
+        ) from exc
     if token is None:
         return consume_prompt(ident)
     return gate().claim(session, "plugin_command", ident[:256], token=token) is True
@@ -369,8 +371,10 @@ def _capture_permitted() -> bool:
         from sharing import load
 
         return bool(load().allows_capture())
-    except Exception:
-        return False
+    except Exception as exc:
+        raise RuntimeError(
+            f"capture authority is unreadable: {type(exc).__name__}: {exc}"
+        ) from exc
 
 
 def _prepare_capture_service():

@@ -85,7 +85,8 @@ class BackgroundCheck:
                            CLAUDE_CONFIG_DIR=binding["claude_config_dir"])
                 env.pop("PYTHONPATH", None)
                 run([binding["python"], str(Path(binding["runtime_scripts"]) / "release_update.py")],
-                    env=env, cancel=self.cancel, allow_service=True)
+                    env=env, cancel=self.cancel, allow_service=True,
+                    timeout=300.0)
             except Exception as exc:
                 failed = True
                 if not self.cancel.is_set():
@@ -190,7 +191,9 @@ def native_binary(binding):
 
 
 def _native_json(native, args):
-    value = json.loads(run([native, "plugin", *args], max_output=4 * 1024 * 1024))
+    value = json.loads(run(
+        [native, "plugin", *args], timeout=120.0, max_output=4 * 1024 * 1024,
+    ))
     return value
 
 
@@ -275,7 +278,7 @@ def _mutation(binding, state, native, args, stage):
         raise
     process = {}
     try:
-        output = run([native, "plugin", *args], check=False, receipt=process,
+        output = run([native, "plugin", *args], timeout=120.0, check=False, receipt=process,
                      max_output=4 * 1024 * 1024)
     except BaseException as original:
         if process.get("started") is False:
@@ -308,7 +311,7 @@ def _verify_catalog(native, candidate):
     if not isinstance(location, str) or not os.path.isabs(location):
         raise ValueError("native catalog path is invalid")
     source = Path(location)
-    revision = run(["git", "-C", str(source), "rev-parse", "HEAD"]).strip()
+    revision = run(["git", "-C", str(source), "rev-parse", "HEAD"], timeout=30.0).strip()
     if revision != metadata["source"]["sha"]:
         raise ValueError("native catalog checkout differs from the selected immutable SHA")
     if compatibility(source) != metadata["compatibility"]:
@@ -434,7 +437,7 @@ def _activate(binding, prepared, env, state):
         output = run(
             [prepared["python"], str(Path(prepared["runtime_scripts"]) / "setup.py"),
              "--activate", prepared["config"]],
-            env=env, allow_service=True, receipt=process,
+            timeout=120.0, env=env, allow_service=True, receipt=process,
         )
         activated = json.loads(output)
         if not isinstance(activated, dict) or activated.get("status") not in {
@@ -541,7 +544,8 @@ def check(binding, state=None):
         try:
             output = run(
                 [str(python), str(scripts / "setup.py"), "--source", str(installed),
-                 "--config", binding["base_config"]], env=env, receipt=process,
+                 "--config", binding["base_config"]],
+                timeout=120.0, env=env, receipt=process,
             )
         except BaseException as original:
             try:

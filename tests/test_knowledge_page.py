@@ -193,7 +193,7 @@ class KnowledgePageTests(unittest.TestCase):
             self.assertEqual(payload[key], value)
         self.assertNotIn("ref", payload)
         self.assertEqual(payload["_session_id"], SESSION)
-        self.assertIsNone(rpc.call_args.kwargs["timeout"])
+        self.assertEqual(rpc.call_args.kwargs["timeout"], mcp_server.KNOWLEDGE_RPC_TIMEOUT)
 
     def test_batch_explain_rejects_conflicting_domain_authorities_before_service(self):
         import mcp_server

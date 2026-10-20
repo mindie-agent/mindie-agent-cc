@@ -121,8 +121,8 @@ def handle_pretool():
             cwd=event.get("cwd"),
             transcript_path=event.get("transcript_path"),
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"MindIE PreToolUse bind failed: {type(exc).__name__}", file=sys.stderr)
     _print({})
     return 0
 

@@ -64,8 +64,10 @@ spec = importlib.util.find_spec('mindie_cc')
 print(json.dumps({'scripts':str(pathlib.Path(spec.origin).parent),
                   'prefix':sys.prefix, 'version':d.version}))
 """
-    output = _run("runtime-readback", [str(python), "-I", "-c", script],
-                  on_process=on_process)
+    output = _run(
+        "runtime-readback", [str(python), "-I", "-c", script],
+        on_process=on_process, timeout=60.0,
+    )
     value = json.loads(output)
     if value["version"] != native_version(source):
         raise ValueError("installed adapter version differs from the native plugin")
@@ -135,7 +137,8 @@ def _ensure_runtime(source, *, prepare, on_process=None):
         env.pop("PYTHONPATH", None)
         _run("locked-runtime-install",
              [uv, "sync", "--project", str(source), "--locked", "--no-editable",
-              "--no-dev", "--python", sys.executable], env=env, on_process=on_process)
+              "--no-dev", "--python", sys.executable],
+             env=env, on_process=on_process, timeout=540.0)
         scripts = readback(python, source, on_process=on_process)
         atomic_write(complete, expected)
         return python, scripts

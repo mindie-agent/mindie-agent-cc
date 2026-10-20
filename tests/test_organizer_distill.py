@@ -216,7 +216,7 @@ class DistillWorkerTests(unittest.TestCase):
     def test_in_flight_returns_noop_without_a_paid_model_call(self):
         for task_state in ("in_flight", "verified_milestone"):
             with self.subTest(task_state=task_state):
-                outcome = "verified" if task_state == "in_flight" else "in_flight"
+                outcome = "observed" if task_state == "in_flight" else "in_flight"
                 request = make_request(task_state=task_state, outcome=outcome, repetitions=1)
                 with patch.object(organizer, "native_environment",
                                   return_value=dict(MODEL_ENV)), \

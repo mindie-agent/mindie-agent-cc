@@ -103,7 +103,8 @@ def missing_distill_api():
 
 
 def _distill_args(task_state="verified_milestone"):
-    return {"inputs": [dict(INPUTS[0])], "task_state": task_state}
+    outcome = "in_flight" if task_state == "in_flight" else INPUTS[0]["outcome"]
+    return {"inputs": [dict(INPUTS[0], outcome=outcome)], "task_state": task_state}
 
 
 class DistillCallUnitTests(unittest.TestCase):
@@ -234,7 +235,7 @@ class DistillCallUnitTests(unittest.TestCase):
         payload = rpc.call_args.args[2]
         for key, value in args.items():
             self.assertEqual(payload[key], value)
-        self.assertIsNone(rpc.call_args.kwargs["timeout"])
+        self.assertEqual(rpc.call_args.kwargs["timeout"], mcp_server.KNOWLEDGE_RPC_TIMEOUT)
 
     def test_distill_timeout_mirrors_the_shared_rpc_budget(self):
         from mindie_knowledge.loop import summary_budget

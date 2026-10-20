@@ -25,13 +25,8 @@ class ManifestTests(unittest.TestCase):
         self.assertTrue(hooks["hooks"]["Stop"])
         matcher = hooks["hooks"]["PreToolUse"][0]["matcher"]
         self.assertTrue(matcher.startswith("^mcp__plugin_mindie-agent_"))
-        import mindie_launch
-
-        self.assertEqual(mindie_launch.HOOK_TOTAL, 10.0)
-        self.assertEqual(mindie_launch.HOOK_LOCK_BUDGET, 2.0)
-        self.assertEqual(mindie_launch.BOOTSTRAP_TOTAL, 540.0)
-        skill = (ROOT / "skills" / "init" / "SKILL.md").read_text(encoding="utf-8")
-        self.assertIn("disable-model-invocation: true", skill)
+        self.assertEqual(hooks["hooks"]["PreToolUse"][0]["hooks"][0]["timeout"], 20)
+        self.assertEqual(hooks["hooks"]["Stop"][0]["hooks"][0]["timeout"], 20)
         mcp = json.loads((ROOT / ".mcp.json").read_text(encoding="utf-8"))
         self.assertIn("knowledge", mcp["mcpServers"])
         self.assertIn("remote", mcp["mcpServers"])

@@ -249,7 +249,8 @@ def test_stop_capture_failure_is_a_native_nonblocking_warning(tmp_path, failure)
     _, binding, event, env, model_marker, _ = capture_fixture(tmp_path)
     if failure == "schema":
         with closing(sqlite3.connect(store_file(tmp_path))) as db:
-            db.execute("DROP TABLE continuations")
+            db.execute("DROP TABLE captures")
+            db.execute("CREATE TABLE captures(id TEXT, turn TEXT, status TEXT)")
             db.commit()
     elif failure == "authority":
         (tmp_path / "mindie-consent.json").write_text("{PRIVATE_SENTINEL", encoding="utf-8")

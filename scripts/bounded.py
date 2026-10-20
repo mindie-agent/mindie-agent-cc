@@ -805,6 +805,7 @@ def run(
     stdin="",
     *,
     timeout=None,
+    deadline_at=None,
     env=None,
     cwd=None,
     max_output=MAX_OUTPUT,
@@ -826,6 +827,15 @@ def run(
     if timeout is not None and (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
                                 or not math.isfinite(timeout) or timeout <= 0):
         raise ValueError("an explicit execution timeout must be a positive finite number")
+    if deadline_at is not None:
+        if (isinstance(deadline_at, bool) or not isinstance(deadline_at, (int, float))
+                or not math.isfinite(deadline_at)):
+            raise ValueError("deadline_at must be a finite monotonic timestamp")
+        remaining = deadline_at - time.monotonic()
+        if remaining <= 0:
+            raise CommandTimedOut("command timed out before start")
+        effective_timeout = min(timeout, remaining) if timeout is not None else remaining
+        timeout = effective_timeout
     if terminal is not None and not callable(terminal):
         raise ValueError("terminal must be a predicate over accumulated stdout bytes")
     if type(core_managed) is not bool:

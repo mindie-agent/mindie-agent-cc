@@ -47,6 +47,7 @@ from product_contract import installed_version
 import rsi_explore
 
 MAX_YIELD_TIME_MS = 30000
+KNOWLEDGE_RPC_TIMEOUT = 30.0
 REMOTE_ERROR_CATEGORIES = frozenset({
     "internal", "caller", "validation", "permission", "remote_execution",
     "cancelled", "connection_capacity", "connection_timeout",
@@ -412,7 +413,10 @@ def _read_or_feedback_call(name, args, session, ensure_service, rpc):
     if routed_domain is not None and "domain" not in payload:
         payload["domain"] = routed_domain
     connection = ensure_service() if selected is None else ensure_service(selected)
-    result = rpc(connection, name.removeprefix("knowledge_"), payload, timeout=None)
+    result = rpc(
+        connection, name.removeprefix("knowledge_"), payload,
+        timeout=KNOWLEDGE_RPC_TIMEOUT,
+    )
     return rsi_explore.attach(result, body) if name == "knowledge_explain" else result
 
 
@@ -435,7 +439,9 @@ def knowledge_call(name, args, session):
         if routed_domain is not None:
             payload["domain"] = routed_domain
         connection = ensure_service() if selected is None else ensure_service(selected)
-        return rsi_explore.attach(rpc(connection, "query", payload, timeout=None), body)
+        return rsi_explore.attach(
+            rpc(connection, "query", payload, timeout=KNOWLEDGE_RPC_TIMEOUT), body
+        )
     if name == "knowledge_distill":
         return _knowledge_distill_call(args, session, ensure_service, rpc)
     if name in {"knowledge_explain", "knowledge_feedback"}:
@@ -452,7 +458,7 @@ def knowledge_call(name, args, session):
         connection,
         method,
         dict(args, _session_id=session, _session_verified=True),
-        timeout=None,
+        timeout=KNOWLEDGE_RPC_TIMEOUT,
     )
 
 
