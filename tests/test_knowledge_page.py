@@ -105,8 +105,9 @@ class KnowledgePageTests(unittest.TestCase):
 
         explain = next(item for item in mcp_server.KNOWLEDGE_TOOL_DEFS if item["name"] == "knowledge_explain")
         query = next(item for item in mcp_server.KNOWLEDGE_TOOL_DEFS if item["name"] == "knowledge_query")
-        self.assertEqual(set(explain["inputSchema"]["properties"]), {"ref"})
-        self.assertEqual(explain["inputSchema"]["required"], ["ref"])
+        self.assertEqual(set(explain["inputSchema"]["properties"]),
+                         {"ref", "refs", "conditions", "known_refs", "token_budget"})
+        self.assertEqual(explain["inputSchema"]["required"], [])
         self.assertNotIn("request_nonce", explain["inputSchema"]["properties"])
         self.assertIn("next_block_ref", explain["description"])
         self.assertIn("slice", explain["description"])
@@ -114,16 +115,108 @@ class KnowledgePageTests(unittest.TestCase):
         self.assertEqual(query["inputSchema"]["properties"]["limit"]["maximum"], 20)
         self.assertEqual(set(query["inputSchema"]["properties"]),
                          {"query", "limit", "conditions", "continuation", "domain",
-                          "domain_path", "token_budget", "include_unknown"})
+                          "domain_path", "token_budget", "include_unknown",
+                          "include_archived"})
         from jsonschema import validate
         validate({"query": "synthetic material"}, query["inputSchema"])
         validate({"continuation": "opaque-next-page", "limit": 3}, query["inputSchema"])
         validate({"query": "synthetic material", "domain_path": "ops/probes",
-                  "token_budget": 512, "include_unknown": True},
+                  "token_budget": 512, "include_unknown": True,
+                  "include_archived": True},
                  query["inputSchema"])
+        validate({"ref": "mindie://vllm-ascend/units/unit-a@1"}, explain["inputSchema"])
+        validate({"refs": ["unit-a@1", "unit-b@1"],
+                  "conditions": {"soc": "Ascend910B"},
+                  "known_refs": ["unit-a@1"], "token_budget": 1024},
+                 explain["inputSchema"])
+        validate({}, explain["inputSchema"])
         self.assertEqual(query["inputSchema"]["properties"]["token_budget"]["maximum"], 16000)
         for unsupported in ("oneOf", "anyOf", "allOf"):
             self.assertNotIn(unsupported, query["inputSchema"])
+
+    def test_feedback_schema_keeps_rating_compatible_with_usage_events(self):
+        import mcp_server
+        from jsonschema import ValidationError, validate
+
+        feedback = next(
+            item for item in mcp_server.KNOWLEDGE_TOOL_DEFS
+            if item["name"] == "knowledge_feedback")
+        schema = feedback["inputSchema"]
+        self.assertEqual(set(schema["properties"]),
+                         {"ref", "rating", "reason", "event_type", "run_id",
+                          "step_id", "outcome"})
+        self.assertEqual(schema["required"], ["ref"])
+        validate({"ref": "mindie://vllm-ascend/units/unit-a@1"}, schema)
+        validate({
+            "ref": "mindie://vllm-ascend/units/unit-a@1",
+            "event_type": "evaluated", "run_id": "run-1", "step_id": "step-1",
+            "outcome": "supported",
+        }, schema)
+        validate({
+            "ref": "mindie://vllm-ascend/units/unit-a@1",
+            "event_type": "applied", "run_id": "run-1", "step_id": "step-1",
+        }, schema)
+        for invalid in (
+            {"ref": "x", "event_type": "seen"},
+            {"ref": "x", "outcome": "maybe"},
+            {"rating": "up"},
+        ):
+            with self.subTest(invalid=invalid), self.assertRaises(ValidationError):
+                validate(invalid, schema)
+
+    def test_batch_explain_forwards_refs_conditions_and_visible_refs(self):
+        import mcp_server
+        from unittest.mock import patch
+
+        connection = {"url": "http://127.0.0.1:1", "token": "synthetic-token"}
+        args = {
+            "refs": ["unit-alpha@1", "unit-beta@1"],
+            "conditions": {"soc": "Ascend910B"},
+            "known_refs": ["unit-alpha@1"],
+            "token_budget": 2048,
+        }
+        with patch("knowledge_service.ensure_service", return_value=connection), \
+                patch("mindie_knowledge.loop.cli.rpc",
+                      return_value={"units": [], "requires": []}) as rpc:
+            self.assertEqual(
+                mcp_server.knowledge_call("knowledge_explain", args, SESSION),
+                {"units": [], "requires": []},
+            )
+        self.assertEqual(rpc.call_args.args[0], connection)
+        self.assertEqual(rpc.call_args.args[1], "explain")
+        payload = rpc.call_args.args[2]
+        for key, value in args.items():
+            self.assertEqual(payload[key], value)
+        self.assertNotIn("ref", payload)
+        self.assertEqual(payload["_session_id"], SESSION)
+        self.assertIsNone(rpc.call_args.kwargs["timeout"])
+
+    def test_batch_explain_rejects_conflicting_domain_authorities_before_service(self):
+        import mcp_server
+        from unittest.mock import patch
+
+        args = {"refs": ["mindie://alpha/units/unit-a@1",
+                         "mindie://beta/units/unit-b@1"]}
+        with patch("knowledge_service.ensure_service") as ensure, \
+                patch("mindie_knowledge.loop.cli.rpc") as rpc:
+            with self.assertRaisesRegex(ValueError, "domain authorit"):
+                mcp_server.knowledge_call("knowledge_explain", args, SESSION)
+        ensure.assert_not_called()
+        rpc.assert_not_called()
+
+    def test_explain_requires_ref_or_nonempty_string_refs(self):
+        import mcp_server
+        from unittest.mock import patch
+
+        for args in ({}, {"refs": []}, {"refs": "unit-alpha@1"}, {"refs": [""]},
+                     {"refs": ["unit-alpha@1", 7]}):
+            with self.subTest(args=args), \
+                    patch("knowledge_service.ensure_service") as ensure, \
+                    patch("mindie_knowledge.loop.cli.rpc") as rpc:
+                with self.assertRaises(ValueError):
+                    mcp_server.knowledge_call("knowledge_explain", args, SESSION)
+                ensure.assert_not_called()
+                rpc.assert_not_called()
 
     def test_query_rejects_invalid_arguments_before_starting_service(self):
         import mcp_server

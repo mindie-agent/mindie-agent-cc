@@ -33,7 +33,7 @@ from mindie_knowledge import consent_store  # noqa: E402
 from mindie_knowledge.loop.activation import Admission  # noqa: E402
 from mindie_knowledge.loop.cli import rpc as shared_rpc  # noqa: E402
 from mindie_knowledge.loop.engine import Engine  # noqa: E402
-from mindie_knowledge.loop.store import Store  # noqa: E402
+from mindie_knowledge.loop.store import Store, session_key  # noqa: E402
 from mindie_knowledge.loop.transport import Service  # noqa: E402
 
 SESSION = "645fae2e-ef23-4e7d-9559-f4dd0cb9db6a"
@@ -145,7 +145,8 @@ class DistillCallUnitTests(unittest.TestCase):
         tools = {item["name"]: item for item in response["result"]["tools"]}
         self.assertIn("knowledge_distill", tools)
         schema = tools["knowledge_distill"]["inputSchema"]
-        self.assertEqual(set(schema["properties"]), {"inputs", "task_state", "domain"})
+        self.assertEqual(set(schema["properties"]),
+                         {"inputs", "task_state", "domain", "related_refs", "proposal"})
         self.assertEqual(schema["required"], ["inputs", "task_state"])
         self.assertNotIn("_session_id", json.dumps(schema))
         self.assertNotIn("_activation", json.dumps(schema))
@@ -203,6 +204,54 @@ class DistillCallUnitTests(unittest.TestCase):
                  patch("knowledge_service.ensure_service") as ensure:
                 with self.assertRaises(ValueError):
                     mcp_server.knowledge_call("knowledge_distill", args, SESSION)
+            gate.assert_not_called()
+            ensure.assert_not_called()
+
+    def test_distill_forwards_related_refs_and_foreground_proposal(self):
+        connection = {"url": "http://127.0.0.1:1", "token": "service-token"}
+        proposal = {
+            "schema_version": "mindie-distill-decision/1",
+            "session_digest": "a" * 64,
+            "evidence_inputs": ["experiment_ledger"],
+            "action": "noop",
+            "drop_reason": "already_covered",
+            "units": [],
+        }
+        args = {
+            **_distill_args(),
+            "related_refs": ["unit-existing-fixture"],
+            "proposal": proposal,
+        }
+        with patch("admission.gate") as gate, \
+             patch("knowledge_service.ensure_service", return_value=connection), \
+             patch("mcp_server._distill_timeout", return_value=90.0), \
+             patch("mindie_knowledge.loop.cli.rpc",
+                   return_value={"status": "noop"}) as rpc:
+            gate.return_value.check.return_value = {"token": "activation-token"}
+            answer = mcp_server.knowledge_call("knowledge_distill", args, SESSION)
+        self.assertEqual(answer, {"status": "noop"})
+        payload = rpc.call_args.args[2]
+        self.assertEqual(payload["related_refs"], ["unit-existing-fixture"])
+        self.assertEqual(payload["proposal"], proposal)
+        self.assertEqual(payload["_activation"], "activation-token")
+        self.assertEqual(rpc.call_args.kwargs["timeout"], 90.0)
+
+    def test_distill_rejects_bad_related_refs_or_proposal_before_service(self):
+        bad = [
+            {"related_refs": "unit-existing-fixture"},
+            {"related_refs": ["unit-existing-fixture", 7]},
+            {"related_refs": [""]},
+            {"proposal": []},
+            {"proposal": "mindie-distill-decision/1"},
+            {"unexpected": True},
+        ]
+        for extra in bad:
+            with self.subTest(extra=extra), \
+                 patch("admission.gate") as gate, \
+                 patch("knowledge_service.ensure_service") as ensure:
+                with self.assertRaises(ValueError):
+                    mcp_server.knowledge_call(
+                        "knowledge_distill", {**_distill_args(), **extra}, SESSION)
             gate.assert_not_called()
             ensure.assert_not_called()
 
@@ -361,6 +410,52 @@ class DistillEndToEndTests(unittest.TestCase):
         self.assertEqual(query["structuredContent"]["token_budget"], 500)
         self.assertEqual(query["structuredContent"]["results"][0]["id"],
                          "unit-mcp-distill-fixture")
+
+    def test_batch_explain_reads_the_installed_unit_closure(self):
+        admission.activate(SESSION, project_root=self.tmp / "project")
+        applied = self._call(10, "knowledge_distill", _distill_args())
+        self.assertFalse(applied["isError"], applied)
+        ref = f"mindie://{self.store.domain}/units/unit-mcp-distill-fixture@1"
+
+        explained = self._call(11, "knowledge_explain", {
+            "refs": [ref],
+            "conditions": {"soc": "Ascend910B"},
+            "known_refs": [],
+            "token_budget": 2048,
+        })
+        self.assertFalse(explained["isError"], explained)
+        page = explained["structuredContent"]
+        self.assertEqual(page["domain"], self.store.domain)
+        self.assertEqual([unit["id"] for unit in page["units"]],
+                         ["unit-mcp-distill-fixture"])
+        self.assertEqual(page["units"][0]["ref"], ref)
+        self.assertIn("Apply the fixture rule", page["units"][0]["content"])
+        self.assertEqual(page["unresolved"], [])
+        self.assertIn("usage", page)
+
+    def test_foreground_proposal_applies_without_a_model_call(self):
+        admission.activate(SESSION, project_root=self.tmp / "project")
+        proposal = {
+            "schema_version": "mindie-distill-decision/1",
+            "session_digest": session_key(SESSION),
+            "evidence_inputs": ["experiment_ledger"],
+            "action": "noop",
+            "drop_reason": "already_covered",
+            "units": [],
+        }
+        response = self._call(12, "knowledge_distill", {
+            **_distill_args(),
+            "related_refs": ["unit-existing-fixture"],
+            "proposal": proposal,
+        })
+        self.assertFalse(response["isError"], response)
+        result = response["structuredContent"]
+        self.assertEqual(result["status"], "noop")
+        self.assertEqual(result["decision"], proposal)
+        self.assertEqual(result["model_calls"], 0)
+        self.assertEqual(result["model_execution"], "foreground_proposal")
+        self.assertEqual(result["operation_status"], "completed")
+        self.assertFalse(self.calls.exists())
 
     def test_failed_or_uncertain_distill_is_not_a_successful_tool_result(self):
         admission.activate(SESSION, project_root=self.tmp / "project")
