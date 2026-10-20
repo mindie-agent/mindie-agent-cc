@@ -69,6 +69,8 @@ KNOWLEDGE_TOOL_DEFS = [
         description=(
             "Search graded rules and task material in the selected domain. Each match has a readable ref "
             "and feedback_ref for its observed revision. Pass known task conditions to filter graded rules. "
+            "Graded corpora return bounded cards plus deduplicated foundation_cards; include_archived "
+            "also discovers archived or superseded units when investigating old conclusions. "
             "For related task blocks, pass related_next as continuation without query. "
             "A changed corpus rejects the continuation. References are advisory."
         ),
@@ -86,6 +88,7 @@ KNOWLEDGE_TOOL_DEFS = [
                 domain_path={"type": "string"},
                 token_budget={"type": "integer", "minimum": 1, "maximum": 16000},
                 include_unknown={"type": "boolean"},
+                include_archived={"type": "boolean"},
             ),
             additionalProperties=False,
         ),
@@ -93,32 +96,55 @@ KNOWLEDGE_TOOL_DEFS = [
     dict(
         name="knowledge_explain",
         description=(
-            "Read one domain reference: a graded-unit ref returns its exact current revision and conditions; "
-            "a task ref returns the current navigation and "
-            "first_block_ref; a block ref returns that immutable block with "
-            "previous_block_ref/next_block_ref for walking the task. "
-            "The content is a reference slice, not the full case or a verified report."
+            "Read one domain reference or a batch of exact unit references. A single ref keeps the "
+            "historical contract: a graded-unit ref returns its exact current revision and conditions; "
+            "a task ref returns the current navigation and first_block_ref; a block ref returns that "
+            "immutable block with previous_block_ref/next_block_ref for walking the task. "
+            "Batch refs return the shared dependency closure once in requires and full unit bodies "
+            "in units, using conditions and known_refs (only exact id@revision units still fully "
+            "visible) to avoid re-sending visible bodies; unresolved reports condition or budget "
+            "exclusions instead of truncated steps. The content is a reference slice, not the full "
+            "case or a verified report."
         ),
         inputSchema=dict(
             type="object",
             properties=dict(
                 ref={"type": "string"},
+                refs={"type": "array", "items": {"type": "string"}},
+                conditions={"type": "object"},
+                known_refs={"type": "array", "items": {"type": "string"}},
+                token_budget={"type": "integer", "minimum": 1, "maximum": 16000},
             ),
-            required=["ref"],
+            required=[],
             additionalProperties=False,
         ),
     ),
     dict(
         name="knowledge_feedback",
-        description="Optional up/down vote: copy the exact feedback_ref returned by query/explain into ref. Never required.",
+        description=(
+            "Record optional usage evidence for an exact observed ref: the historical up/down rating, "
+            "or a 4-stage usage event (discovered, loaded, applied, evaluated). evaluated requires "
+            "run_id and outcome. Copy the exact feedback_ref returned by query/explain into ref. "
+            "Never required."
+        ),
         inputSchema=dict(
             type="object",
             properties=dict(
                 ref={"type": "string"},
                 rating={"type": "string", "enum": ["up", "down"]},
                 reason={"type": "string"},
+                event_type={
+                    "type": "string",
+                    "enum": ["discovered", "loaded", "applied", "evaluated"],
+                },
+                run_id={"type": "string"},
+                step_id={"type": "string"},
+                outcome={
+                    "type": "string",
+                    "enum": ["supported", "refuted", "inconclusive"],
+                },
             ),
-            required=["ref", "rating"],
+            required=["ref"],
             additionalProperties=False,
         ),
     ),
@@ -129,8 +155,11 @@ KNOWLEDGE_TOOL_DEFS = [
             "shared runtime redacts the selected inputs before the model call. This "
             "requires the current active capture lease and saved contribution "
             "authorization. task_state is explicit; an ordinary Stop does not mean "
-            "completion. This is one paid native model call: it never discovers "
-            "transcripts, grants publication, or retries an uncertain result."
+            "completion. Pass related_refs to compare the new evidence against existing units, "
+            "or a foreground mindie-distill-decision/1 proposal for deterministic validation "
+            "and application without another model call. This is one paid native model call "
+            "when no proposal is supplied: it never discovers transcripts, grants publication, "
+            "or retries an uncertain result."
         ),
         inputSchema=dict(
             type="object",
@@ -172,6 +201,8 @@ KNOWLEDGE_TOOL_DEFS = [
                     "type": "string",
                     "description": "Optional configured domain name; omit for the installation default.",
                 },
+                related_refs={"type": "array", "items": {"type": "string"}},
+                proposal={"type": "object"},
             ),
             required=["inputs", "task_state"],
             additionalProperties=False,
@@ -287,12 +318,24 @@ def _distill_timeout():
 def _knowledge_distill_call(args, session, ensure_service, rpc):
     """Forward one paid C6 request through the selected engine's own lease."""
     allowed = {"inputs", "task_state"}
-    if isinstance(args, dict) and "domain" in args:
-        allowed.add("domain")
+    if isinstance(args, dict):
+        for optional in ("domain", "related_refs", "proposal"):
+            if optional in args:
+                allowed.add(optional)
     if not isinstance(args, dict) or set(args) != allowed:
         raise ValueError(
-            "knowledge_distill accepts only inputs, task_state and optional domain"
+            "knowledge_distill accepts only inputs, task_state, related_refs, proposal "
+            "and optional domain"
         )
+    if "related_refs" in args:
+        related_refs = args["related_refs"]
+        if not isinstance(related_refs, list) or not all(
+                isinstance(item, str) and item for item in related_refs):
+            raise ValueError(
+                "related_refs must be an array of nonempty stable unit IDs or graded references"
+            )
+    if "proposal" in args and not isinstance(args["proposal"], dict):
+        raise ValueError("proposal must be a mindie-distill-decision/1 object")
     domain = _public_domain(args)
     try:
         from mindie_knowledge.graded import distill
@@ -332,9 +375,12 @@ def _knowledge_distill_call(args, session, ensure_service, rpc):
 
 
 def _read_or_feedback_call(name, args, session, ensure_service, rpc):
-    from knowledge_service import select_engine
+    from knowledge_service import select_engine_for_refs
 
-    selected, routed_domain = select_engine(ref=args.get("ref"))
+    # A single ref keeps its URI authority. A batch routes by its first ref,
+    # but two different mindie:// authorities must never share one response.
+    selected, routed_domain = select_engine_for_refs(
+        args.get("refs"), ref=args.get("ref"))
     payload = dict(args, _session_id=session, _session_verified=True)
     if routed_domain is not None and "domain" not in payload:
         payload["domain"] = routed_domain
