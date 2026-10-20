@@ -252,8 +252,6 @@ def publish_bind(
                 )
                 return "bound"
             other, tool, stored_args, stored_digest, status = row
-            if parse_native_tool(tool_name) is None:
-                raise ValueError("tool is not this plugin's MCP tool")
             same = (
                 other == session_id
                 and tool == tool_name
