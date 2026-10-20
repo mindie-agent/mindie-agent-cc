@@ -6,7 +6,8 @@ Computes deterministic source/product/dependency digests (`product-contract.json
 
 [Invariants]
 - `uv.lock` is the sole dependency authority, requiring exact 40-hex commit pins
-  for `mindie-knowledge`, `remote-dev`, and `mindie-diagnostics`.
+  for `mindie-knowledge`, `remote-dev`, and `mindie-diagnostics`; a declared
+  `project.dependencies` block in `pyproject.toml` must agree with those pins.
 - Exit status stays authoritative in `failure_receipt`.
 
 [Timeouts & Locks]
@@ -163,7 +164,7 @@ def read_json(path):
 
 
 def requirements(source):
-    """The complete uv lock is the dependency authority, including Git sources."""
+    """Read exact runtime pins from uv.lock and reject pyproject.toml drift."""
     path = Path(source) / "uv.lock"
     if not path.is_file():
         raise ValueError("uv.lock must be a regular file")
@@ -187,6 +188,35 @@ def requirements(source):
         pins[name] = match[1]
     if set(pins) != set(expected):
         raise ValueError("invalid runtime package combination")
+    project_path = Path(source) / "pyproject.toml"
+    if project_path.is_file():
+        project = tomllib.loads(project_path.read_text(encoding="utf-8")).get("project")
+        dependencies = project.get("dependencies") if isinstance(project, dict) else None
+        if dependencies is not None:
+            if not isinstance(dependencies, list):
+                raise ValueError("pyproject.toml and uv.lock runtime pins differ")
+            declared = set()
+            for dependency in dependencies:
+                if not isinstance(dependency, str):
+                    raise ValueError("pyproject.toml and uv.lock runtime pins differ")
+                reference = re.fullmatch(
+                    r"(?P<name>[A-Za-z0-9_.-]+)(?:\[[^\]]*\])?\s*@\s*"
+                    r"(?P<url>git\+\S+)", dependency,
+                )
+                if reference is None:
+                    continue
+                name = reference["name"]
+                if name not in expected:
+                    continue
+                match = re.fullmatch(
+                    r"git\+https://github\.com/mindie-agent/"
+                    r"(?P<repo>[A-Za-z0-9_.-]+)@(?P<rev>[0-9a-f]{40})",
+                    reference["url"],
+                )
+                if (match is None or match["repo"] != expected[name]
+                        or pins[name] != match["rev"] or name in declared):
+                    raise ValueError("pyproject.toml and uv.lock runtime pins differ")
+                declared.add(name)
     return pins, hashlib.sha256(raw).hexdigest()
 
 

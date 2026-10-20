@@ -106,7 +106,8 @@ class KnowledgePageTests(unittest.TestCase):
         explain = next(item for item in mcp_server.KNOWLEDGE_TOOL_DEFS if item["name"] == "knowledge_explain")
         query = next(item for item in mcp_server.KNOWLEDGE_TOOL_DEFS if item["name"] == "knowledge_query")
         self.assertEqual(set(explain["inputSchema"]["properties"]),
-                         {"ref", "refs", "conditions", "known_refs", "token_budget"})
+                         {"ref", "refs", "conditions", "known_refs", "token_budget",
+                          "run_id"})
         self.assertEqual(explain["inputSchema"]["required"], [])
         self.assertNotIn("request_nonce", explain["inputSchema"]["properties"])
         self.assertIn("next_block_ref", explain["description"])
@@ -116,7 +117,7 @@ class KnowledgePageTests(unittest.TestCase):
         self.assertEqual(set(query["inputSchema"]["properties"]),
                          {"query", "limit", "conditions", "continuation", "domain",
                           "domain_path", "token_budget", "include_unknown",
-                          "include_archived"})
+                          "include_archived", "navigation_only", "run_id"})
         from jsonschema import validate
         validate({"query": "synthetic material"}, query["inputSchema"])
         validate({"continuation": "opaque-next-page", "limit": 3}, query["inputSchema"])
@@ -144,7 +145,7 @@ class KnowledgePageTests(unittest.TestCase):
         schema = feedback["inputSchema"]
         self.assertEqual(set(schema["properties"]),
                          {"ref", "rating", "reason", "event_type", "run_id",
-                          "step_id", "outcome"})
+                          "step_id", "outcome", "evidence_source"})
         self.assertEqual(schema["required"], ["ref"])
         validate({"ref": "mindie://vllm-ascend/units/unit-a@1"}, schema)
         validate({
