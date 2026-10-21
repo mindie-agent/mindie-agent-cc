@@ -20,6 +20,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 import unittest
 import uuid
 from pathlib import Path
@@ -40,6 +41,8 @@ _ENV_KEYS = (
     "PYTHONDONTWRITEBYTECODE",
 )
 
+_SERVICE_EXIT_TIMEOUT = 60.0
+
 
 def _service_pids(root: Path) -> list[int]:
     needle = str(root)
@@ -55,7 +58,8 @@ def _service_pids(root: Path) -> list[int]:
         )
         listing = subprocess.run(
             ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
-            capture_output=True, text=True, timeout=15, check=True,
+            capture_output=True, text=True, timeout=30, check=True,
+            stdin=subprocess.DEVNULL,
             env=dict(os.environ, MINDIE_TEST_SERVICE_ROOT=needle),
         )
         return [int(line) for line in listing.stdout.splitlines()
@@ -67,6 +71,7 @@ def _service_pids(root: Path) -> list[int]:
         text=True,
         timeout=5,
         check=False,
+        stdin=subprocess.DEVNULL,
     )
     for raw in listing.stdout.splitlines():
         line = raw.strip()
@@ -82,12 +87,49 @@ def _service_pids(root: Path) -> list[int]:
     return found
 
 
+def _service_pids_until(root: Path, deadline: float) -> list[int]:
+    """Return service PIDs, retrying a slow process query until ``deadline``."""
+    while True:
+        try:
+            return _service_pids(root)
+        except subprocess.TimeoutExpired:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.2)
+
+
+def _wait_for_service_exit(root: Path, timeout: float = _SERVICE_EXIT_TIMEOUT) -> None:
+    """Wait until no service process for ``root`` remains.
+
+    A cold CIM/WMI query can take tens of seconds on a loaded Windows runner.
+    Retry a timed-out query until the deadline; only fail if the service is
+    still present (or unobservable) once that deadline has passed.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            pids = _service_pids_until(root, deadline)
+        except subprocess.TimeoutExpired as exc:
+            raise AssertionError(
+                f"process query for {root} timed out before the service exited"
+            ) from exc
+        if not pids:
+            return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise AssertionError(f"service did not exit for {root}: {pids}")
+        time.sleep(min(0.2, remaining))
+
+
 def reap_services(root: Path) -> None:
-    for pid in _service_pids(root):
+    pids = _service_pids_until(root, time.monotonic() + _SERVICE_EXIT_TIMEOUT)
+    for pid in pids:
         try:
             os.kill(pid, signal.SIGTERM)
         except OSError:
             pass
+    if pids:
+        _wait_for_service_exit(root)
 
 
 # Explicit local checkout of the mindie-knowledge pin in uv.lock.
