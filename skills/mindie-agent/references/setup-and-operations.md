@@ -2,6 +2,8 @@
 
 Load this reference **only** when the user is performing first-time setup, configuring or changing community experience contribution, configuring fault reporting, or troubleshooting capture status.
 
+For setup or a GitHub authentication failure, follow [GitHub Sign-In](github-authentication.md). Reuse existing authentication; offer browser login or enterprise-network token creation/input only when needed.
+
 ## 1. Community Experience Contribution Setup
 
 - **Default Automatic Loop After Opt-In**: Once contribution is configured and enabled for the approved project scope, eligible native `Stop` events automatically capture the current task's public transcript, run deterministic local redaction + Gitleaks scanning, and prepare a knowledge PR in the background. Users never need to ask to save experience at the end of each task.
