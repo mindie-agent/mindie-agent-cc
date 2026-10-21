@@ -112,13 +112,20 @@ If you are an AI Agent asked by the user to install this plugin, run the followi
    ```
    > Note: `claude --init-only` runs `SessionStart` without starting a conversation or calling a model, allowing `uv` to provision Python 3.13 and install the locked runtime ahead of time.
 
-4. **Verify installation and MCP server health**:
+4. **Verify plugin installation**:
    ```sh
    claude plugin list --json
    claude mcp list
    ```
    - Confirm `claude plugin list --json` shows `mindie-agent@mindie-agent-cc` (`0.0.3`) enabled with `user` scope.
    - Confirm `claude mcp list` reports both `mindie-knowledge` and `remote-dev` as `Connected`, then report the verified GitHub account (`$GH_USER`), and plugin readiness to the user.
+
+   Continue with step 5 after verification, then report the complete setup result.
+
+5. **Finish first-time setup and development workspace onboarding**:
+   - In this installation, present the existing [user notice](skills/mindie-agent/references/user-notice.md), then follow [Workspace Setup](skills/mindie-agent/references/workspace-setup.md). Offer creating and initializing `vllm-ascend-workspace`, reusing a directory, or keeping the current one even when contribution is disabled. Reuse choices already made.
+   - Approval to create or reuse includes automatically adding the selected path through the current harness's native project/workspace entry and checking the result. Initialize sources through the checkout's `repo_init.py`, reusing the verified GitHub authentication and saved fork configuration.
+   - Report plugin status, workspace path, native registration and source initialization together, including any remaining native UI action.
 
 </details>
 
@@ -133,6 +140,8 @@ claude plugin install mindie-agent@mindie-agent-cc --scope user && \
 claude --init-only && \
 claude mcp list
 ```
+
+After the commands, enter **`/mindie-agent help me finish first-time setup`** in a new session and complete [Workspace Setup](skills/mindie-agent/references/workspace-setup.md) as part of installation. The agent reuses GitHub authentication, offers workspace creation/reuse and adds the approved path to the current client. Keeping the current directory also completes the offer.
 
 #### Environment Notes
 - **Prerequisites (Hard Requirements)**: `git`, `uv`, an authenticated **`gh` (GitHub CLI)**, and an authenticated Claude Code (the compatibility contract lists Claude Code `2.1.269` and `2.1.299`; see [`harness-compatibility.json`](harness-compatibility.json)).
