@@ -26,7 +26,7 @@ For setup or a GitHub authentication failure, follow [GitHub Sign-In](github-aut
 
 During installation or first-use setup:
 1. Present [用户须知](user-notice.md) (which explains visible-message sharing, redaction limits, model-provider processing, and public Git history).
-2. Follow [optional workspace setup](workspace-setup.md): recommend the multi-worktree workspace (`vllm` + `vllm-ascend`), ask whether and where to create it, and after creation ask whether to initialize it. Reuse prior answers and offer this only during setup rather than ordinary task execution.
+2. Follow [workspace setup](workspace-setup.md) even when contribution is disabled: offer creation and initialization, reuse or the current directory. Approved creation/reuse includes native workspace registration; reuse prior answers and the checked-out `repo_init.py` configuration. Offer this only during setup rather than ordinary task execution.
 3. **Unified Contribution & Fault-Reporting Switch**:
    - Resolve the installation's base adapter configuration (`base_config` in a runtime binding); `base_config.parent / "mindie-consent.json"` is the sole choice authority. Use the native entry, not direct file edits.
    - Community knowledge sharing and automatic tool fault reporting share a single persistent choice in `<adapter-config-directory>/mindie-consent.json`, authorizing both scoped knowledge PRs and sanitized product fault Issues.

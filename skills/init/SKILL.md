@@ -41,6 +41,8 @@ For setup or a GitHub authentication failure, follow [GitHub Sign-In](../mindie-
 
 During installation or first-use setup, present the [user notice](../mindie-agent/references/user-notice.md),
 then follow [optional workspace setup](../mindie-agent/references/workspace-setup.md).
-Reuse the user's creation and initialization decisions.
+Run the workspace offer even when contribution is disabled. Reuse the user's
+creation and initialization decisions; approved creation/reuse includes adding
+the path to the native client workspace without a second registration question.
 
 $ARGUMENTS
