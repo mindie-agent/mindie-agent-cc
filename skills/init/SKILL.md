@@ -37,6 +37,8 @@ missing permission. Saved `disabled`, `read-only` and `later` choices remain
 unchanged without prompting, and ordinary tasks do not ask again. Remote-dev
 works without this binding.
 
+For setup or a GitHub authentication failure, follow [GitHub Sign-In](../mindie-agent/references/github-authentication.md). Reuse existing authentication; offer browser login or enterprise-network token creation/input only when needed.
+
 During installation or first-use setup, present the [user notice](../mindie-agent/references/user-notice.md),
 then follow [optional workspace setup](../mindie-agent/references/workspace-setup.md).
 Reuse the user's creation and initialization decisions.

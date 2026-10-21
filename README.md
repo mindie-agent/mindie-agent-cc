@@ -93,12 +93,11 @@ MindIE Agent 采用**「领域知识与 Skill 手动按需触发 + 远端开发�
    git --version
    uv --version
    gh --version
-   gh auth status
-   GH_USER=$(gh api user --jq .login) && echo "GitHub channel verified for account: $GH_USER"
-   gh auth setup-git
+   GH_USER=$(gh api --hostname github.com user --jq .login) && echo "GitHub channel verified for account: $GH_USER"
+   gh auth setup-git --hostname github.com
    claude --version
    ```
-   - **硬性门禁（严禁跳过或静默忽略）**：若未安装 `gh`，请先协助安装（macOS：`brew install gh`；Windows：`winget install --id GitHub.cli`；Ubuntu / WSL：`sudo apt update && sudo apt install -y gh`）；若 `gh auth status` 未登录或 `gh api user` 失败，**请勿继续执行后续步骤**，立即引导用户完成 `gh auth login` 并运行 `gh auth setup-git`，直至 `gh api user --jq .login` 稳定返回当前 GitHub 账号名。
+   - **硬性门禁（严禁跳过或静默忽略）**：若未安装 `gh`，请先协助安装（macOS：`brew install gh`；Windows：`winget install --id GitHub.cli`；Ubuntu / WSL：`sudo apt update && sudo apt install -y gh`）。账号读取成功时复用已有认证；需要登录时按 [GitHub 登录引导](skills/mindie-agent/references/github-authentication.md) 选择方式：普通网络使用浏览器，企业网络或浏览器授权受阻时优先 Token。已有 Token 就在 `gh` 隐藏输入提示中粘贴（或使用已提供的私有文件），没有则引导创建。验证账号、Git 和后续进程可复用凭据后继续；网络/证书错误先修复传输，不反复要求登录。
    - 确认 `claude --version` 为当前发行版 `v0.0.3` 声明支持的精确版本：`2.1.269` 或 `2.1.299`（定义于 [`harness-compatibility.json`](harness-compatibility.json)）。
    - 若在 **Linux 或 Windows WSL** 下使用后台知识服务，请额外执行 `systemctl --user show --property=Version` 确认 `systemd >= 254` 且可访问（WSL 内须使用 Linux 原生 `claude`、`git`、`uv` 与 `gh`）。
 
@@ -128,7 +127,7 @@ MindIE Agent 采用**「领域知识与 Skill 手动按需触发 + 远端开发�
 如果你习惯在终端手动执行（macOS / Linux / WSL 终端或原生 Windows PowerShell），可直接运行：
 
 ```sh
-gh auth status && gh auth setup-git && \
+gh api --hostname github.com user --jq .login && gh auth setup-git --hostname github.com && \
 claude plugin marketplace add "https://github.com/mindie-agent/mindie-agent-cc.git#v0.0.3" && \
 claude plugin install mindie-agent@mindie-agent-cc --scope user && \
 claude --init-only && \
