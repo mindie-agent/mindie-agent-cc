@@ -15,23 +15,37 @@ in the configured Python runtime.
   atomic write boundary.
 """
 import json
-import subprocess
 import sys
+
+import bounded
 
 SCRIPT = """
 import json, sys
 from mindie_knowledge.loop.settings import CommunityWriteContext
 request = json.load(sys.stdin)
-with CommunityWriteContext(request['path']) as context:
-    result = context.configure(request['path'], request['settings'])
+try:
+    with CommunityWriteContext(request['path']) as context:
+        result = context.configure(request['path'], request['settings'])
+except Exception as exc:
+    print(json.dumps(dict(status='failed', error_type=type(exc).__name__,
+                          error=str(exc)[:240])))
+    raise SystemExit(1)
 print(json.dumps(result.raw))
 """
 
 def configure(path, settings, python=None):
-    completed = subprocess.run([str(python or sys.executable), '-c', SCRIPT],
-        input=json.dumps(dict(path=str(path), settings=settings)).encode('utf-8'),
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30,
-        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-    if completed.returncode:
-        raise SystemExit('shared community configuration failed; nothing was written; existing bytes preserved')
-    return json.loads(completed.stdout)
+    request = json.dumps(dict(path=str(path), settings=settings))
+    try:
+        output = bounded.run(
+            [str(python or sys.executable), '-c', SCRIPT],
+            input_text=request, timeout=30.0,
+        )
+    except (OSError, RuntimeError) as exc:
+        detail = getattr(exc, 'mindie_output', '') or getattr(exc, 'mindie_stderr', '')
+        detail = detail.strip()[:400] if isinstance(detail, str) else ''
+        message = ('shared community configuration failed; nothing was written; '
+                   'existing bytes preserved')
+        if detail:
+            message += '; ' + detail
+        raise SystemExit(message) from exc
+    return json.loads(output)

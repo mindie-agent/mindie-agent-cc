@@ -47,6 +47,8 @@ def _store(path: Path, data: dict) -> None:
     os.replace(tmp, path)
     try:
         path.chmod(0o600)
+    except TimeoutError:
+        raise
     except OSError:
         pass
 

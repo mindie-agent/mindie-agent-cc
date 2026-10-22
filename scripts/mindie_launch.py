@@ -69,6 +69,8 @@ def _config_path() -> Path:
 def _load_config():
     try:
         data = json.loads(_config_path().read_text(encoding="utf-8"))
+    except TimeoutError:
+        raise
     except (OSError, ValueError):
         return None
     return data if isinstance(data, dict) else None
@@ -198,6 +200,8 @@ def _read_hook_stdin(deadline):
             while True:
                 try:
                     chunk = os.read(fd, 65536)
+                except TimeoutError:
+                    raise
                 except (OSError, ValueError):
                     return
                 if not chunk:
@@ -522,6 +526,8 @@ def _mcp(surface: str) -> int:
                 if pending.get(ident) is cancel:
                     pending.pop(ident)
             send(response)
+        except TimeoutError:
+            raise
         except OSError:
             transport_closed.set()
             with pending_lock:

@@ -146,6 +146,8 @@ def _read_regular_json(path):
             return "unavailable", None
         with path.open("rb") as stream:
             blob = stream.read(_META_LIMIT + 1)
+    except TimeoutError:
+        raise
     except OSError:
         return "unavailable", None
     if len(blob) > _META_LIMIT:
@@ -177,6 +179,8 @@ def _installation_view():
         elif maintenance is not None:
             result["maintenance"] = maintenance
         return result
+    except TimeoutError:
+        raise
     except (OSError, ValueError, TypeError, KeyError):
         return {"status": "unavailable", "code_updates": "native-marketplace"}
 
@@ -193,6 +197,8 @@ def _knowledge_status_payload(session=None):
 
     try:
         sharing_view, saved = public_status(), consent_mod.load()
+    except TimeoutError:
+        raise
     except (OSError, ValueError, TypeError, KeyError) as exc:
         return dict(
             configured=None,
@@ -264,6 +270,8 @@ def status_payload(session=None):
     payload = dict(_knowledge_status_payload(session))
     try:
         consent_mod.load()
+    except TimeoutError:
+        raise
     except (OSError, ValueError) as exc:
         payload["reporting"] = dict(status="unavailable",
                                     error=dict(stage="consent_path", type=type(exc).__name__))
@@ -441,6 +449,8 @@ def _apply_contribute(payload, session, event, configured):
         return payload
     try:
         result = sharing_mod.write_enabled(**parsed)
+    except TimeoutError:
+        raise
     except (ValueError, OSError) as exc:
         payload["contribute"] = dict(recorded=False, error=str(exc)[:200])
         return payload

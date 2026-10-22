@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import atexit
 import json
 import os
 from pathlib import Path
 import sys
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 FIXTURES = ROOT / "tests" / "fixtures"
+SCANNER_ROOT = tempfile.TemporaryDirectory(prefix="mindie-cc-scanner-tests-")
+atexit.register(SCANNER_ROOT.cleanup)
 
 
 def env_for(config=None, extra=None):
@@ -54,8 +58,7 @@ def redactor_path():
     if _REDACTOR is None:
         from mindie_knowledge.loop.transcript_redaction import install_scanner
 
-        cache = ROOT.parent / "state" / "component-tests" / "redactor-cache"
-        _REDACTOR = install_scanner(cache=cache)
+        _REDACTOR = install_scanner(cache=Path(SCANNER_ROOT.name))
     return _REDACTOR
 
 

@@ -301,6 +301,8 @@ def activate_binding(candidate_file, *, observation_seconds=30.0):
                                     domains=domains, switched=False)
                     try:
                         atomic_write(config, candidate)
+                    except TimeoutError:
+                        raise
                     except OSError as exc:
                         return dict(status="incomplete", stage="canonical_publish",
                                     service="ready", retirement=retirement,

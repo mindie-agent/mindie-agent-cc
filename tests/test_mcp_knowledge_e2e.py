@@ -37,6 +37,7 @@ class McpKnowledgeEndToEndTests(unittest.TestCase):
             {
                 "MINDIE_CC_CONFIG": str(self.config),
                 "MINDIE_DIAGNOSTICS_ROOT": str(self.tmp / "diagnostics"),
+                "MINDIE_DIAGNOSTICS_CONFIG": str(self.tmp / "diagnostics.json"),
             },
         )
         self.env_patch.start()

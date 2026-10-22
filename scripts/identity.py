@@ -189,6 +189,8 @@ def _connect(path: Path, *, create: bool):
         db.execute("PRAGMA journal_mode=WAL;")
     try:
         os.chmod(path, 0o600)
+    except TimeoutError:
+        raise
     except OSError:
         pass
     return db

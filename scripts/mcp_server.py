@@ -312,6 +312,24 @@ def remote_stage_failure(args, name, stage, exc=None):
     return attach(result, getattr(exc, "mindie_diagnostic", None))
 
 
+def _timeout_failure(surface, args, name, exc):
+    """A timeout is retryable and is never mislabeled as a helper failure."""
+    if surface == "knowledge":
+        from diagnostic_support import attach
+
+        result = dict(
+            content=[dict(type="text", text="Unavailable: timeout. Continue independently.")],
+            isError=True,
+            structuredContent=dict(stage="timeout", retryable=True),
+        )
+        return attach(result, getattr(exc, "mindie_diagnostic", None))
+    result = remote_stage_failure(args, name, "timeout", exc)
+    structured = result.setdefault("structuredContent", {})
+    structured["stage"] = "timeout"
+    structured["retryable"] = True
+    return result
+
+
 def clamp_remote_args(args):
     body = dict(args)
     if "yield_time_ms" in body:
@@ -489,6 +507,8 @@ def remote_call(name, args, session):
         with prepare_layout(base):
             root = base / session
             root.mkdir(parents=True, exist_ok=True)
+    except TimeoutError:
+        raise
     except (ValueError, OSError) as exc:
         raise RemoteExecutionError(
             "remote state preparation failed; existing receipts preserved",
@@ -542,6 +562,7 @@ def handle(surface, message):
     claimed = False
     succeeded = False
     result = {}
+    local = None
     try:
         if not isinstance(args, dict):
             raise ValueError("invalid tool arguments")
@@ -584,6 +605,9 @@ def handle(surface, message):
         else:
             try:
                 payload = remote_call(local, args, session)
+            except TimeoutError as exc:
+                result = _timeout_failure("remote", args, local, exc)
+                return dict(jsonrpc="2.0", id=ident, result=result)
             except (ValueError, OSError, RuntimeError, KeyError, TypeError) as exc:
                 result = remote_stage_failure(args, local, "helper_failed", exc)
                 return dict(
@@ -608,6 +632,9 @@ def handle(surface, message):
             )
         succeeded = result.get("isError") is not True
         return dict(jsonrpc="2.0", id=ident, result=result)
+    except TimeoutError as exc:
+        result = _timeout_failure(surface, args, local or name, exc)
+        return dict(jsonrpc="2.0", id=ident, result=result)
     except (ValueError, OSError, RuntimeError, KeyError, TypeError) as exc:
         result = failure(exc)
         return dict(jsonrpc="2.0", id=ident, result=result)
@@ -615,6 +642,8 @@ def handle(surface, message):
         if claimed:
             try:
                 finish_bind(call_id, succeeded)
+            except TimeoutError:
+                raise
             except (OSError, sqlite3.Error) as exc:
                 from diagnostic_support import failure as record_failure
 

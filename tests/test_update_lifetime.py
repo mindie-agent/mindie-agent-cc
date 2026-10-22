@@ -14,6 +14,7 @@ from unittest.mock import patch
 import pytest
 
 from support import SCRIPTS, make_config
+import process_probe
 
 sys.path.insert(0, str(SCRIPTS))
 import bounded
@@ -36,9 +37,7 @@ def _alive(pid):
         kernel.GetExitCodeProcess(handle, ctypes.byref(code))
         kernel.CloseHandle(handle)
         return code.value == 259
-    result = subprocess.run(["ps", "-p", str(pid), "-o", "state="],
-                            capture_output=True, text=True)
-    return result.returncode == 0 and not result.stdout.strip().startswith("Z")
+    return process_probe.alive(pid)
 
 
 def test_scoped_cancel_reaps_owned_child_and_grandchild(tmp_path):

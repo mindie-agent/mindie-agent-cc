@@ -35,6 +35,7 @@ class EntryExecTests(unittest.TestCase):
         installed = tmp_path / "installed"
         installed.mkdir()
         shutil.copyfile(SCRIPTS / "bounded.py", installed / "bounded.py")
+        shutil.copyfile(SCRIPTS / "bounded_win32.py", installed / "bounded_win32.py")
         marker = tmp_path / "ready"
         (installed / "mindie_launch.py").write_text(
             "import sys;from pathlib import Path;"

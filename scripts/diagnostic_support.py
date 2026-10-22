@@ -52,7 +52,9 @@ def _read_small(path):
         if len(raw) > 2048:
             return None
         return raw.decode()
-    except Exception:
+    except TimeoutError:
+        raise
+    except (OSError, ValueError, UnicodeDecodeError):
         return None
 
 
@@ -88,7 +90,9 @@ def build_metadata():
         if isinstance(version, str) and re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z.+-]{0,79}", version):
             result["version"] = version
         return result
-    except Exception:
+    except TimeoutError:
+        raise
+    except (OSError, ValueError, UnicodeDecodeError, TypeError, KeyError):
         return {}
 
 

@@ -78,6 +78,7 @@ def adapter_check(source):
         "transcript.py",
         "mindie_launch.py",
         "bounded.py",
+        "bounded_win32.py",
         "owned_process.py",
         "mcp_server.py",
         "receipt_layout.py",

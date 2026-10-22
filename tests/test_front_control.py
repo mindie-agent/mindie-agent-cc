@@ -11,6 +11,8 @@ import tempfile
 import time
 import unittest
 
+import process_probe
+
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 CHILD = r'''
 import json,os,subprocess,sys,time
@@ -59,6 +61,7 @@ class FrontControlTests(unittest.TestCase):
         env = {key: value for key, value in os.environ.items()
                if not key.startswith(("MINDIE_", "PYTHONPATH", "REMOTE_DEV_"))}
         env["MINDIE_DIAGNOSTICS_ROOT"] = str(self.root / "diagnostics")
+        env["MINDIE_DIAGNOSTICS_CONFIG"] = str(self.root / "diagnostics.json")
         self.proc = subprocess.Popen(
             [sys.executable, str(generation / "scripts" / "mindie_launch.py"), "--config",
              str(config), "mcp", "remote"], stdin=subprocess.PIPE,
@@ -98,9 +101,8 @@ class FrontControlTests(unittest.TestCase):
             for pid in json.loads(pidfile.read_text(encoding="utf-8")):
                 if pid is None:
                     continue
-                result = subprocess.run(["ps", "-p", str(pid), "-o", "stat="],
-                                        capture_output=True, text=True)
-                state = result.stdout.strip()
+                result = process_probe.status(pid)
+                state = result
                 if state and not state.startswith("Z"):
                     os.kill(pid, signal.SIGKILL)
                     self.fail("owned child remains alive")

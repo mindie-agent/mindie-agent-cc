@@ -146,6 +146,8 @@ def native_environment():
         provider = settings.get("env", {})
         if not isinstance(provider, dict):
             raise ValueError("native provider settings are not an object")
+    except TimeoutError:
+        raise
     except (OSError, ValueError, TypeError) as exc:
         raise ProfileUnavailableError("native provider settings are unavailable") from exc
     for key in (*paths.NATIVE_PROVIDER_ENV, *paths.NATIVE_RUNTIME_ENV):
@@ -470,6 +472,8 @@ def _invoke_native(prompt, schema, env, model, receipt):
         if not managed:
             try:
                 shutil.rmtree(isolated)
+            except TimeoutError:
+                raise
             except OSError:
                 receipt["cleanup_failed"] = True
 

@@ -44,6 +44,8 @@ def main():
     os.close(owner_pipe)
     try:
         child = subprocess.Popen(command)
+    except TimeoutError:
+        raise
     except OSError:
         return 127
     child.wait()

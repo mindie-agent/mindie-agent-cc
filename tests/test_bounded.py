@@ -1,5 +1,4 @@
 import os
-import subprocess
 import sys
 import tempfile
 import time
@@ -8,22 +7,11 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1] / "scripts"))
 import bounded  # noqa: E402
+import process_probe  # noqa: E402
 
 
 def _alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except OSError:
-        return False
-    result = subprocess.run(
-        ["ps", "-p", str(pid), "-o", "state="],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        return False
-    state = result.stdout.strip()
-    return bool(state) and not state.startswith("Z")
+    return process_probe.alive(pid)
 
 
 class BoundedTests(unittest.TestCase):

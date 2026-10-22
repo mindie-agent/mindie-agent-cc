@@ -82,6 +82,7 @@ class GradedFeedbackEntryTests(unittest.TestCase):
         self.env_patch = patch.dict(os.environ, {
             "MINDIE_CC_CONFIG": str(self.config),
             "MINDIE_DIAGNOSTICS_ROOT": str(self.tmp / "diagnostics"),
+            "MINDIE_DIAGNOSTICS_CONFIG": str(self.tmp / "diagnostics.json"),
         })
         self.env_patch.start()
         self.ensure_patch = patch(

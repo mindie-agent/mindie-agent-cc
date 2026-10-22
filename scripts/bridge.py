@@ -278,6 +278,8 @@ def handle_stop():
 
         try:
             source = capture_source(transcript, session, binding=lease)
+        except TimeoutError:
+            raise
         except (OSError, ValueError) as exc:
             return _stop_failure("material", "source_unavailable", exc)
         if not settings.in_scope(source["project_root"]):

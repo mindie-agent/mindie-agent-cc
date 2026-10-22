@@ -24,6 +24,7 @@ def prepare(python, scripts):
     import bounded
     output = bounded.run(
         [str(python), '-m', 'mindie_knowledge.loop.transcript_redaction'],
+        timeout=15.0,
     )
     path = output.strip()
     if not Path(path).is_absolute() or not Path(path).is_file():
@@ -54,6 +55,7 @@ def prepare_store(python, scripts, config):
         output = bounded.run(
             [str(python), str(Path(scripts) / 'capture_config.py'), 'prepare-store'],
             json.dumps(config),
+            timeout=30.0,
         )
     except Exception as exc:
         if hasattr(exc, 'returncode'):

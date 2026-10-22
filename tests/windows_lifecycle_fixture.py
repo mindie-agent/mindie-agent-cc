@@ -52,6 +52,8 @@ def main():
             from mindie_knowledge.loop.process import spawn_service
             try:
                 process = spawn_service(command)
+            except TimeoutError:
+                raise
             except OSError as exc:
                 result = dict(spawned=False, error=type(exc).__name__,
                               winerror=getattr(exc, "winerror", None))

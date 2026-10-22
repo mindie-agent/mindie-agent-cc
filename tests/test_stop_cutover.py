@@ -318,6 +318,7 @@ def test_raw_stop_failure_preserves_safe_diagnostics_and_capture_state(tmp_path)
     env = {
         "MINDIE_CC_CONFIG": str(tmp_path / "cc.json"),
         "MINDIE_DIAGNOSTICS_ROOT": str(tmp_path / "diagnostics"),
+        "MINDIE_DIAGNOSTICS_CONFIG": str(tmp_path / "diagnostics.json"),
     }
     with patch.object(subprocess, "run", return_value=result):
         with pytest.raises(pytest.fail.Exception) as failed:

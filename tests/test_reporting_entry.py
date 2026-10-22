@@ -51,7 +51,8 @@ class ReportingEntryTests(unittest.TestCase):
             config = make_config(root)
             policy = root / "diagnostics.json"
             with patch.dict(os.environ, {"MINDIE_CC_CONFIG": str(config),
-                                         "MINDIE_DIAGNOSTICS_CONFIG": str(policy)}):
+                                         "MINDIE_DIAGNOSTICS_CONFIG": str(policy),
+                                         "MINDIE_DIAGNOSTICS_ROOT": ""}):
                 with patch.object(entry, "_prepare_capture_service", return_value="prepared"):
                     result = entry._finish_contribution({})
                 self.assertEqual(result["status"], "reporter_pending")

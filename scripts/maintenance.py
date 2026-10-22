@@ -200,6 +200,8 @@ def session_start(event=None):
                   diagnostics=reporting, reporting=activation, capture=capture)
     try:
         atomic_write(state_dir() / "session-maintenance.json", result)
+    except TimeoutError:
+        raise
     except OSError as exc:
         result.update(status="incomplete", recording_error=type(exc).__name__)
     return result

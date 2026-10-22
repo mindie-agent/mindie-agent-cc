@@ -128,6 +128,8 @@ def _lock_once(descriptor, exclusive: bool, *, bootstrap=False) -> bool:
             flag = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
             fcntl.flock(descriptor, flag | fcntl.LOCK_NB)
         return True
+    except TimeoutError:
+        raise
     except OSError:
         return False
 

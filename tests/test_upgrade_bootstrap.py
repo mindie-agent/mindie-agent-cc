@@ -19,6 +19,7 @@ def test_release_entry_survives_cache_removal_and_ignores_ambient_modules(tmp_pa
     installed = tmp_path / "installed"
     installed.mkdir()
     shutil.copyfile(SCRIPTS / "bounded.py", installed / "bounded.py")
+    shutil.copyfile(SCRIPTS / "bounded_win32.py", installed / "bounded_win32.py")
     (installed / "mindie_launch.py").write_text(
         "import json,os,sys;print(json.dumps({'config':os.environ['MINDIE_CC_CONFIG'],"
         "'args':sys.argv[1:],'pythonpath':os.environ.get('PYTHONPATH'),"
