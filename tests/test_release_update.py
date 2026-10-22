@@ -649,3 +649,59 @@ def test_each_runtime_process_persists_fresh_intent_before_spawn(tmp_path):
     ]
     assert state["preparation_stage"] == "runtime-readback"
     assert state["preparation_process"]["cleanup_failed"] is True
+
+
+def test_interrupted_local_preparation_without_cleanup_failure_retries_while_cleanup_failure_blocks(tmp_path):
+    saved = binding(tmp_path)
+    candidate_file = tmp_path / "prepared.adapter.json"
+    selected = dict(saved, adapter_config=str(candidate_file))
+    candidate_file.write_text(json.dumps(selected), encoding="utf-8")
+    installed_path = tmp_path / "native"
+    installed_path.mkdir()
+    row = {"version": "0.0.2", "installPath": str(installed_path)}
+
+    for process in ({}, {"started": True, "completed": False, "cleanup_failed": False},
+                    {"started": True, "completed": True, "returncode": 1, "cleanup_failed": False}):
+        state = {
+            "candidate": release(), "native_effect": "verified", "status": "failed",
+            "installed": row, "preparation_effect": "unknown",
+            "preparation_stage": "locked-runtime-install", "preparation_process": process,
+        }
+
+        def fake_run(argv, **kwargs):
+            receipt = kwargs.get("receipt")
+            if receipt is not None:
+                receipt.update(started=True, completed=True, returncode=0, cleanup_failed=False)
+            if "--source" in argv:
+                return json.dumps({"config": str(candidate_file)})
+            if "--activate" in argv:
+                return json.dumps({"status": "activated"})
+            raise AssertionError(argv)
+
+        with patch.object(update, "native_binary", return_value="claude"), \
+                patch.object(update, "native_version", return_value="2.1.269"), \
+                patch.object(update, "installed_plugin", return_value=row), \
+                patch.object(update, "install_selected", return_value=installed_path), \
+                patch("bootstrap.ensure_runtime",
+                      side_effect=lambda _, on_process=None: (
+                          on_process("locked-runtime-install",
+                                     {"started": True, "completed": True, "returncode": 0, "cleanup_failed": False}),
+                          (Path(saved["python"]), Path(saved["runtime_scripts"])),
+                      )[1]), \
+                patch.object(update, "run", side_effect=fake_run):
+            result = update.check(saved, state)
+        assert result["status"] == "activated"
+        assert result["installation_complete"] is True
+
+    blocked = {
+        "candidate": release(), "native_effect": "verified", "status": "failed",
+        "installed": row, "preparation_effect": "unknown",
+        "preparation_stage": "locked-runtime-install",
+        "preparation_process": {"started": True, "completed": False, "cleanup_failed": True},
+    }
+    with patch.object(update, "native_binary", return_value="claude"), \
+            patch.object(update, "native_version", return_value="2.1.269"), \
+            patch.object(update, "installed_plugin", return_value=row):
+        with pytest.raises(RuntimeError, match="previous preparation writer is not confirmed settled"):
+            update.check(saved, blocked)
+

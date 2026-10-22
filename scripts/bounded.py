@@ -655,6 +655,9 @@ def _run_posix(process, timeout, max_output, pgid, check, cancel, transport=Fals
                     raise err
         if _cancelled(cancel):
             raise CommandCancelled("command cancelled")
+        if not terminated and receipt is not None and process.returncode is not None:
+            receipt["completed"] = True
+            receipt["returncode"] = process.returncode
         if not terminated and check and process.returncode:
             raise failed_error()
         if terminated and process.returncode:
@@ -754,6 +757,9 @@ def _run_windows(process, timeout, max_output, pgid, check, cancel, transport=Fa
             raise CommandCancelled("command cancelled")
         if _owner_exited(owner):
             raise OwnerExited("maintenance owner exited")
+        if not terminated and receipt is not None and process.returncode is not None:
+            receipt["completed"] = True
+            receipt["returncode"] = process.returncode
         if not terminated and check and process.returncode:
             err = RuntimeError(f"command failed ({process.returncode})")
             err.mindie_output = bytes(output).decode("utf-8", "replace")

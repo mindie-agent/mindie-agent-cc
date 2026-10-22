@@ -86,7 +86,7 @@ class BackgroundCheck:
                 env.pop("PYTHONPATH", None)
                 run([binding["python"], str(Path(binding["runtime_scripts"]) / "release_update.py")],
                     env=env, cancel=self.cancel, allow_service=True,
-                    timeout=300.0)
+                    timeout=1500.0)
             except Exception as exc:
                 failed = True
                 if not self.cancel.is_set():
@@ -378,7 +378,8 @@ def _preparation_observer(binding, state):
         state["preparation_process"] = process
         if process.get("started") is False:
             state["preparation_effect"] = "not_started"
-        elif process.get("completed") is True and process.get("cleanup_failed") is False:
+        elif (process.get("completed") is True and process.get("cleanup_failed") is False
+              and process.get("returncode", 0) == 0):
             state["preparation_effect"] = "completed"
         else:
             state["preparation_effect"] = "unknown"
@@ -478,7 +479,7 @@ def check(binding, state=None):
     pending = _pending_install(state)
     if pending and state.get("preparation_effect") == "unknown":
         process = state.get("preparation_process", {})
-        if process.get("completed") is not True or process.get("cleanup_failed") is not False:
+        if process.get("cleanup_failed") is True:
             raise RuntimeError("previous preparation writer is not confirmed settled")
     if pending and "prepared" in state and state.get("activation_effect") not in {
         "not_started", "deferred", "unknown", "incomplete", "activated", "current",
