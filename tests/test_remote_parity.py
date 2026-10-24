@@ -52,7 +52,7 @@ def test_remote_text_page_over_256k_survives():
         'text': page, 'result': {'outcome': 'success', 'status': 'ok'},
     })
     assert result['content'][0]['text'] == page
-    assert result['structuredContent']['status'] == 'ok'
+    assert 'structuredContent' not in result
 
 
 def test_real_bounded_child_keeps_page_above_local_cap():
@@ -81,7 +81,7 @@ def test_nonzero_native_bash_is_output_not_helper_error():
         },
     })
     assert result['isError'] is False
-    assert result['structuredContent']['exit_code'] == 42
+    assert 'structuredContent' not in result
     assert result['content'][0]['text'].endswith('[exit code: 42]\n')
 
 
@@ -96,7 +96,8 @@ def test_task_output_nonzero_exit_uses_native_task_field():
         },
     })
     assert result['isError'] is False
-    assert result['structuredContent']['task']['exitCode'] == 7
+    assert 'structuredContent' not in result
+    assert '7' in result['content'][0]['text']
 
 
 def test_uncompleted_helper_failure_stays_an_error():
@@ -154,7 +155,8 @@ def test_nested_operation_completed_survives_local_recording_failure():
         },
     })
     assert result['isError'] is False
-    assert result['structuredContent']['execution_outcome'] == 'success'
+    assert 'structuredContent' not in result
+    assert 'local recording failed' in result['content'][0]['text']
 
 
 def test_remote_budget_covers_native_inner_wait_plus_grace(tmp_path):

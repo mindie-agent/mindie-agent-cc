@@ -413,7 +413,13 @@ def remote_result(name, payload):
         is_error = outcome not in {None, "success", "cancelled"}
     else:
         is_error = False
-    return dict(content=blocks, structuredContent=result_payload, isError=is_error)
+    # Claude Code renders structuredContent instead of the text block whenever
+    # both are present. Text-only results therefore ship the native text as the
+    # only model-visible payload; media blocks and error receipts retain the
+    # structured form their consumers need.
+    if is_error or any(block.get("type") != "text" for block in blocks):
+        return dict(content=blocks, structuredContent=result_payload, isError=is_error)
+    return dict(content=blocks, isError=is_error)
 
 
 def _public_domain(args):
