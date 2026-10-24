@@ -433,11 +433,10 @@ def _read_or_feedback_call(name, args, session, ensure_service, rpc):
     if routed_domain is not None and "domain" not in payload:
         payload["domain"] = routed_domain
     connection = ensure_service() if selected is None else ensure_service(selected)
-    result = rpc(
+    return rpc(
         connection, name.removeprefix("knowledge_"), payload,
         timeout=KNOWLEDGE_RPC_TIMEOUT,
     )
-    return rsi_explore.attach(result, body) if name == "knowledge_explain" else result
 
 
 def knowledge_call(name, args, session):
@@ -470,9 +469,7 @@ def knowledge_call(name, args, session):
         if routed_domain is not None:
             payload["domain"] = routed_domain
         connection = ensure_service() if selected is None else ensure_service(selected)
-        return rsi_explore.attach(
-            rpc(connection, "query", payload, timeout=KNOWLEDGE_RPC_TIMEOUT), body
-        )
+        return rpc(connection, "query", payload, timeout=KNOWLEDGE_RPC_TIMEOUT)
     if name == "knowledge_distill":
         return _knowledge_distill_call(args, session, ensure_service, rpc)
     if name in {"knowledge_explain", "knowledge_feedback"}:
