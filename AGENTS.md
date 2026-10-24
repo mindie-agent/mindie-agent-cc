@@ -12,10 +12,10 @@ All plugin scripts live under `scripts/` and include standardized top-of-file Ag
 | :--- | :--- | :--- |
 | **Native Facade & Bootstrap** | `mindie_launch.py` | Stable entrypoint invoked by `hooks/hooks.json` and `.mcp.json`. Enforces `HOOK_TOTAL=10.0s`, `HOOK_LOCK_BUDGET=2.0s`, and `BOOTSTRAP_TOTAL=540.0s`. |
 | | `bootstrap.py` / `setup.py` / `install_state.py` | Materializes the locked `uv` runtime, validates `product-contract.json` & `uv.lock`, and writes atomic `installation.json` under `OperationLock`. |
-| **Host Hook Lifecycle** | `entry.py` / `entry_state.py` | Handles `/mindie-agent` slash commands via `UserPromptExpansion` (`activate`, `deactivate`, `status`, `sharing-*`). Returns `status="degraded"` if service binding fails after lease activation. |
-| | `bridge.py` | Implements `PreToolUse` (one-shot `claudecode/toolUseId` bind) and `Stop` (turn-end transcript capture handoff; never exits 2 or forces model continuation). |
-| | `admission.py` | Thin wrapper around `mindie_knowledge.loop.activation.Admission` for session lease management. |
-| **MCP Server & Identity** | `mcp_server.py` | Stdio JSON-RPC MCP server for knowledge and `remote_dev` tools. Consumes one-shot `claudecode/toolUseId` binds and preserves succeeded remote results even if local `finish_bind` fails. |
+| **Host Hook Lifecycle** | `entry.py` / `entry_state.py` | Handles `/mindie-agent` slash commands via `UserPromptSubmit` / `UserPromptExpansion` (`activate`, `deactivate`, `status`, `sharing-*`) and exposes factual `status_facts(session)` without onboarding prompt fields (`first_use`, `next`, `recovery`). Returns `status="degraded"` if service binding fails after lease activation. |
+| | `bridge.py` | Implements `PreToolUse` (one-shot `claudecode/toolUseId` bind) and `Stop` (checks `admission.knowledge_lease(session)` before reading `sharing` or transcripts; never exits 2 or forces model continuation). |
+| | `admission.py` | Thin wrapper around `mindie_knowledge.loop.activation.Admission` for manual-entry session lease management (`activate`, `deactivate`, `knowledge_lease`, `capture_lease`, `capture_authorization`, `resolve_capture_lease`). |
+| **MCP Server & Identity** | `mcp_server.py` | Stdio JSON-RPC MCP server for knowledge (`requires knowledge_lease`) and `remote_dev` / `mindie_status` (`status_facts`, available without `/mindie-agent`). Consumes one-shot `claudecode/toolUseId` binds and preserves succeeded remote results even if local `finish_bind` fails. |
 | | `identity.py` | Validates hook payloads and manages `native-tool-binds.sqlite3` (WAL + `busy_timeout=5000`). |
 | | `receipt_layout.py` | Declares and validates `remote-layout.json` (`mindie-cc-remote-layout/1`) before external remote work. |
 | **Transcript, Summary & Diagnostics** | `transcript.py` / `capture_config.py` | Parses Claude Code JSONL transcripts (`identify`, `read_material`, `capture_source`) with fork-boundary attribution. |
@@ -51,17 +51,20 @@ Claude Code MCP Client (stdio JSON-RPC)
 
 ## 2. Host Lifecycle Contracts & Explicit `/mindie-agent` Gating
 
-1. **Explicit Slash-Command Activation (`UserPromptExpansion` Only)**:
-   - Session activation and community sharing configuration occur **only** via `/mindie-agent` slash commands in `entry.py`.
-   - MCP `status` or tool discovery never activates a lease or enables sharing.
+1. **Explicit Slash-Command Activation (`UserPromptSubmit` / `UserPromptExpansion` Only)**:
+   - Session knowledge activation (`entry_enabled = 1`) and community sharing configuration occur **only** via `/mindie-agent` slash commands in `entry.py`.
+   - `SessionStart` (`maintenance.py`) runs diagnostic maintenance (`reporting-maintain` and `activate-consent`) and runs `sync_public_feed` only when `gate().knowledge_lease(session)` is active (`feed={"result": "inactive"}` otherwise).
+   - MCP `mindie_status` (`entry.status_facts(session)`) and tool discovery never activate a lease, start the knowledge service, or emit onboarding prompts.
    - If lease activation succeeds in `entry.py` but background service connection fails, `entry.py` returns `status="degraded"` (never revoking the active lease).
-2. **One-Shot Native Tool Binding (`PreToolUse` → `mcp_server.py`)**:
+2. **One-Shot Native Tool Binding & Manual-Entry Gate (`PreToolUse` → `mcp_server.py`)**:
    - Claude Code MCP `tools/call` does not carry trusted session metadata in model arguments.
    - `bridge.py` (`PreToolUse`) binds `params._meta['claudecode/toolUseId']` to `(session_id, tool_name, input_sha256)` in `native-tool-binds.sqlite3`; `mcp_server.py` claims and consumes that bind once.
+   - Deterministic `remote-dev` tools and factual `mindie_status` work with the consumed `PreToolUse` bind alone, whereas all `knowledge_*` MCP tools (`knowledge_query`, `knowledge_explain`, `knowledge_feedback`, `knowledge_distill`, `knowledge_sync`) additionally require an active manual-entry lease (`admission.knowledge_lease(session)` / target-domain `knowledge_lease`) before `ensure_service`.
    - **Receipt Honesty Invariant**: Once a remote or knowledge tool call succeeds, if local `finish_bind` raises an `OSError`/`sqlite3.Error`, `mcp_server.py` attaches `bind_warning` + `diagnostic_ref` to `structuredContent` and **never** flips `isError=True` on the succeeded result.
 3. **Turn-End Capture (`Stop`)**:
    - `bridge.py` (`Stop`) never exits 2 and never forces model continuation.
-   - When contribution is enabled and the session transcript is in scope, `Stop` verifies fork-safe transcript ownership (`transcript.capture_source`) and hands off to the shared capture service.
+   - `handle_stop` checks `admission.knowledge_lease(session)` (`entry_enabled == 1`) first; unactivated sessions return `{}` immediately before reading `sharing` settings or transcripts.
+   - When the session holds an active manual-entry lease, contribution is enabled, and the session transcript is in scope, `Stop` verifies fork-safe transcript ownership (`transcript.capture_source`, bounded by `max(created_at, activated_at)`) and hands off to the shared capture service.
 
 ---
 

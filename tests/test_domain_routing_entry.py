@@ -99,6 +99,7 @@ class DomainRoutingEntryTests(unittest.TestCase):
         )
         self.default_admission = Admission(
             self.default_engine_config["admission_path"])
+        self.default_admission.activate(SESSION, project_root=str(self.tmp))
         self.target_admission = Admission(
             self.target_engine_config["admission_path"])
         self.default_engine = Engine(
@@ -338,7 +339,7 @@ class DomainRoutingEntryTests(unittest.TestCase):
         }, session=DISTILL_SESSION)
 
         self.assertTrue(result["isError"], result)
-        self.assertIn("task binding is not active", result["content"][0]["text"])
+        self.assertIn("manual /mindie-agent activation", result["content"][0]["text"])
         self.assertEqual(self.ensure_calls, [])
         self.assertFalse(self.marker.exists(),
                          "a missing target lease must fail before the model worker")

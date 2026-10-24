@@ -403,9 +403,11 @@ def _knowledge_distill_call(args, session, ensure_service, rpc):
 
     selected, routed_domain = select_engine(domain=domain)
     if selected is None:
-        lease = gate().check(session)
+        lease = gate().knowledge_lease(session)
     else:
-        lease = gate(engine_config(str(selected))).check(session)
+        lease = gate(engine_config(str(selected))).knowledge_lease(session)
+    if lease is None:
+        raise ValueError("knowledge distill requires manual /mindie-agent activation in the selected domain")
     try:
         timeout = _distill_timeout()
     except ImportError as exc:
@@ -441,6 +443,17 @@ def _read_or_feedback_call(name, args, session, ensure_service, rpc):
 def knowledge_call(name, args, session):
     from knowledge_service import ensure_service, select_engine
     from mindie_knowledge.loop.cli import rpc
+    from admission import gate
+
+    # A consumed toolUseId proves identity, not explicit knowledge activation.
+    if gate().knowledge_lease(session) is None:
+        from knowledge_service import engine_config, select_engine_for_refs
+        if name in {"knowledge_query", "knowledge_distill"}:
+            selected, _ = select_engine(domain=_public_domain(args))
+        else:
+            selected, _ = select_engine_for_refs(args.get("refs"), ref=args.get("ref"))
+        if selected is None or gate(engine_config(str(selected))).knowledge_lease(session) is None:
+            raise ValueError("knowledge requires manual /mindie-agent activation in this task")
 
     if name == "knowledge_query":
         # Keep the native schema a plain object; enforce the shared argument
@@ -581,9 +594,9 @@ def handle(surface, message):
         session = bound["session"]
         local = name.rsplit("__", 1)[-1] if isinstance(name, str) else name
         if surface == "knowledge" and local == "mindie_status":
-            from entry import status_payload
+            from entry import status_facts
 
-            payload = status_payload(session)
+            payload = status_facts(session)
             result = dict(
                 content=[dict(type="text", text=canonical(payload))],
                 structuredContent=payload,

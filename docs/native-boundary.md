@@ -8,17 +8,18 @@
 
 ## 1. Entrypoints & Task Identity Binding
 
-### On-Demand Daily Usage
-Ordinary development tasks do not require an explicit activation command:
-- **Knowledge retrieval (`mindie-knowledge`)** binds to the active Claude Code task automatically via native hook and MCP metadata.
-- **Remote Ascend execution (`remote-dev`)** operates independently and does not require knowledge activation or community sharing consent.
-- **Explicit configuration (`/mindie-agent` or `/mindie-agent:init`)** provides an interactive setup and status entry. Its `UserPromptExpansion` event supplies the current task identity and working directory, reusing previously saved choices and prompting only when public contribution parameters (repository, account, or project root) are missing.
+### Manual Per-Session Knowledge Entry vs. Default-On Deterministic Tools
+`mindie-agent-cc` separates deterministic execution tools from the session-scoped knowledge flywheel:
+- **Remote Ascend execution (`remote-dev`) and factual status (`mindie_status`)** are available by default in ordinary sessions without invoking `/mindie-agent`, and never require knowledge activation or community sharing consent.
+- **Knowledge flywheel (`mindie-knowledge` tools & `Stop` capture)** requires an explicit `/mindie-agent` invocation once in the current session (`UserPromptSubmit` / `UserPromptExpansion` sets `entry_enabled = 1`). Once enabled, the grant persists across subsequent turns of that session until `/mindie-agent deactivate`; new chats, `--fork-session` branches, and subagents do not inherit it.
+- **Unified `/mindie-agent` entry (`/mindie-agent` or `/mindie-agent:init`)** activates the current session's knowledge lease and provides interactive setup and status controls. Its `UserPromptExpansion` event supplies the current task identity and working directory, reusing previously saved choices and prompting only when public contribution parameters (repository, account, or project root) are missing.
 
 ### Automatic `PreToolUse` → MCP Call Binding
 Before a tool call executes, Claude Code triggers the `PreToolUse` hook with the native `tool_use_id`, session identity, tool name, and arguments. The subsequent MCP request carries that same ID in `_meta["claudecode/toolUseId"]`:
 - The adapter binds the MCP tool call to its native task automatically—the model never needs to invent or pass session tokens.
 - Each binding is single-use and verified against the exact tool name and argument digest; missing or mismatched bindings fail closed.
-- New sessions and `--fork-session` branches receive independent bindings and never inherit a parent task's job ownership or collectable history.
+- Consuming a `PreToolUse` bind proves native task identity, not knowledge activation: `knowledge_*` MCP tools additionally check `admission.knowledge_lease(session)` (`entry_enabled == 1`) before starting or calling the knowledge service, while `remote-dev` and `mindie_status` execute with the `PreToolUse` bind alone.
+- New sessions and `--fork-session` branches receive independent bindings and never inherit a parent task's job ownership, manual-entry lease, or collectable history.
 
 ---
 
@@ -26,15 +27,15 @@ Before a tool call executes, Claude Code triggers the `PreToolUse` hook with the
 
 ### Fast, Non-Blocking `Stop` Handoff
 The `Stop` hook completes within a short local handoff budget and returns a neutral response so it never forces the model to continue running:
-- **When community sharing is disabled**: `Stop` performs no transcript reads, creates no capture records, and makes no organizer model calls.
-- **When community sharing is enabled for the current project**: `Stop` verifies the session file inside the active Claude profile, checks the saved contribution scope, and enqueues the capture reference for the background worker.
+- **When the session has not invoked `/mindie-agent` or community sharing is disabled**: `Stop` checks `admission.knowledge_lease(session)` first and returns `{}` immediately—performing no transcript reads, creating no capture records, and making no organizer model calls.
+- **When the session holds a manual `/mindie-agent` lease and community sharing is enabled for the current project**: `Stop` verifies the session file inside the active Claude profile, checks the saved contribution scope, and enqueues the capture reference for the background worker.
 - Enqueuing a capture record only confirms local admission; actual block indexing and GitHub PR publication are tracked by separate receipts in the background worker. Uncertain or failed model calls are never silently replayed.
 
 ### Deterministic Public Message Filtering
-Only visible user and assistant messages from the current task are eligible for capture:
+Only visible user and assistant messages from the current `/mindie-agent`-enabled task are eligible for capture:
 - The parser reads `sessionId`, timestamps, and public text blocks.
 - Internal thinking blocks, tool call inputs/outputs, injected `isMeta` messages, attachments, system records, and sidechain turns are strictly excluded.
-- The capture window never starts earlier than either the task creation timestamp or the timestamp when contribution was enabled.
+- The capture window never starts earlier than `max(created_at, activated_at)`—the later of the session/fork creation timestamp and the timestamp when `/mindie-agent` was activated in that session.
 
 ---
 

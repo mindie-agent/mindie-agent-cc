@@ -1,12 +1,23 @@
 ---
 name: mindie-agent
-description: Unified MindIE Agent entry for Ascend / vLLM-Ascend knowledge, skills, remote-dev, and preferences. Once community contribution is enabled, experience capture runs automatically by default at session end without per-task prompts.
+description: Explicit /mindie-agent entry for knowledge, domain skills, feedback, distillation and background capture in the current Claude Code session. Configured deterministic tools remain available without this entry.
 disable-model-invocation: true
 ---
 
 # MindIE Agent (Unified Entry)
 
-Users interact with MindIE Agent through a single `/mindie-agent` entry (while `remote-dev` MCP tools trigger automatically by default when remote servers or NPU containers are involved):
+Use `/mindie-agent` to enable knowledge and experience for the current session.
+
+The native UserPromptExpansion hook establishes this task's activation before
+knowledge use. Do not activate from topic matching. Query, explain, feedback,
+distillation, sync and Stop capture all require that manual entry. New chats,
+forks and subagents need their own entry. Saved contribution consent and project
+scope are additional capture conditions and never activate a task.
+
+Configured deterministic tools (resource probes/leases, monitoring, profiling,
+simulation calculations, local diagnostics and factual status checks) remain
+available without this entry, just like remote-dev. Their normal interfaces
+do not require loading knowledge or experience context.
 
 1. **Domain Knowledge (`L1–L4`), Multi-Domain Routing, Three-Valued `conditions` & Remote NPU Execution**:
    - When the user asks an Ascend or `vLLM-Ascend` engineering question, use the native knowledge tools (`knowledge_query`, `knowledge_explain`, `knowledge_feedback`, `knowledge_distill`) and remote execution tools (`mindie-remote-dev`) directly.
@@ -15,8 +26,8 @@ Users interact with MindIE Agent through a single `/mindie-agent` entry (while `
    - **Three-Valued `conditions` Rule (`matched` | `mismatched` | `condition_unknown`)**: Units separate functional `tier` (`L1–L4`) from `evidence_strength` (`hardware_spec`, `reproduced_empirical`, `single_observation`, `hypothesis`) and evaluate their declared condition keys. `condition_unknown` occurs when either the unit's declared `required` premise or the caller's `observed` fact is `"unknown"`, missing/not supplied, or has an incomparable format, and `unknown == unknown` never matches (an absent requirement or `"any"` is unconstrained `matched`, and historical `required: "unknown"` is never backfilled by later machine versions)—never treat `condition_unknown` as a match; verify whichever fact is missing/unknown (e.g., source `repository`/`revision` for an `L2` source SOP, or runtime environment for an NPU rule).
    - **Physical NPU Timing Mutual Exclusion & Profiler Discipline**: Only steps confirmed to need no device may use `npu_count=0` and parallel slot caches. Device JIT and warmup require the actual device lease; performance timing, attribution checks, and `mindie_profiler` runs on the same physical NPU (or same A3 dual-Die package) require an exclusive `coordinator` lease. `mindie_profiler` accepts explicit unlabeled `--time-window START:END`, labeled `--step-window STEP=START:END`, or `--full-range` (never inferring steps from kernel rows), uses explicit scene/clock annotations (`uncertain` / `clock_domain_unknown` otherwise), keeps single-kernel roofline bounds separate from unverified external `msmodeling` predictions, and never infers thermal throttling from a static `85°C` threshold.
 2. **Status & Hook Context**: When `/mindie-agent` is invoked explicitly for status or setup, present the MindIE status from the `UserPromptExpansion` hook context. Never invent a session ID, repository, account, or project scope.
-3. **Automatic Experience Loop, `Stop` Boundary & Long-Horizon Continuation Ledger**:
-   - Once community contribution is configured and enabled for the project scope, eligible native `Stop` events are captured, redacted, and packaged automatically in the background—users never need to ask to save experience at the end of a session.
+3. **Experience Loop After Manual Session Entry, `Stop` Boundary & Long-Horizon Continuation Ledger**:
+   - In this manually enabled session, once community contribution is configured and enabled for the project scope, eligible native `Stop` events are captured, redacted, and packaged automatically in the background—users never need to ask to save experience at the end of a session.
    - **Host `Stop` != Long-Horizon Task Completion**: A single-turn `Stop` hook only hands off that turn's completed public transcript; it does not mean a multi-turn or multi-day engineering task is finished (`task_state="in_flight"` triggers a zero-call no-op in `knowledge_distill`).
    - **Launch-Time `in_flight_runs` Registration & Recovery-First-Query**: Immediately when `coordinator` or `remote-dev` launches a run or job, atomically update `PROGRESS.md` to register its `run_id` (`run_id == execution_id`, never replaced) or `job_id`, `slot_id`, endpoint, and `Run Manifest` path under `in_flight_runs` before polling or ending the turn. On resume or after compaction, query `in_flight_runs` first and never resubmit a duplicate command. Keep `Run Manifest` execution facts separate from condition-scoped hypothesis judgments in `experiment-ledger.jsonl`, never overwrite a succeeded remote run due to a local receipt/ledger error, and treat `candidate_for_sequential_pruning` with `pruned_combination_verified=false` as **RETAIN**.
 4. **Unified Contribution & Fault-Reporting Switch**: Community knowledge sharing and sanitized product fault reporting share a single persistent choice in `<adapter-config-directory>/mindie-consent.json`. When the native Hook returns `reporting.run_outside_hook=true`, execute its `reporting.command_line` immediately outside the Hook in the same setup flow (using a 90-second outer timeout) without asking for another confirmation or leaving the command for the user. Reuse a valid saved choice without another prompt. Only when the entry returns `needs_choice` for legacy knowledge-only `contribute`, resolve it once through `/mindie-agent`; never split knowledge/reporting approvals or ask per task. Keep saved `disabled`, `read-only` and `later` choices without prompting. Keep three states strictly separate: (1) local consent configuration saved, (2) background reporter worker running (`reporting.status == "running"`), and (3) external GitHub Issue/PR created. Report `degraded`, authentication errors, timeouts, and `needs_choice` directly, and never retry an uncertain external write.

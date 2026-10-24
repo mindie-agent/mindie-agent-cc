@@ -191,13 +191,15 @@ class StopGateTests(LaneCase):
         return config, project, outside
 
     def _stop(self, case: Path, project: Path, *, session=None, prompt=None,
-              sentinel="SENTINEL", hook_cwd=None):
+              sentinel="SENTINEL", hook_cwd=None, manual=False):
         from datetime import datetime, timezone
 
         session = session or str(uuid.uuid4())
         prompt = prompt or str(uuid.uuid4())
-        # Ordinary Stop must associate an authorized native task without an
-        # entry invocation. Only the named profile artifact supplies scope.
+        if manual:
+            from admission import activate
+            activate(session, project_root=str(project))
+        # The native artifact supplies capture scope; Stop never grants entry.
         transcript = Path(os.environ["CLAUDE_CONFIG_DIR"]) / "projects" / "fixture" / f"{session}.jsonl"
         transcript.parent.mkdir(parents=True, exist_ok=True)
         if not transcript.exists():
@@ -236,13 +238,13 @@ class StopGateTests(LaneCase):
         try:
             session, prompt = str(uuid.uuid4()), str(uuid.uuid4())
             first, rows, _wake = self._stop(
-                case, project, session=session, prompt=prompt, sentinel=sentinel
+                case, project, session=session, prompt=prompt, sentinel=sentinel, manual=True
             )
             self.assertEqual(first.returncode, 0, first.stderr.decode()[:500])
             self.assertEqual(json.loads(first.stdout.decode() or "{}"), {})
             self.assertEqual([row[0] for row in rows], [""])  # notification carries no duplicate body
             second, rows, _wake = self._stop(
-                case, project, session=session, prompt=prompt, sentinel=sentinel
+                case, project, session=session, prompt=prompt, sentinel=sentinel, manual=True
             )
             self.assertEqual(second.returncode, 0, second.stderr.decode()[:500])
             self.assertEqual(len(rows), 1)
@@ -254,7 +256,7 @@ class StopGateTests(LaneCase):
         case = self.tmp / "off"
         _config, project, _outside = self._arm(case, sharing=False, choice="contribute")
         try:
-            proc, rows, wake = self._stop(case, project, sentinel="SENTINEL-disabled-community")
+            proc, rows, wake = self._stop(case, project, sentinel="SENTINEL-disabled-community", manual=True)
             self.assertEqual(proc.returncode, 0, proc.stderr.decode()[:500])
             self.assertEqual(rows, [])
             self.assertFalse(wake)
@@ -266,7 +268,7 @@ class StopGateTests(LaneCase):
         case = self.tmp / "scope"
         _config, _project, outside = self._arm(case, sharing=True, choice="contribute")
         try:
-            proc, rows, wake = self._stop(case, outside, sentinel="SENTINEL-out-of-scope")
+            proc, rows, wake = self._stop(case, outside, sentinel="SENTINEL-out-of-scope", manual=True)
             self.assertEqual(proc.returncode, 0, proc.stderr.decode()[:500])
             self.assertEqual(rows, [])
             self.assertFalse(wake)
@@ -276,7 +278,7 @@ class StopGateTests(LaneCase):
     def test_hook_cwd_cannot_override_native_artifact_scope(self):
         case = self.tmp / "artifact-scope"
         _config, project, outside = self._arm(case, sharing=True, choice="contribute")
-        proc, rows, wake = self._stop(case, outside, hook_cwd=project)
+        proc, rows, wake = self._stop(case, outside, hook_cwd=project, manual=True)
         self.assertEqual(proc.returncode, 0, proc.stderr.decode()[:500])
         self.assertEqual(rows, [])
         self.assertFalse(wake)
@@ -309,7 +311,7 @@ class StopGateTests(LaneCase):
                 _config, project, _outside = self._arm(case, sharing=True, **kwargs)
                 sentinel = "SENTINEL-" + name
                 try:
-                    proc, rows, wake = self._stop(case, project, sentinel=sentinel)
+                    proc, rows, wake = self._stop(case, project, sentinel=sentinel, manual=True)
                     self.assertEqual(proc.returncode, 0, proc.stderr.decode()[:500])
                     output = json.loads(proc.stdout.decode() or "{}")
                     if name == "corrupt":
@@ -346,7 +348,7 @@ class StopGateTests(LaneCase):
         community.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
         pointer = json.loads(config.read_text(encoding="utf-8"))["community_config"]
         try:
-            proc, rows, wake = self._stop(case, project, sentinel="SENTINEL-field-target")
+            proc, rows, wake = self._stop(case, project, sentinel="SENTINEL-field-target", manual=True)
             self.assertEqual(proc.returncode, 0, proc.stderr.decode()[:400])
             self.assertEqual(rows, [])
             self.assertFalse(wake)
@@ -367,7 +369,7 @@ class StopGateTests(LaneCase):
             document["community_config"] = str(shared.resolve())
             path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
         try:
-            proc, rows, wake = self._stop(case, project, sentinel="SENTINEL-corrupt-shared")
+            proc, rows, wake = self._stop(case, project, sentinel="SENTINEL-corrupt-shared", manual=True)
             self.assertEqual(proc.returncode, 0, proc.stderr.decode()[:400])
             self.assertEqual(rows, [])
             self.assertFalse(wake)
@@ -384,7 +386,7 @@ class StopGateTests(LaneCase):
         community = Path(json.loads(config.read_text(encoding="utf-8"))["community_config"])
         before = (config.read_bytes(), engine.read_bytes(), community.read_bytes())
         try:
-            proc, _rows, _wake = self._stop(case, project, sentinel="SENTINEL-rewrite")
+            proc, _rows, _wake = self._stop(case, project, sentinel="SENTINEL-rewrite", manual=True)
             self.assertEqual(proc.returncode, 0, proc.stderr.decode()[:400])
         finally:
             reap_services(case)

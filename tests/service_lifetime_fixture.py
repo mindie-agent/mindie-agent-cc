@@ -66,6 +66,9 @@ _ObservedIndex._refresh = _index_refresh
                   community_config=str(community),
                   service_launch_context=dict(paths=diagnostic_paths, environment=[]))
     engine.write_text(json.dumps(config), encoding="utf-8")
+    from mindie_knowledge.loop.activation import Admission
+    Admission(config["admission_path"]).activate(
+        "synthetic-mechanism-fixture", project_root=str(root))
     adapter = root / "adapter.json"
     adapter.write_text(json.dumps(dict(python=sys.executable, engine_config=str(engine),
                                        community_config=str(community), state_dir=str(root / "adapter-state"))))
