@@ -121,8 +121,17 @@ class McpTests(unittest.TestCase):
         )
         self.assertTrue(replay["result"]["isError"])
 
-
-
+    def test_remote_tools_follow_the_trusted_profile_env(self):
+        import mcp_server
+        with patch.dict(os.environ, {"REMOTE_DEV_HARNESS_PROFILE": "claude"}):
+            tools = {item["name"]: item for item in mcp_server.remote_tools()}
+        self.assertIn("remote_read", tools)
+        self.assertTrue(
+            {"remote_Read", "remote_Write", "remote_Edit", "remote_Bash",
+             "remote_TaskOutput", "remote_TaskStop", "remote_NotebookEdit",
+             "remote_TaskList"} <= set(tools)
+        )
+        self.assertNotIn("remote_write_stdin", tools)
 
 
 class RemoteObservationBoundTests(unittest.TestCase):
