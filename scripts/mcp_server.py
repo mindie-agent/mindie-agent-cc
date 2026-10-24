@@ -340,6 +340,88 @@ def clamp_remote_args(args):
     return body
 
 
+_TERMINAL_COMMAND_STATES = {"succeeded", "failed", "timeout", "cancelled"}
+_COMMAND_TOOLS = {
+    "remote_Bash", "remote_bash", "remote_BashOutput", "remote_TaskOutput",
+    "remote_exec_command", "remote_write_stdin", "remote_shell",
+}
+
+
+def _completed_command(name, result):
+    """A native command that really ran may exit nonzero; keep its output."""
+    if name not in _COMMAND_TOOLS or not isinstance(result, dict):
+        return False
+    error_details = result.get("error_details")
+    if result.get("unknown") or (
+            isinstance(error_details, dict)
+            and error_details.get("submission_state") == "uncertain"):
+        return False
+    state = result.get("state") or result.get("status")
+    if state not in _TERMINAL_COMMAND_STATES:
+        return False
+    exit_code = result.get("exit_code")
+    if isinstance(exit_code, int) and not isinstance(exit_code, bool):
+        return True
+    task = result.get("task")
+    if isinstance(task, dict) and isinstance(task.get("exitCode"), int) \
+            and not isinstance(task.get("exitCode"), bool):
+        return True
+    return False
+
+
+def remote_result(name, payload):
+    """Preserve native content blocks and a completed nonzero command.
+
+    `remote_dev` returns image blocks in `content`; dropping them here would
+    make a real native image read text-only. A completed command's nonzero exit
+    is an observation to hand back, not a helper exception.
+    """
+    result_payload = payload.get("result", payload) if isinstance(payload, dict) else payload
+    text = payload.get("text") if isinstance(payload, dict) else None
+    blocks = [dict(
+        type="text",
+        text=text if isinstance(text, str) else canonical(payload),
+    )]
+    native = payload.get("content") if isinstance(payload, dict) else None
+    if isinstance(native, list):
+        blocks.extend(item for item in native
+                      if isinstance(item, dict) and isinstance(item.get("type"), str))
+    if isinstance(result_payload, dict):
+        error_details = result_payload.get("error_details")
+        uncertain = (
+            result_payload.get("status") == "submission_uncertain"
+            or result_payload.get("unknown")
+            or (isinstance(error_details, dict)
+                and error_details.get("submission_state") == "uncertain")
+        )
+    else:
+        uncertain = False
+    if uncertain:
+        is_error = True
+    elif _completed_command(name, result_payload):
+        is_error = False
+    elif isinstance(result_payload, dict):
+        outcome = result_payload.get("outcome")
+        if result_payload.get("status") == "local_recording_failed":
+            completed_locally = (
+                result_payload.get("operation_completed") is True
+                or (isinstance(result_payload.get("error_details"), dict)
+                    and result_payload["error_details"].get("operation_completed") is True)
+            )
+            if completed_locally:
+                outcome = result_payload.get("execution_outcome", outcome)
+        is_error = outcome not in {None, "success", "cancelled"}
+    else:
+        is_error = False
+    # Claude Code renders structuredContent instead of the text block whenever
+    # both are present. Text-only results therefore ship the native text as the
+    # only model-visible payload; media blocks and error receipts retain the
+    # structured form their consumers need.
+    if is_error or any(block.get("type") != "text" for block in blocks):
+        return dict(content=blocks, structuredContent=result_payload, isError=is_error)
+    return dict(content=blocks, isError=is_error)
+
+
 def _public_domain(args):
     """Read the optional public domain without accepting any path or mapping."""
     if not isinstance(args, dict) or "domain" not in args:
@@ -507,6 +589,9 @@ def remote_tools():
 
 
 def remote_call(name, args, session):
+    # Trusted plugin binding for this MCP process. The launcher injects the
+    # same literal value; tool arguments can never select or override it.
+    os.environ["REMOTE_DEV_HARNESS_PROFILE"] = "claude"
     from remote_dev.mcp.schemas import ALIASES
     from remote_dev.mcp.tools import call_tool
     from remote_dev.core.errors import RemoteExecutionError
@@ -625,21 +710,7 @@ def handle(surface, message):
                     id=ident,
                     result=result,
                 )
-            text = payload.get("text") if isinstance(payload, dict) else canonical(payload)
-            result = dict(
-                content=[
-                    dict(
-                        type="text",
-                        text=text if isinstance(text, str) else canonical(payload),
-                    )
-                ],
-                structuredContent=(
-                    payload.get("result", payload) if isinstance(payload, dict) else payload
-                ),
-                isError=isinstance(payload, dict)
-                and payload.get("result", {}).get("outcome")
-                not in {None, "success", "cancelled"},
-            )
+            result = remote_result(local, payload)
         succeeded = result.get("isError") is not True
         return dict(jsonrpc="2.0", id=ident, result=result)
     except TimeoutError as exc:

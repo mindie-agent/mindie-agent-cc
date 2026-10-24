@@ -30,6 +30,11 @@ class ManifestTests(unittest.TestCase):
         mcp = json.loads((ROOT / ".mcp.json").read_text(encoding="utf-8"))
         self.assertIn("knowledge", mcp["mcpServers"])
         self.assertIn("remote", mcp["mcpServers"])
+        self.assertEqual(
+            mcp["mcpServers"]["remote"].get("env"),
+            {"REMOTE_DEV_HARNESS_PROFILE": "claude"},
+        )
+        self.assertNotIn("env", mcp["mcpServers"]["knowledge"])
         self.assertNotIn("hooks", plugin)
         self.assertNotIn("mcpServers", plugin)
 

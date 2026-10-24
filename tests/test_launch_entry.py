@@ -33,11 +33,14 @@ def test_mcp_dispatch_has_no_total_deadline_and_keeps_caller_cancel(tmp_path):
                 patch.object(mindie_launch.bounded, "run",
                              return_value=json.dumps(response)) as runner:
             assert mindie_launch._dispatch(surface, raw, "slow-read", cancel) == response
-        assert runner.call_args.kwargs.get("timeout") == mindie_launch.CALL_CHILD_BUDGET
+        expected = (mindie_launch.REMOTE_MIN_BUDGET_SECONDS if surface == "remote"
+                    else mindie_launch.CALL_CHILD_BUDGET)
+        assert runner.call_args.kwargs.get("timeout") == expected
         assert runner.call_args.kwargs["cancel"] is cancel
         assert runner.call_args.args[0][-2:] == [surface, "--once"]
-        if surface == "knowledge":
-            assert runner.call_args.kwargs["max_output"] == mindie_launch.KNOWLEDGE_MAX_OUTPUT
+        expected_output = (mindie_launch.KNOWLEDGE_MAX_OUTPUT if surface == "knowledge"
+                           else mindie_launch.REMOTE_MAX_OUTPUT)
+        assert runner.call_args.kwargs["max_output"] == expected_output
 
 
 def test_only_knowledge_business_calls_can_transfer_service_ownership(tmp_path):
