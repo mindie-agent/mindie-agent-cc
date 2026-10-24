@@ -126,11 +126,13 @@ class McpTests(unittest.TestCase):
         with patch.dict(os.environ, {"REMOTE_DEV_HARNESS_PROFILE": "claude"}):
             tools = {item["name"]: item for item in mcp_server.remote_tools()}
         self.assertIn("remote_read", tools)
+        self.assertEqual(len(tools), 30)
         self.assertTrue(
             {"remote_Read", "remote_Write", "remote_Edit", "remote_Bash",
              "remote_TaskOutput", "remote_TaskStop", "remote_NotebookEdit",
-             "remote_TaskList"} <= set(tools)
+             "remote_BashOutput"} <= set(tools)
         )
+        self.assertNotIn("remote_TaskList", tools)
         self.assertNotIn("remote_write_stdin", tools)
 
 
