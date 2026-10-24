@@ -31,7 +31,8 @@
       ],
       "env": {
         "REMOTE_DEV_HARNESS_PROFILE": "claude"
-      }
+      },
+      "timeout": 660000
     }
   }
 }
