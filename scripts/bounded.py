@@ -71,6 +71,8 @@ def check_cancelled():
 class CommandCancelled(RuntimeError):
     """The caller cancelled this attempt; owned children are reaped."""
 
+    category = "cancelled"
+
 class OwnerExited(RuntimeError):
     """The owning maintenance core exited; its work is not continued."""
 class CommandTimedOut(RuntimeError):
