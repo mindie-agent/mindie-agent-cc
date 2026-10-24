@@ -88,6 +88,7 @@ def adapter_check(source):
         "runtime_probe.py",
         "setup.py",
         "bootstrap.py",
+        "component_update.py",
         "install_state.py",
         "maintenance.py",
         "harness.py",
@@ -156,6 +157,11 @@ def installed_revisions(pins):
 
 
 def runtime_check(scripts):
+    from bounded import run
+
+    # Validate the actual isolated import boundary without discovery or builds.
+    run([sys.executable, "-I", "-B", str(Path(scripts) / "component_update.py"),
+         "--help"], "", timeout=5.0)
     output = io.StringIO()
     with redirect_stdout(output):
         exec(build_probe_script(Path(scripts) / "transcript.py"), {})

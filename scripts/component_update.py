@@ -7,9 +7,13 @@ the existing exclusive operation lock and 30s idle handoff.
 no knowledge activation, feed maintenance, model or consent changes.
 """
 from __future__ import annotations
+import argparse
 import json
 from pathlib import Path
 import sys
+
+# Isolated Python omits the script directory; helpers belong to this candidate.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from product_contract import identity, package_files
 
@@ -45,5 +49,16 @@ def check(binding, source, *, force=False):
     return dict(json.loads(result), runtime=artifact["components"])
 
 
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("source", type=Path)
+    parser.add_argument("python")
+    parser.add_argument("root", type=Path)
+    parser.add_argument("current_python")
+    args = parser.parse_args()
+    print(json.dumps(prepare(args.source, args.python, args.root,
+                             current_python=args.current_python), sort_keys=True))
+
+
 if __name__ == "__main__":
-    print(json.dumps(prepare(*sys.argv[1:4], current_python=sys.argv[4]), sort_keys=True))
+    main()
