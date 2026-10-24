@@ -1,15 +1,11 @@
 """Focused feed-sync result folding for the Claude Code updater."""
 
 import json
-import os
 import sys
-import tempfile
-import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from support import make_config
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
@@ -210,8 +206,12 @@ def test_late_cancel_preserves_completed_feed_output():
     assert result["result"] == "sync_failed"
 
 
-def test_session_recording_failure_keeps_known_feed_and_diagnostic_outcomes(tmp_path):
-    from install_state import atomic_write
+def test_session_recording_failure_keeps_known_feed_and_diagnostic_outcomes(tmp_path, monkeypatch):
+    from support import make_config
+    from admission import gate
+    config = make_config(tmp_path)
+    monkeypatch.setenv("MINDIE_CC_CONFIG", str(config))
+    gate().activate("manual-session", project_root=str(tmp_path))
     rows = [_row("fixture/public", "synced", commit="committed")]
     def run(*args, **kwargs):
         if "activate" in args[0]:
@@ -220,12 +220,10 @@ def test_session_recording_failure_keeps_known_feed_and_diagnostic_outcomes(tmp_
         return '{"status":"ok"}'
     with patch.object(maintenance, "sync_public_feed", return_value={"result": "ok", "results": rows}), \
             patch.object(maintenance, "run", side_effect=run), \
-            patch("paths.engine_config_path", return_value=tmp_path / "engine.json"), \
-            patch("paths.base_config_path", return_value=tmp_path / "cc.json"), \
             patch("paths.state_dir", return_value=tmp_path), \
             patch("diagnostic_support.reporting_config_path", return_value=tmp_path / "reporting.json"), \
             patch("install_state.atomic_write", side_effect=PermissionError("fixture")):
-        result = maintenance.session_start()
+        result = maintenance.session_start({"session_id": "manual-session"})
     assert result["feed"]["results"] == rows
     assert result["diagnostics"]["status"] == "ok"
     assert result["status"] == "incomplete"

@@ -157,17 +157,9 @@ def session_start(event=None):
     from paths import state_dir
     from paths import engine_config_path, base_config_path
 
+    from admission import gate
+    session = event.get("session_id") if isinstance(event, dict) else None
     capture = {"status": "inert"}
-    if event is not None:
-        try:
-            from bridge import associate_fork
-            capture = associate_fork(event)
-        except Exception as exc:
-            from diagnostic_support import failure
-            failure("capture.session_start", stage="association", category="unavailable",
-                    exception=exc, reportable=False)
-            capture = {"status": "unavailable", "error_type": type(exc).__name__}
-    feed = sync_public_feed(sys.executable, engine_config_path(), timeout=FEED_BUDGET)
     try:
         raw = run(
             [sys.executable, str(Path(__file__).with_name("diagnostic_support.py")),
@@ -191,7 +183,12 @@ def session_start(event=None):
             reporting = dict(reporting, operation_failed=True, process=process)
     except Exception as exc:
         reporting = dict(status="unavailable", error_type=type(exc).__name__, process=process)
-    ready = (feed["result"] == "ok" and not feed.get("error")
+    # Diagnostic maintenance is independent of knowledge admission, including
+    # when that authority is damaged. Knowledge failures remain visible.
+    knowledge_enabled = gate().knowledge_lease(session) is not None
+    feed = (sync_public_feed(sys.executable, engine_config_path(), timeout=FEED_BUDGET)
+            if knowledge_enabled else dict(result="inactive"))
+    ready = (feed["result"] in {"ok", "inactive"} and not feed.get("error")
              and reporting.get("status") == "ok"
              and activation.get("status") in {"running", "disabled", "needs_choice"}
              and not reporting.get("operation_failed")

@@ -71,7 +71,7 @@ class McpTests(unittest.TestCase):
         )
         self.assertTrue(response["result"]["isError"])
 
-    def test_status_after_bind(self):
+    def test_status_without_knowledge_activation_still_requires_native_bind(self):
         try:
             from mindie_knowledge.loop import settings as _settings  # noqa: F401
         except ImportError:
@@ -104,6 +104,7 @@ class McpTests(unittest.TestCase):
         self.assertFalse(response["result"].get("isError"))
         payload = json.loads(response["result"]["content"][0]["text"])
         self.assertTrue(payload["configured"])
+        self.assertFalse(payload["knowledge_enabled"])
         replay = self._once(
             "knowledge",
             {

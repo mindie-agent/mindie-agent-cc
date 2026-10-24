@@ -86,6 +86,8 @@ class KnowledgePageTests(unittest.TestCase):
             )
         }
         os.environ["MINDIE_CC_CONFIG"] = str(self.config)
+        from admission import gate
+        gate().activate(SESSION, project_root=str(self.tmp))
         os.environ["MINDIE_DIAGNOSTICS_CONFIG"] = str(self.diag / "off.json")
         os.environ["MINDIE_DIAGNOSTICS_ROOT"] = str(self.diag / "logs")
         sys.path.insert(0, str(SCRIPTS))

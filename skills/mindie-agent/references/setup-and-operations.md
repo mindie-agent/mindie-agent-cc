@@ -6,7 +6,7 @@ For setup or a GitHub authentication failure, follow [GitHub Sign-In](github-aut
 
 ## 1. Community Experience Contribution Setup
 
-- **Default Automatic Loop After Opt-In**: Once contribution is configured and enabled for the approved project scope, eligible native `Stop` events automatically capture the current task's public transcript, run deterministic local redaction + Gitleaks scanning, and prepare a knowledge PR in the background. Users never need to ask to save experience at the end of each task.
+- **Session Manual Entry**: The user invokes `/mindie-agent` once per session to enable knowledge and the background flywheel; later turns retain that grant until deactivation. Only then may eligible `Stop` events capture the session's public transcript under the saved contribution choice and project scope. Ordinary sessions receive no knowledge instructions or activation reminders. Forks and subagents need their own entry.
 - **Completing Incomplete Configuration & On-Demand Knowledge Repo Fork**:
   - Installation requires no Star or Fork; starring a project is optional user support. Only after the user explicitly enables contribution (`contribute`) for a target public knowledge repository `owner/repo` (such as `mindie-agent/knowledge-vllm-ascend`), create its fork as needed through the authenticated `gh` channel:
     ```sh

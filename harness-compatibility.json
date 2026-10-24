@@ -258,9 +258,9 @@
         }
       ],
       "code_paths": [
-        "scripts/bridge.py:associate_fork",
         "scripts/transcript.py:capture_source",
-        "scripts/maintenance.py:session_start"
+        "scripts/maintenance.py:session_start",
+        "scripts/bridge.py:handle_stop"
       ],
       "test_ids": [
         "tests/test_fork_capture.py::test_fork_start_excludes_large_inherited_history_and_preserves_resume",

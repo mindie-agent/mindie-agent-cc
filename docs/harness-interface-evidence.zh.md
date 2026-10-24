@@ -36,6 +36,6 @@
 当用户通过 `claude --resume <ID> --fork-session` 从现有会话派生子会话时，Claude Code 会在第一条子会话消息产生前触发 `source: "fork"` 的 `SessionStart` 事件，并提供新的子会话 `session_id`、`transcript_path` 与 `cwd`。
 
 ### `mindie-agent-cc` 如何隔离父子会话历史
-1. **提示词前的边界锚定**：在收到 `SessionStart (source: "fork")` 时，适配层立即建立子会话的独立准入范围与采集起点，无需扫描父会话历史文件或维护额外的血缘数据库。
+1. **Fork 子会话不自动继承激活态**：`--fork-session` 派生的子会话**不会**继承父会话的 `/mindie-agent` 激活租约，也不会在 `SessionStart (source: "fork")` 时自动关联知识准入。子会话在用户显式输入 `/mindie-agent` 之前保持未激活状态，不触发知识检索或 `Stop` 采集。
 2. **识别并排除复制的父会话记录**：Claude Code 生成子会话 JSONL 文件时，会将复制过来的父会话记录的 `sessionId` 改写为子会话 ID（保留原时间戳），但在文件开头会先写入属于子会话自身的初始 `enqueue` 队列时间戳。
-3. **确定性的子会话增量采集**：在 `Stop` 阶段，适配层校验子会话自身的初始队列锚点（在常规 `--resume` 与 `/compact` 压缩后依然保持稳定），仅采集子会话自身产生的新公开对话。若归属元数据缺失或不可读，`Stop` 会显式报错，绝不回退去采集从父会话继承的历史内容。归属头部读取严格限制在前 64 行 / 1 MiB 以内。
+3. **确定性的子会话增量采集**：当子会话通过 `/mindie-agent` 显式激活后，`Stop`（`transcript.capture_source`）同时校验子会话自身的初始 `enqueue` 队列锚点（在常规 `--resume` 与 `/compact` 压缩后依然保持稳定）与子会话租约的 `activated_at` 激活时间戳（取 `max(created_at, activated_at)`），仅采集子会话在激活之后产生的新公开对话。若归属元数据缺失或不可读，`Stop` 会显式报错，绝不回退去采集从父会话继承的历史内容。归属头部读取严格限制在前 64 行 / 1 MiB 以内。
