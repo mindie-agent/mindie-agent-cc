@@ -105,9 +105,18 @@ def _read(path):
     return value
 
 
+def component_manifest():
+    path = Path(sys.prefix).parent.parent / "components.json"
+    return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
+
+
+def candidate_identity(source):
+    return identity(source, components=component_manifest())
+
+
 def validate_candidate(source):
     from candidate_validate import validate
-    return validate(source, identity(source))
+    return validate(source, candidate_identity(source))
 
 
 def prepare_binding(source, config=None, *, root=None, domain="vllm-ascend",
@@ -121,6 +130,9 @@ def prepare_binding(source, config=None, *, root=None, domain="vllm-ascend",
     config = Path(config or default_config_path()).expanduser().resolve()
     os.environ["MINDIE_CC_CONFIG"] = str(config)
     key = runtime_key(source)
+    components = component_manifest()
+    if components:
+        key = hashlib.sha256((key + components["lock_sha256"]).encode()).hexdigest()
     domain_root = Path(root or Path(os.environ.get("XDG_DATA_HOME")
                                   or Path.home() / ".local/share") / "mindie-agent/cc")
     domain_root = domain_root.expanduser().resolve()
@@ -149,7 +161,7 @@ def prepare_binding(source, config=None, *, root=None, domain="vllm-ascend",
         if adapter_file.exists():
             value = read_binding(adapter_file)
             from candidate_validate import validate
-            validate(source, identity(source), value["product_validation"])
+            validate(source, candidate_identity(source), value["product_validation"])
             if (value["python"] != sys.executable or value["runtime_scripts"] != str(HERE)
                     or value["base_config"] != str(config)):
                 raise InstallationUnavailable("prepared candidate identity differs")
@@ -165,13 +177,15 @@ def prepare_binding(source, config=None, *, root=None, domain="vllm-ascend",
             engine.update(transcript_adapter=str(HERE / "transcript.py"),
                           **prepare(sys.executable, HERE),
                           community_config=adapter["community_config"],
-                          product_validation=validation)
+                          product_validation=validation,
+                         component_source=str(source) if components else None)
             feed = publication_feed(validation, domain=domain)
             if selected is None and feed is not None and not no_public_feed:
                 engine["feeds"] = [feed]
             value = dict(adapter, python=sys.executable, runtime_scripts=str(HERE),
                          adapter_config=str(adapter_file), engine_config=str(engine_file),
-                         product_validation=validation)
+                         product_validation=validation,
+                         component_source=str(source) if components else None)
             value['domain_source_configs'] = dict(adapter.get('domain_configs') or {})
             from diagnostic_support import reporting_config_path
             value["diagnostics_context"] = {
@@ -232,7 +246,7 @@ def activate_binding(candidate_file, *, observation_seconds=30.0):
     The caller verifies native installation facts. This operation never downloads,
     retries a native mutation, cancels business work, or rewrites saved choices.
     """
-    from mindie_knowledge.loop.cli import config_at, connect, prepare_service
+    from mindie_knowledge.loop.cli import config_at
     from mindie_knowledge.loop.handoff import _probe
     from mindie_knowledge.loop.lifecycle import inspect_retirement, retire_service
 
@@ -284,16 +298,13 @@ def activate_binding(candidate_file, *, observation_seconds=30.0):
                 state = _probe(engine, remaining(), config_path=candidate["engine_config"])
             if remaining() <= 0:
                 return incomplete("new_readiness", service=state, retirement=retirement)
-            if state == "absent":
-                prepare_service(candidate["engine_config"], probe_timeout=remaining())
             while True:
                 if remaining() <= 0:
                     return incomplete("new_readiness", service=state, retirement=retirement)
                 state = _probe(engine, remaining(), config_path=candidate["engine_config"])
                 if remaining() <= 0:
                     return incomplete("new_readiness", service=state, retirement=retirement)
-                if state == "ready":
-                    connect(engine, config_path=candidate["engine_config"])
+                if state in {"ready", "absent"}:
                     from mindie_knowledge.loop.domain_catalog import retire_changed, restore_changed
                     domains = retire_changed(previous, candidate, timeout=remaining())
                     if domains['status'] != 'retired':

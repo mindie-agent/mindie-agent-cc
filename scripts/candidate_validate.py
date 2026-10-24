@@ -28,6 +28,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from product_contract import (
@@ -162,7 +163,7 @@ def runtime_check(scripts):
         raise ValueError(output.getvalue().strip() or "candidate runtime probe returned no result")
 
 
-def publication_git(args, code, env):
+def publication_git(args, code, env, *, timeout=60.0):
     """Project only execution facts from one owned Git process."""
     from bounded import (
         CommandCancelled, CommandTimedOut, OutputLimitExceeded, OwnerExited, run,
@@ -170,7 +171,7 @@ def publication_git(args, code, env):
 
     receipt = {}
     try:
-        output = run(args, "", timeout=60.0, env=env, check=False, receipt=receipt)
+        output = run(args, "", timeout=timeout, env=env, check=False, receipt=receipt)
     except Exception as exc:
         # An incomplete _spawn may already have created/resumed a process.
         # Only the runner's explicit pre-start cancellation proves no start.
@@ -212,6 +213,12 @@ def publication_contract(publication):
     """One read-only fetch. No checkout, Git hooks, or retries."""
     from mindie_knowledge.publication_contract import read_git_contract
 
+    deadline = time.monotonic() + 150
+    def remaining():
+        value = deadline - time.monotonic() - 5
+        if value <= 0:
+            raise TimeoutError("publication validation budget exhausted")
+        return min(60.0, value)
     env = dict(
         os.environ, GIT_TERMINAL_PROMPT="0", GIT_CONFIG_NOSYSTEM="1",
         GIT_CONFIG_GLOBAL=os.devnull,
@@ -219,20 +226,20 @@ def publication_contract(publication):
     with tempfile.TemporaryDirectory(prefix="mindie-publication-contract-") as directory:
         git = ["git", "-c", "core.hooksPath=" + os.devnull, "-C", directory]
 
-        publication_git(git + ["init", "--bare", "--quiet"], "init_failed", env)
+        publication_git(git + ["init", "--bare", "--quiet"], "init_failed", env, timeout=remaining())
         publication_git(git + [
             "fetch", "--no-auto-maintenance", "--depth=1", "--no-tags",
             "https://github.com/" + publication["repository"] + ".git",
             publication["verified_commit"],
-        ], "fetch_failed", env)
+        ], "fetch_failed", env, timeout=remaining())
         observed = publication_git(
-            git + ["rev-parse", "FETCH_HEAD"], "revision_read_failed", env,
+            git + ["rev-parse", "FETCH_HEAD"], "revision_read_failed", env, timeout=remaining(),
         ).strip()
         if observed != publication["verified_commit"]:
             raise CheckFailure("publication_fetch", "revision_mismatch")
         try:
             return read_git_contract(
-                directory, observed, publication["domain"], env=env,
+                directory, observed, publication["domain"], env=env, deadline=deadline,
             )
         except Exception as exc:
             code = "contract_mismatch" if getattr(exc, "code", None) == "contract_mismatch" else "read_failed"
@@ -240,10 +247,14 @@ def publication_contract(publication):
 
 
 def validate(source, expected, verified_receipt=None):
-    actual = checked("source", "source_invalid", lambda: identity(source, expected.get("candidate_revision")))
+    actual = checked("source", "source_invalid", lambda: identity(source, expected.get("candidate_revision"), components=expected.get("component_updates")))
     if actual != expected:
         raise CheckFailure("source", "source_changed")
     installed_revisions(actual["runtime"])
+    if "component_updates" in actual:
+        from mindie_knowledge.runtime_inventory import verify, verify_lock
+        checked("runtime_pins", "receipt_invalid", lambda: verify_lock(actual["component_updates"]))
+        checked("runtime_pins", "revision_mismatch", lambda: verify(actual["component_updates"]["runtime"]))
     checked("adapter", "adapter_incompatible", lambda: adapter_check(Path(source)))
     version = checked("adapter", "release_version_mismatch",
                       lambda: importlib.metadata.version("mindie-agent-cc"))
@@ -255,7 +266,7 @@ def validate(source, expected, verified_receipt=None):
                 lambda: publication_contract(actual["publication"]))
     else:
         checked("receipt", "receipt_mismatch", lambda: validate_receipt(json.dumps(verified_receipt), actual))
-    if checked("source", "source_invalid", lambda: identity(source, actual["candidate_revision"])) != actual:
+    if checked("source", "source_invalid", lambda: identity(source, actual["candidate_revision"], components=actual.get("component_updates"))) != actual:
         raise CheckFailure("source", "source_changed")
     return dict(actual, status="validated")
 

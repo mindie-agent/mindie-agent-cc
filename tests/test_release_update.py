@@ -18,6 +18,17 @@ import release_update as update
 from mindie_knowledge.releases import supports_harness
 
 
+@pytest.fixture(autouse=True)
+def no_independent_component_change(monkeypatch):
+    # These tests own native plugin transactions. Component selection and its
+    # effective runtime are exercised by test_component_update separately.
+    import component_update
+    from unittest.mock import Mock
+    check = Mock(return_value={"status": "up_to_date"})
+    monkeypatch.setattr(component_update, "check", check)
+    return check
+
+
 def release(version="0.0.2", harness_version=None):
     declaration = harness.compatibility(ROOT)
     if harness_version is not None:
@@ -72,7 +83,7 @@ def test_native_checkout_must_match_selected_sha_before_install(tmp_path):
     state = {"candidate": selected}
     with patch.object(update, "_declare_ref"), \
             patch.object(update, "_mutation") as mutation, \
-            patch.object(update, "installed_plugin", return_value={"version": "0.0.1"}), \
+            patch.object(update, "installed_plugin", return_value={"enabled": True, "version": "0.0.1", "installPath": str(ROOT)}), \
             patch.object(update, "_marketplace", return_value={
                 "source": "git", "url": f"https://github.com/{harness.REPOSITORY}.git",
                 "ref": "v0.0.2", "installLocation": str(tmp_path / "catalog"),
@@ -92,7 +103,7 @@ def test_unknown_native_effect_is_not_replayed_even_if_target_matches(tmp_path, 
     selected = release()
     state = {"candidate": selected, "native_effect": "unknown", "stage": "plugin",
              "process": process}
-    with patch.object(update, "installed_plugin", return_value={"version": "0.0.2"}) as read, \
+    with patch.object(update, "installed_plugin", return_value={"enabled": True, "version": "0.0.2", "installPath": str(ROOT)}) as read, \
             patch.object(update, "_mutation") as mutation:
         with pytest.raises(RuntimeError, match="not confirmed settled"):
             update.install_selected(binding(tmp_path), "claude", selected, state)
@@ -105,7 +116,7 @@ def test_settled_writer_with_old_native_target_is_not_replayed(tmp_path):
     selected = release()
     state = {"candidate": selected, "native_effect": "unknown", "stage": "plugin",
              "process": {"completed": True, "cleanup_failed": False}}
-    with patch.object(update, "installed_plugin", return_value={"version": "0.0.1"}), \
+    with patch.object(update, "installed_plugin", return_value={"enabled": True, "version": "0.0.1", "installPath": str(ROOT)}), \
             patch.object(update, "_verify_catalog", return_value=tmp_path), \
             patch.object(update, "_mutation") as mutation:
         with pytest.raises(RuntimeError, match="unconfirmed"):
@@ -121,7 +132,7 @@ def test_harness_changed_after_interruption_does_not_activate_or_install(tmp_pat
     with patch.object(update, "read_receipt", return_value=state), \
             patch.object(update, "native_binary", return_value="claude"), \
             patch.object(update, "native_version", return_value="9.0.0"), \
-            patch.object(update, "installed_plugin", return_value={"enabled": True, "version": "0.0.1"}), \
+            patch.object(update, "installed_plugin", return_value={"enabled": True, "version": "0.0.1", "installPath": str(ROOT)}), \
             patch("mindie_knowledge.releases_io.verify_release_source"), \
             patch.object(update, "install_selected") as install:
         result = update.check(saved)
@@ -148,7 +159,7 @@ def test_busy_activation_does_not_wait_an_hour_or_refetch_releases(tmp_path):
     with patch.object(update, "read_receipt", return_value=state), \
             patch.object(update, "native_binary", return_value="claude"), \
             patch.object(update, "native_version", return_value="2.1.269"), \
-            patch.object(update, "installed_plugin", return_value={"enabled": True, "version": "0.0.1"}), \
+            patch.object(update, "installed_plugin", return_value={"enabled": True, "version": "0.0.1", "installPath": str(ROOT)}), \
             patch.object(update, "install_selected", return_value=tmp_path), \
             patch("bootstrap.ensure_runtime", return_value=(sys.executable, SCRIPTS)), \
             patch("mindie_knowledge.releases_io.fetch_releases") as fetch, \
@@ -160,15 +171,15 @@ def test_busy_activation_does_not_wait_an_hour_or_refetch_releases(tmp_path):
     fetch.assert_not_called()
 
 
-def test_successful_check_uses_24_hours_and_failure_does_not_reset_it(tmp_path):
+def test_successful_check_refreshes_after_five_minutes(tmp_path):
     saved = binding(tmp_path)
     state = {"status": "up_to_date", "last_successful_check": 100}
     with patch.object(update, "read_receipt", return_value=state):
-        assert not update.due(saved, now=100 + 86399)
-        assert update.due(saved, now=100 + 86400)
-        state["last_failed_check"] = 100 + 86400
-        assert not update.due(saved, now=100 + 86459)
-        assert update.due(saved, now=100 + 86460)
+        assert not update.due(saved, now=100 + 299)
+        assert update.due(saved, now=100 + 300)
+        state["last_failed_check"] = 100 + 300
+        assert not update.due(saved, now=100 + 359)
+        assert update.due(saved, now=100 + 360)
     assert state["last_successful_check"] == 100
 
 
@@ -177,7 +188,7 @@ def test_successful_no_candidate_check_advances_success_clock(tmp_path):
     state = {"last_successful_check": 10, "last_failed_check": 20}
     with patch.object(update, "native_binary", return_value="claude"), \
             patch.object(update, "native_version", return_value="2.1.269"), \
-            patch.object(update, "installed_plugin", return_value={"enabled": True, "version": "0.0.1"}), \
+            patch.object(update, "installed_plugin", return_value={"enabled": True, "version": "0.0.1", "installPath": str(ROOT)}), \
             patch("mindie_knowledge.releases_io.fetch_releases", return_value=[]), \
             patch.object(update.time, "time", return_value=100):
         result = update.check(saved, state)
@@ -191,7 +202,7 @@ def test_failed_fetch_preserves_success_clock(tmp_path):
     state = {"last_successful_check": 10}
     with patch.object(update, "native_binary", return_value="claude"), \
             patch.object(update, "native_version", return_value="2.1.269"), \
-            patch.object(update, "installed_plugin", return_value={"enabled": True, "version": "0.0.1"}), \
+            patch.object(update, "installed_plugin", return_value={"enabled": True, "version": "0.0.1", "installPath": str(ROOT)}), \
             patch("mindie_knowledge.releases_io.fetch_releases",
                   side_effect=OSError("offline")):
         with pytest.raises(OSError, match="offline"):
@@ -203,14 +214,14 @@ def test_prior_completed_install_is_not_pending_after_later_fetch_failure(tmp_pa
     state = {
         "candidate": release(), "native_effect": "verified", "stage": "activation",
         "status": "failed", "installation_complete": True,
-        "last_successful_check": 100, "last_failed_check": 100 + 86400,
+        "last_successful_check": 100, "last_failed_check": 100 + 300,
         "prepared": {"config": "old-completed-config"},
     }
     assert not update._pending_install(state)
-    assert update.next_check_at(state) == 100 + 86400 + 60
+    assert update.next_check_at(state) == 100 + 300 + 60
     with patch.object(update, "native_binary", return_value="claude"), \
             patch.object(update, "native_version", return_value="2.1.299"), \
-            patch.object(update, "installed_plugin", return_value={"enabled": True, "version": "0.0.2"}), \
+            patch.object(update, "installed_plugin", return_value={"enabled": True, "version": "0.0.2", "installPath": str(ROOT)}), \
             patch("mindie_knowledge.releases_io.fetch_releases", return_value=[]) as fetch, \
             patch.object(update, "install_selected") as install:
         result = update.check(binding(tmp_path), state)
@@ -265,12 +276,13 @@ def test_background_no_receipt_or_failed_child_is_backed_off(tmp_path, child_fai
             patch.object(update.BackgroundCheck, "_record_error"), \
             patch.object(update.time, "time", return_value=100):
         checker = update.BackgroundCheck(lambda: saved)
-        checker.start_if_due()
-        checker.thread.join(timeout=2)
-        assert not checker.thread.is_alive()
-        for _ in range(5):
-            checker.start_if_due()
-        checker.close()
+        try:
+            checker._work_once()
+            for _ in range(5):
+                checker.start_if_due()
+            assert checker.thread.is_alive()
+        finally:
+            checker.close()
     assert run.call_count == 1
     assert checker.next_check_at == 160
 
@@ -445,7 +457,7 @@ def test_incompatible_prepared_candidate_does_not_block_new_eligible_release(tmp
 
     with patch.object(update, "native_binary", return_value="claude"), \
             patch.object(update, "native_version", return_value="2.1.299"), \
-            patch.object(update, "installed_plugin", return_value={"version": "0.0.2"}), \
+            patch.object(update, "installed_plugin", return_value={"enabled": True, "version": "0.0.2", "installPath": str(ROOT)}), \
             patch("mindie_knowledge.releases_io.fetch_releases", return_value=[old, newer]), \
             patch("mindie_knowledge.releases_io.verify_release_source"), \
             patch.object(update, "install_selected", side_effect=install):
@@ -467,7 +479,7 @@ def test_native_installed_version_prevents_downgrade_while_active_binding_is_old
     eligible = release("0.0.2", harness_version="2.1.299")
     with patch.object(update, "native_binary", return_value="claude"), \
             patch.object(update, "native_version", return_value="2.1.299"), \
-            patch.object(update, "installed_plugin", return_value={"version": "0.0.3"}), \
+            patch.object(update, "installed_plugin", return_value={"enabled": True, "version": "0.0.3", "installPath": str(ROOT)}), \
             patch("mindie_knowledge.releases_io.fetch_releases", return_value=[eligible]), \
             patch.object(update, "install_selected") as install:
         result = update.check(saved, state)
@@ -493,7 +505,7 @@ def test_incompatible_activation_with_possible_effect_cannot_be_superseded(tmp_p
     }
     with patch.object(update, "native_binary", return_value="claude"), \
             patch.object(update, "native_version", return_value="2.1.299"), \
-            patch.object(update, "installed_plugin", return_value={"version": "0.0.2"}), \
+            patch.object(update, "installed_plugin", return_value={"enabled": True, "version": "0.0.2", "installPath": str(ROOT)}), \
             patch("mindie_knowledge.loop.lifecycle.inspect_retirement",
                   return_value={"status": "retiring"}), \
             patch("mindie_knowledge.releases_io.fetch_releases") as fetch, \
@@ -568,7 +580,7 @@ def test_canonical_publication_resolves_activation_without_repeating_control(tmp
     state["status"] = "failed"
     with patch.object(update, "native_binary", return_value="claude"), \
             patch.object(update, "native_version", return_value="2.1.269"), \
-            patch.object(update, "installed_plugin", return_value={"version": "0.0.2"}), \
+            patch.object(update, "installed_plugin", return_value={"enabled": True, "version": "0.0.2", "installPath": str(ROOT)}), \
             patch("mindie_knowledge.releases_io.fetch_releases") as fetch:
         result = update.check(saved, state)
     assert result["installation_complete"] is True
@@ -705,3 +717,39 @@ def test_interrupted_local_preparation_without_cleanup_failure_retries_while_cle
         with pytest.raises(RuntimeError, match="previous preparation writer is not confirmed settled"):
             update.check(saved, blocked)
 
+
+
+def test_session_plugin_without_marketplace_does_not_write_profile(tmp_path):
+    saved = binding(tmp_path)
+    profile = Path(saved["claude_config_dir"])
+    update.disable_unfiltered_updates(saved)
+    assert not profile.exists()
+    profile.mkdir()
+    path = profile / "settings.json"
+    original = '{"enabledPlugins":{"other@other":true}}\n'
+    path.write_text(original)
+    update.disable_unfiltered_updates(saved)
+    assert path.read_text() == original
+
+
+def test_idle_facade_checks_twice_without_another_rpc(tmp_path):
+    saved = binding(tmp_path)
+    checker = update.BackgroundCheck(lambda: saved)
+    clock, waits, state = [100.0], [], {}
+
+    def wait(delay):
+        waits.append(delay)
+        clock[0] += delay
+        return len(waits) > 2
+
+    def helper(*args, **kwargs):
+        state.update(status="up_to_date", last_successful_check=clock[0])
+
+    with patch.object(checker.cancel, "wait", side_effect=wait), \
+            patch.object(update.time, "time", side_effect=lambda: clock[0]), \
+            patch.object(update, "read_receipt", side_effect=lambda _: dict(state)), \
+            patch.object(update, "run", side_effect=helper) as run:
+        checker._loop()
+    assert run.call_count == 2
+    assert waits == [0, 300, 300]
+    assert checker.next_check_at == 700
