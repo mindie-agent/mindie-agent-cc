@@ -118,7 +118,7 @@ def _ensure_runtime(source, *, prepare, on_process=None):
         return python, readback(python, source, on_process=on_process)
     python, scripts = _baseline_runtime(source, prepare=prepare, on_process=on_process)
     if active:
-        output = _run("component-floor", [str(python), "-I", str(scripts / "component_update.py"),
+        output = _run("component-floor", [str(python), "-I", "-B", str(scripts / "component_update.py"),
                       str(source), str(python), str(Path(current["state_dir"]) / "component-runtimes"),
                       current["python"]], on_process=on_process, timeout=830)
         effective = json.loads(output)
