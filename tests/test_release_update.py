@@ -276,12 +276,13 @@ def test_background_no_receipt_or_failed_child_is_backed_off(tmp_path, child_fai
             patch.object(update.BackgroundCheck, "_record_error"), \
             patch.object(update.time, "time", return_value=100):
         checker = update.BackgroundCheck(lambda: saved)
-        checker.start_if_due()
-        checker.thread.join(timeout=2)
-        assert not checker.thread.is_alive()
-        for _ in range(5):
-            checker.start_if_due()
-        checker.close()
+        try:
+            checker._work_once()
+            for _ in range(5):
+                checker.start_if_due()
+            assert checker.thread.is_alive()
+        finally:
+            checker.close()
     assert run.call_count == 1
     assert checker.next_check_at == 160
 
@@ -716,3 +717,39 @@ def test_interrupted_local_preparation_without_cleanup_failure_retries_while_cle
         with pytest.raises(RuntimeError, match="previous preparation writer is not confirmed settled"):
             update.check(saved, blocked)
 
+
+
+def test_session_plugin_without_marketplace_does_not_write_profile(tmp_path):
+    saved = binding(tmp_path)
+    profile = Path(saved["claude_config_dir"])
+    update.disable_unfiltered_updates(saved)
+    assert not profile.exists()
+    profile.mkdir()
+    path = profile / "settings.json"
+    original = '{"enabledPlugins":{"other@other":true}}\n'
+    path.write_text(original)
+    update.disable_unfiltered_updates(saved)
+    assert path.read_text() == original
+
+
+def test_idle_facade_checks_twice_without_another_rpc(tmp_path):
+    saved = binding(tmp_path)
+    checker = update.BackgroundCheck(lambda: saved)
+    clock, waits, state = [100.0], [], {}
+
+    def wait(delay):
+        waits.append(delay)
+        clock[0] += delay
+        return len(waits) > 2
+
+    def helper(*args, **kwargs):
+        state.update(status="up_to_date", last_successful_check=clock[0])
+
+    with patch.object(checker.cancel, "wait", side_effect=wait), \
+            patch.object(update.time, "time", side_effect=lambda: clock[0]), \
+            patch.object(update, "read_receipt", side_effect=lambda _: dict(state)), \
+            patch.object(update, "run", side_effect=helper) as run:
+        checker._loop()
+    assert run.call_count == 2
+    assert waits == [0, 300, 300]
+    assert checker.next_check_at == 700

@@ -65,35 +65,45 @@ class BackgroundCheck:
         if self.cancel.is_set() or self.thread is not None and self.thread.is_alive():
             return
         now = time.time()
-        if now < self.next_check_at:
-            return
         try:
-            binding = self.select_binding()
-            before = read_receipt(binding)
-            self.next_check_at = next_check_at(before)
-            if now < self.next_check_at:
-                return
+            if now >= self.next_check_at:
+                binding = self.select_binding()
+                before = read_receipt(binding)
+                self.next_check_at = next_check_at(before)
         except Exception as exc:
             self.next_check_at = now + FAILURE_BACKOFF
             self._record_error(exc)
             return
 
-        def work():
-            failed = False
-            try:
-                env = dict(os.environ, MINDIE_CC_CONFIG=binding["adapter_config"],
-                           CLAUDE_CONFIG_DIR=binding["claude_config_dir"])
-                env.pop("PYTHONPATH", None)
-                run([binding["python"], str(Path(binding["runtime_scripts"]) / "release_update.py")],
-                    env=env, cancel=self.cancel, allow_service=True,
-                    timeout=2700.0)
-            except Exception as exc:
-                failed = True
-                if not self.cancel.is_set():
-                    self._record_error(exc)
-            finally:
-                now = time.time()
-                self.next_check_at = now + FAILURE_BACKOFF
+        self.thread = threading.Thread(target=self._loop, name="mindie-release-check")
+        self.thread.start()
+
+    def _loop(self):
+        while not self.cancel.wait(max(0, self.next_check_at - time.time())):
+            self._work_once()
+
+    def _work_once(self):
+        failed = False
+        binding, before = None, None
+        try:
+            binding = self.select_binding()
+            before = read_receipt(binding)
+            self.next_check_at = next_check_at(before)
+            if time.time() < self.next_check_at:
+                return
+            env = dict(os.environ, MINDIE_CC_CONFIG=binding["adapter_config"],
+                       CLAUDE_CONFIG_DIR=binding["claude_config_dir"])
+            env.pop("PYTHONPATH", None)
+            run([binding["python"], str(Path(binding["runtime_scripts"]) / "release_update.py")],
+                env=env, cancel=self.cancel, allow_service=True, timeout=2700.0)
+        except Exception as exc:
+            failed = True
+            if not self.cancel.is_set():
+                self._record_error(exc)
+        finally:
+            now = time.time()
+            self.next_check_at = max(now + FAILURE_BACKOFF, self.next_check_at)
+            if binding is not None:
                 try:
                     after = read_receipt(binding)
                     if not failed and after != before:
@@ -101,9 +111,6 @@ class BackgroundCheck:
                 except Exception as exc:
                     if not self.cancel.is_set():
                         self._record_error(exc)
-
-        self.thread = threading.Thread(target=work, name="mindie-release-check")
-        self.thread.start()
 
     @staticmethod
     def _record_error(exc):
@@ -166,7 +173,8 @@ def next_check_at(receipt):
     activation = _time_field(receipt, "last_activation_attempt")
     if receipt.get("status") == "native_disabled":
         return (_time_field(receipt, "last_attempt_at") or 0) + FAILURE_BACKOFF
-    if _pending_install(receipt):
+    if _pending_install(receipt) or receipt.get("components", {}).get("status") in {"deferred", "incomplete"}:
+        activation = activation or _time_field(receipt, "last_attempt_at")
         next_time = 0 if activation is None else activation + ACTIVATION_BACKOFF
     else:
         next_time = 0 if success is None else success + CHECK_INTERVAL
@@ -224,7 +232,7 @@ def _marketplace(native):
     return matches[0]
 
 
-def _profile_settings(binding):
+def _profile_settings(binding, *, optional=False):
     from entry import _read_regular_json
 
     home = binding.get("claude_config_dir")
@@ -232,12 +240,16 @@ def _profile_settings(binding):
         raise ValueError("native profile is not explicitly bound")
     path = Path(home) / "settings.json"
     state, settings = _read_regular_json(path)
+    if state == "missing" and optional:
+        return None
     if state is not None:
         raise ValueError("native settings are unavailable; not replacing them")
-    marketplaces = settings.get("extraKnownMarketplaces")
+    marketplaces = settings.get("extraKnownMarketplaces", {})
     if not isinstance(marketplaces, dict):
         raise ValueError("native marketplace declarations are malformed")
     existing = marketplaces.get(MARKETPLACE)
+    if existing is None and optional:
+        return None
     if not isinstance(existing, dict):
         raise ValueError("native MindIE marketplace declaration is unavailable")
     source = existing.get("source")
@@ -249,7 +261,11 @@ def _profile_settings(binding):
 
 def disable_unfiltered_updates(binding):
     """Use native per-marketplace policy; preserve source, enablement and others."""
-    path, settings, marketplaces, existing = _profile_settings(binding)
+    # Session-scoped --plugin-dir has no managed marketplace to configure.
+    policy = _profile_settings(binding, optional=True)
+    if policy is None:
+        return
+    path, settings, marketplaces, existing = policy
     if existing.get("autoUpdate") is False:
         return
     marketplaces[MARKETPLACE] = dict(existing, autoUpdate=False)
