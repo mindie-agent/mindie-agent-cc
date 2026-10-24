@@ -331,7 +331,7 @@ def test_ready_candidate_is_selected_only_after_exact_idle_retirement(preparing)
         result = setup.activate_binding(candidate["config"])
     assert result["status"] == "activated"
     assert setup._read(f["config"]) == setup._read(candidate["config"])
-    start.assert_called_once()
+    start.assert_not_called()
     assert setup._read(original["config"]) != setup._read(f["config"])
 
 
@@ -403,7 +403,7 @@ def test_all_candidate_probes_receive_positive_remaining_observation_budget(prep
     assert result["status"] == "activated"
     for call in probe.call_args_list:
         assert 0 < call.args[1] <= 3
-    assert 0 < start.call_args.kwargs["probe_timeout"] <= 3
+    start.assert_not_called()
 
 
 def test_active_shared_operation_defers_activation_without_retirement(preparing):

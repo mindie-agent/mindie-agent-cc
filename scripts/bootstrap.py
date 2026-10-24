@@ -109,6 +109,25 @@ def ensure_runtime(source, *, prepare=True, on_process=None):
 
 
 def _ensure_runtime(source, *, prepare, on_process=None):
+    from paths import config_path
+    config = config_path()
+    current = json.loads(config.read_text(encoding="utf-8")) if config.is_file() else {}
+    active = current.get("component_source")
+    if active and current["product_validation"]["source_sha256"] == source_identity(source):
+        python = Path(current["python"])
+        return python, readback(python, source, on_process=on_process)
+    python, scripts = _baseline_runtime(source, prepare=prepare, on_process=on_process)
+    if active:
+        output = _run("component-floor", [str(python), "-I", str(scripts / "component_update.py"),
+                      str(source), str(python), str(Path(current["state_dir"]) / "component-runtimes"),
+                      current["python"]], on_process=on_process, timeout=830)
+        effective = json.loads(output)
+        if effective:
+            return Path(effective["python"]), Path(effective["scripts"])
+    return python, scripts
+
+
+def _baseline_runtime(source, *, prepare, on_process=None):
     source = Path(source).resolve()
     if not (source / "uv.lock").is_file():
         raise ValueError("the native plugin does not contain its complete uv.lock")

@@ -9,7 +9,7 @@ Code's native plugin updater when a verified release is available.
 - Never mutates user consent choices or retries business operations.
 
 [Timeouts & Locks]
-- Enforces `CHECK_INTERVAL = 86400`, `FAILURE_BACKOFF = 60`, and
+- Enforces `CHECK_INTERVAL = 300`, `FAILURE_BACKOFF = 60`, and
   `ACTIVATION_BACKOFF = 5` under `OperationLock`.
 
 [Side-Effect Policy]
@@ -33,7 +33,7 @@ from install_state import OperationLock, LockTimeout, atomic_write, read_binding
 from paths import MARKETPLACE, PLUGIN_QUALIFIED
 from product_contract import native_version as plugin_version, source_identity
 
-CHECK_INTERVAL = 86400
+CHECK_INTERVAL = 300
 FAILURE_BACKOFF = 60
 ACTIVATION_BACKOFF = 5
 RECEIPT_NAME = "release-update.json"
@@ -86,7 +86,7 @@ class BackgroundCheck:
                 env.pop("PYTHONPATH", None)
                 run([binding["python"], str(Path(binding["runtime_scripts"]) / "release_update.py")],
                     env=env, cancel=self.cancel, allow_service=True,
-                    timeout=1500.0)
+                    timeout=2700.0)
             except Exception as exc:
                 failed = True
                 if not self.cancel.is_set():
@@ -504,11 +504,13 @@ def check(binding, state=None):
         candidate = previous["candidate"]
     else:
         result = select_release(
-            fetch_releases(REPOSITORY), repository=REPOSITORY, harness_name=HARNESS,
+            fetch_releases(REPOSITORY, minimum_version=native_installed["version"]), repository=REPOSITORY, harness_name=HARNESS,
             harness_version=version,
             installed_version=native_installed["version"],
         )
         if result["candidate"] is None:
+            from component_update import check as component_check
+            state["components"] = component_check(binding, native_installed["installPath"])
             state.update(result, last_successful_check=time.time(), harness_version=version)
             state.pop("last_failed_check", None)
             return state
@@ -546,7 +548,7 @@ def check(binding, state=None):
             output = run(
                 [str(python), str(scripts / "setup.py"), "--source", str(installed),
                  "--config", binding["base_config"]],
-                timeout=120.0, env=env, receipt=process,
+                timeout=360.0, env=env, receipt=process,
             )
         except BaseException as original:
             try:

@@ -317,19 +317,23 @@ def source_identity(source):
     return digest.hexdigest()
 
 
-def identity(source, revision=None):
+def identity(source, revision=None, *, components=None):
     declaration, product_digest = product(source)
     pins, requirement_digest = requirements(source)
     source_digest = source_identity(source)
     if revision is not None and not HEX40.fullmatch(revision):
         raise ValueError("candidate revision must be an immutable commit")
-    return dict(
+    baseline = dict(
         schema=RECEIPT_SCHEMA, candidate_revision=revision,
         native_version=native_version(source),
         source_sha256=source_digest, product_sha256=product_digest,
         requirements_sha256=requirement_digest, runtime=pins,
         publication=declaration["publication"],
     )
+    if components is None:
+        return baseline
+    from mindie_knowledge.component_releases import runtime_identity
+    return runtime_identity(baseline, components)
 
 
 def native_version(source):
@@ -364,10 +368,10 @@ def _completed(command, argv):
     return output, code
 
 
-def probe(python, scripts, command, *, revision=None, verified_receipt=None):
+def probe(python, scripts, command, *, revision=None, verified_receipt=None, components=None):
     scripts = Path(scripts).resolve()
     source = source_root(scripts)
-    expected = identity(source, revision)
+    expected = identity(source, revision, components=components)
     argv = [
         str(python), "-I", "-B", str(scripts / "candidate_validate.py"),
         "--source", str(source), "--identity", json.dumps(expected, sort_keys=True),
@@ -380,7 +384,7 @@ def probe(python, scripts, command, *, revision=None, verified_receipt=None):
         if code != 0:
             raise failure_receipt(output, expected, code)
         receipt = validate_receipt(output, expected)
-        if identity(source, revision) != expected:
+        if identity(source, revision, components=components) != expected:
             raise ValueError("candidate source changed during validation")
         return receipt
 
