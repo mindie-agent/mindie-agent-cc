@@ -59,6 +59,23 @@ def binding(tmp_path):
     return value
 
 
+def test_update_fault_enters_reporter_and_keeps_failed_receipt(tmp_path):
+    from mindie_diagnostics.integration import configure_reporting
+    from mindie_diagnostics.ingestion import ingest
+    from mindie_diagnostics.outbox import Outbox
+    saved = binding(tmp_path)
+    policy, logs = Path(os.environ['MINDIE_DIAGNOSTICS_CONFIG']), Path(os.environ['MINDIE_DIAGNOSTICS_ROOT'])
+    configure_reporting(True, config=policy, roots=[str(logs)])
+    with patch.object(update, 'read_binding', return_value=saved), \
+            patch.object(update, 'check', side_effect=ModuleNotFoundError('PRIVATE-MODULE')):
+        update.main()
+    receipt = update.read_receipt(saved)
+    assert receipt['status'] == 'failed' and receipt['diagnostic']['recorded']
+    queue = Outbox(tmp_path / 'queue.db')
+    assert ingest(logs, queue, config=policy)['enqueued'] == 1
+    assert queue.rows()[0]['incident_ids'] == [receipt['diagnostic']['incident_id']]
+
+
 def activation_result(status):
     def run(*args, receipt, **kwargs):
         receipt.update(started=True, completed=True, cleanup_failed=False, returncode=0)

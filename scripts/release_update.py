@@ -115,8 +115,7 @@ class BackgroundCheck:
     @staticmethod
     def _record_error(exc):
         import diagnostic_support
-        diagnostic_support.failure("release.update", "background_check", "internal",
-                                   exception=exc, reportable=False)
+        diagnostic_support.failure("release.update", "background_check", "update", exception=exc)
 
     def close(self):
         self.cancel.set()
@@ -620,8 +619,8 @@ def main():
                 result.update(status="failed", last_failed_check=time.time(),
                               error_type=type(exc).__name__)
                 import diagnostic_support
-                diagnostic_support.failure("release.update", "native_update", "internal",
-                                           exception=exc, reportable=False)
+                result["diagnostic"] = diagnostic_support.failure(
+                    "release.update", "native_update", "update", exception=exc)
             _record(binding, result)
     except LockTimeout:
         return
