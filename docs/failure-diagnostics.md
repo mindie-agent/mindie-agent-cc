@@ -6,10 +6,10 @@ Following Principle 9 of the [MindIE Agent Engineering Design Principles](https:
 
 ---
 
-## 1. Read-Only Status Inspection (`/mindie-agent:status`)
+## 1. Read-Only Status Inspection (`/mindie-agent:status` & `mindie_status`)
 
-- **What It Reports**: Current knowledge configuration, background service and storage health, the active task's binding state and diagnostic failure counter, and the latest 5 captures and contribution batches associated with the bound task.
-- **Strictly Read-Only**: Calling `status` never initializes databases, starts models or background services, binds an unbound task, resets failure counters, or replays consumed inputs.
+- **What It Reports**: Factual control-plane state (`configured`, `knowledge_enabled`, current knowledge configuration, background service and storage health, `this_session` manual-entry lease state, diagnostic failure counter, `reporting` status, and the latest 5 captures and contribution batches associated with the bound task). The MCP `mindie_status` tool (`entry.status_facts(session)`) returns these factual fields without onboarding prompt fields (`first_use`, `next`, `recovery`).
+- **Strictly Read-Only**: Calling `status` or `mindie_status` never initializes databases, starts models or background services, activates or binds an unbound task, resets failure counters, or replays consumed inputs.
 - **Corrupt Config Detection**: If an existing adapter configuration file is corrupted or malformed, `status` reports an explicit configuration diagnostic rather than treating the corruption as a "first-time install" and re-running onboarding.
 - **Decoupled Remote Execution**: Even if the local knowledge service is unavailable, native shell/SSH and the `remote-dev` MCP server remain fully operational.
 

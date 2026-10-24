@@ -138,6 +138,8 @@ class KnowledgePageTests(unittest.TestCase):
             )
         }
         os.environ["MINDIE_CC_CONFIG"] = str(self.config)
+        from admission import gate
+        gate().activate(SESSION, project_root=str(self.tmp))
         os.environ["MINDIE_DIAGNOSTICS_CONFIG"] = str(self.diag / "off.json")
         os.environ["MINDIE_DIAGNOSTICS_ROOT"] = str(self.diag / "logs")
         sys.path.insert(0, str(SCRIPTS))
@@ -594,7 +596,7 @@ class KnowledgePageTests(unittest.TestCase):
         with patch("knowledge_service.ensure_service", return_value={}), \
                 patch("knowledge_service.select_engine", return_value=(None, None)), \
                 patch("mindie_knowledge.loop.cli.rpc", return_value=served) as rpc:
-            delivered = mcp_server.knowledge_call("knowledge_query", args, "session-explore")
+            delivered = mcp_server.knowledge_call("knowledge_query", args, SESSION)
         self.assertEqual(rpc.call_args.args[2]["mode"], "explore")
         self.assertEqual(delivered, engine_result)
         self.assertEqual(delivered["stripped_l3_ids"], ["unit-l3-workflow"])
@@ -619,7 +621,7 @@ class KnowledgePageTests(unittest.TestCase):
                 patch("knowledge_service.ensure_service", return_value={}), \
                 patch("mindie_knowledge.loop.cli.rpc", return_value=served) as explain_rpc:
             explained = mcp_server.knowledge_call(
-                "knowledge_explain", explain_args, "session-explore")
+                "knowledge_explain", explain_args, SESSION)
         self.assertEqual(explain_rpc.call_args.args[1], "explain")
         self.assertEqual(explain_rpc.call_args.args[2]["mode"], "explore")
         self.assertEqual(explained, engine_result)

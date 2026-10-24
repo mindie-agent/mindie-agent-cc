@@ -3,7 +3,7 @@ from contextlib import closing
 import sys
 import threading
 
-from support import SCRIPTS
+from support import SCRIPTS, make_config
 from mindie_knowledge.loop.engine import Engine
 from mindie_knowledge.loop.feed import Feed
 from mindie_knowledge.loop.store import Store
@@ -14,6 +14,10 @@ import mcp_server
 
 
 def test_feed_unavailable_reaches_cc_without_empty_result_or_product_issue(tmp_path, monkeypatch):
+    config = make_config(tmp_path)
+    monkeypatch.setenv("MINDIE_CC_CONFIG", str(config))
+    from admission import gate
+    gate().activate("native-task", project_root=str(tmp_path))
     with closing(Store(tmp_path / "data", "test")) as store:
         feed = Feed(store, dict(repository="org/knowledge", domain="test"))
         store.feed_set("feed:" + feed.ident, dict(

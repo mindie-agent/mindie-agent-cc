@@ -7,7 +7,6 @@ from unittest.mock import patch
 
 import pytest
 
-import bridge
 import maintenance
 import transcript
 from mindie_knowledge import consent_store
@@ -29,8 +28,15 @@ def write_records(path, rows):
     path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
 
 
+def completed_diagnostics(command, *args, receipt=None, **kwargs):
+    if receipt is not None:
+        receipt["returncode"] = 0
+        return '{"status":"ok"}'
+    return '{"status":"disabled"}'
+
+
 def fork_fixture(tmp_path, monkeypatch):
-    canonical, binding, stop, env, marker, retired = capture_fixture(tmp_path)
+    canonical, binding, stop, env, marker, retired = capture_fixture(tmp_path, activate=False)
     monkeypatch.setenv("MINDIE_CC_CONFIG", str(canonical))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", binding["claude_config_dir"])
     path = Path(stop["transcript_path"])
@@ -45,8 +51,8 @@ def fork_fixture(tmp_path, monkeypatch):
 def test_fork_start_excludes_large_inherited_history_and_preserves_resume(tmp_path, monkeypatch):
     event, stop, env, marker, path, admission = fork_fixture(tmp_path, monkeypatch)
     session = event["session_id"]
-    with patch.object(bridge.time, "time", return_value=100):
-        assert bridge.associate_fork(event) == {"status": "associated"}
+    with patch("mindie_knowledge.loop.activation.time.time", return_value=100):
+        admission.activate(session, project_root=event["cwd"])
     original = admission.check(session)
     rows = [
         native_record(session, "queue-operation", 101, operation="enqueue"),
@@ -80,7 +86,7 @@ def test_fork_start_excludes_large_inherited_history_and_preserves_resume(tmp_pa
                           text=f"RESUME_{number}"),
         ])
         write_records(path, rows)
-        assert bridge.associate_fork(dict(event, source="resume")) == {"status": "inert"}
+        assert admission.knowledge_lease(session)["token"] == original["token"]
         raw_stop(dict(stop, prompt_id=f"resume-{number}"), env)
         assert admission.check(session) == original
     assert len(capture_rows(tmp_path)) == 3
@@ -110,10 +116,12 @@ def test_first_queue_separates_scope_from_rewritten_inherited_session_ids(tmp_pa
 
 
 @pytest.mark.parametrize("case", ["missing-queue", "later-queue", "foreign-queue",
-                                  "missing-own-scope", "foreign-path"])
+                                  "foreign-path"])
 def test_unprovable_source_warns_without_parent_capture(tmp_path, monkeypatch, case):
     event, stop, env, marker, path, admission = fork_fixture(tmp_path, monkeypatch)
     session = event["session_id"]
+    with patch("mindie_knowledge.loop.activation.time.time", return_value=100):
+        admission.activate(session, project_root=event["cwd"])
     parent = native_record(session, "user", 50, cwd=tmp_path / "project",
                            text="PARENT_SENTINEL")
     queue = native_record(session, "queue-operation", 100, operation="enqueue")
@@ -132,7 +140,7 @@ def test_unprovable_source_warns_without_parent_capture(tmp_path, monkeypatch, c
         stop["transcript_path"] = str(foreign)
     raw_stop(stop, env, failed=True)
     assert capture_rows(tmp_path) == []
-    assert admission.inspect(session)["status"] == "missing"
+    assert admission.knowledge_lease(session)
     assert not marker.exists()
 
 
@@ -147,26 +155,28 @@ def test_fork_start_respects_current_choice_scope_and_explicit_revocation(tmp_pa
         admission.associate(event["session_id"], project_root=event["cwd"], not_before=10)
         admission.deactivate(event["session_id"])
     before = admission.inspect(event["session_id"])
-    assert bridge.associate_fork(event) == {"status": "inert"}
+    with patch.object(maintenance, "run", side_effect=completed_diagnostics):
+        assert maintenance.session_start(event)["feed"]["result"] == "inactive"
     assert admission.inspect(event["session_id"]) == before
 
 
-def test_fork_association_failure_cannot_report_ready_maintenance(tmp_path):
-    with patch.object(bridge, "associate_fork", side_effect=ValueError("fixture")), \
-            patch("diagnostic_support.failure"), \
-            patch("diagnostic_support.reporting_config_path", return_value=tmp_path / "off.json"), \
-            patch("paths.engine_config_path", return_value=tmp_path / "engine.json"), \
-            patch("paths.state_dir", return_value=tmp_path), \
-            patch.object(maintenance, "sync_public_feed", return_value={"result": "ok"}), \
-            patch.object(maintenance, "run", return_value='{"status":"ok"}'):
-        result = maintenance.session_start({"source": "fork"})
-    assert result["status"] == "incomplete"
-    assert result["capture"] == {"status": "unavailable", "error_type": "ValueError"}
+def test_passive_fork_does_not_run_knowledge_maintenance(tmp_path, monkeypatch):
+    event, _, _, _, _, admission = fork_fixture(tmp_path, monkeypatch)
+    with patch.object(maintenance, "sync_public_feed") as sync, \
+            patch.object(maintenance, "run", side_effect=completed_diagnostics) as run:
+        result = maintenance.session_start(event)
+        assert result["status"] == "ready"
+        assert result["feed"]["result"] == "inactive"
+        sync.assert_not_called()
+        assert run.call_count == 2
+        assert run.call_args_list[0].args[0][1].endswith("diagnostic_support.py")
+        assert "mindie_diagnostics.cli" in run.call_args_list[1].args[0]
+    assert admission.knowledge_lease(event["session_id"]) is None
 
 
 def test_active_fork_binding_still_requires_its_native_queue_and_profile(tmp_path, monkeypatch):
     event, stop, env, _, path, admission = fork_fixture(tmp_path, monkeypatch)
-    assert bridge.associate_fork(event) == {"status": "associated"}
+    admission.activate(event["session_id"], project_root=event["cwd"])
     original = admission.check(event["session_id"])
     write_records(path, [
         native_record("ffffffff-ffff-ffff-ffff-ffffffffffff",
@@ -185,13 +195,14 @@ def test_active_fork_binding_still_requires_its_native_queue_and_profile(tmp_pat
 
 def test_later_maintenance_failure_keeps_successful_fork_binding(tmp_path, monkeypatch):
     event, _, _, _, _, admission = fork_fixture(tmp_path, monkeypatch)
-    with patch.object(maintenance, "sync_public_feed",
+    admission.activate(event["session_id"], project_root=event["cwd"])
+    with patch.object(maintenance, "run", side_effect=completed_diagnostics), \
+            patch.object(maintenance, "sync_public_feed",
                       side_effect=RuntimeError("synthetic feed failure")):
         with pytest.raises(RuntimeError, match="synthetic feed failure"):
             maintenance.session_start(event)
     original = admission.check(event["session_id"])
     with patch("diagnostic_support.reporting_config_path", return_value=tmp_path / "off.json"), \
-            patch("paths.state_dir", return_value=tmp_path), \
             patch.object(maintenance, "sync_public_feed",
                          return_value={"result": "sync_failed", "error": "fixture"}), \
             patch.object(maintenance, "run", return_value='{"status":"ok"}'):

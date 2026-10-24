@@ -108,6 +108,17 @@ def _distill_args(task_state="verified_milestone"):
 
 
 class DistillCallUnitTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        config = make_config(self.root)
+        environment = patch.dict(os.environ, MINDIE_CC_CONFIG=str(config))
+        environment.start()
+        self.addCleanup(environment.stop)
+        self.authority = admission.gate()
+        self.lease = self.authority.activate(SESSION, project_root=str(self.root))
+
     def test_tools_list_exposes_distill_without_identity_properties(self):
         response = mcp_server.handle(
             "knowledge", {"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
@@ -122,10 +133,9 @@ class DistillCallUnitTests(unittest.TestCase):
         self.assertNotIn("session_id", json.dumps(schema))
 
     def test_inactive_lease_stops_before_service_or_model(self):
-        with patch("admission.gate") as gate, \
-             patch("knowledge_service.ensure_service") as ensure, \
+        self.authority.deactivate(SESSION)
+        with patch("knowledge_service.ensure_service") as ensure, \
              patch("mindie_knowledge.loop.cli.rpc") as rpc:
-            gate.return_value.check.side_effect = ValueError("task binding is not active")
             with self.assertRaises(ValueError):
                 mcp_server.knowledge_call("knowledge_distill", _distill_args(), SESSION)
         ensure.assert_not_called()
@@ -133,22 +143,18 @@ class DistillCallUnitTests(unittest.TestCase):
 
     def test_missing_shared_runtime_is_explicitly_unavailable(self):
         with missing_distill_api(), \
-             patch("admission.gate") as gate, \
              patch("knowledge_service.ensure_service") as ensure, \
              patch("mindie_knowledge.loop.cli.rpc") as rpc:
             with self.assertRaisesRegex(ValueError, "unavailable"):
                 mcp_server.knowledge_call("knowledge_distill", _distill_args(), SESSION)
-        gate.assert_not_called()
         ensure.assert_not_called()
         rpc.assert_not_called()
 
     def test_active_lease_is_forwarded_as_the_capture_token(self):
         connection = {"url": "http://127.0.0.1:1", "token": "service-token"}
-        with patch("admission.gate") as gate, \
-             patch("knowledge_service.ensure_service", return_value=connection), \
+        with patch("knowledge_service.ensure_service", return_value=connection), \
              patch("mcp_server._distill_timeout", return_value=412.5), \
              patch("mindie_knowledge.loop.cli.rpc", return_value={"status": "noop"}) as rpc:
-            gate.return_value.check.return_value = {"token": "activation-token"}
             answer = mcp_server.knowledge_call(
                 "knowledge_distill", _distill_args("in_flight"), SESSION)
         self.assertEqual(answer, {"status": "noop"})
@@ -156,7 +162,7 @@ class DistillCallUnitTests(unittest.TestCase):
         self.assertEqual(rpc.call_args.args[1], "distill")
         payload = rpc.call_args.args[2]
         self.assertEqual(payload["_session_id"], SESSION)
-        self.assertEqual(payload["_activation"], "activation-token")
+        self.assertEqual(payload["_activation"], self.lease["token"])
         self.assertNotIn("_session_verified", payload)
         self.assertEqual(rpc.call_args.kwargs["timeout"], 412.5)
 
@@ -169,12 +175,10 @@ class DistillCallUnitTests(unittest.TestCase):
         ]
         for args in bad:
             with self.subTest(args=args), \
-                 patch("admission.gate") as gate, \
-                 patch("knowledge_service.ensure_service") as ensure:
+                     patch("knowledge_service.ensure_service") as ensure:
                 with self.assertRaises(ValueError):
                     mcp_server.knowledge_call("knowledge_distill", args, SESSION)
-            gate.assert_not_called()
-            ensure.assert_not_called()
+                ensure.assert_not_called()
 
     def test_distill_forwards_related_refs_and_foreground_proposal(self):
         connection = {"url": "http://127.0.0.1:1", "token": "service-token"}
@@ -191,18 +195,16 @@ class DistillCallUnitTests(unittest.TestCase):
             "related_refs": ["unit-existing-fixture"],
             "proposal": proposal,
         }
-        with patch("admission.gate") as gate, \
-             patch("knowledge_service.ensure_service", return_value=connection), \
+        with patch("knowledge_service.ensure_service", return_value=connection), \
              patch("mcp_server._distill_timeout", return_value=90.0), \
              patch("mindie_knowledge.loop.cli.rpc",
                    return_value={"status": "noop"}) as rpc:
-            gate.return_value.check.return_value = {"token": "activation-token"}
             answer = mcp_server.knowledge_call("knowledge_distill", args, SESSION)
         self.assertEqual(answer, {"status": "noop"})
         payload = rpc.call_args.args[2]
         self.assertEqual(payload["related_refs"], ["unit-existing-fixture"])
         self.assertEqual(payload["proposal"], proposal)
-        self.assertEqual(payload["_activation"], "activation-token")
+        self.assertEqual(payload["_activation"], self.lease["token"])
         self.assertEqual(rpc.call_args.kwargs["timeout"], 90.0)
 
     def test_distill_rejects_bad_related_refs_or_proposal_before_service(self):
@@ -216,13 +218,11 @@ class DistillCallUnitTests(unittest.TestCase):
         ]
         for extra in bad:
             with self.subTest(extra=extra), \
-                 patch("admission.gate") as gate, \
-                 patch("knowledge_service.ensure_service") as ensure:
+                     patch("knowledge_service.ensure_service") as ensure:
                 with self.assertRaises(ValueError):
                     mcp_server.knowledge_call(
                         "knowledge_distill", {**_distill_args(), **extra}, SESSION)
-            gate.assert_not_called()
-            ensure.assert_not_called()
+                ensure.assert_not_called()
 
     def test_query_forwards_new_graded_parameters_unchanged(self):
         connection = {"url": "http://127.0.0.1:1", "token": "service-token"}

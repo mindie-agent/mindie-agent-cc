@@ -24,7 +24,7 @@ from mindie_knowledge.loop.handoff import _probe, prepare_schema
 from mindie_knowledge.loop.lifecycle import inspect_retirement, retire_service
 
 
-def capture_fixture(root):
+def capture_fixture(root, *, activate=True):
     model_marker = root / "model-must-not-run"
     canonical = make_config(
         root, sharing=True,
@@ -61,6 +61,10 @@ def capture_fixture(root):
         "MINDIE_DIAGNOSTICS_ROOT": str(root / "diagnostics"),
         "MINDIE_DIAGNOSTICS_CONFIG": str(root / "reporting-off.json"),
     })
+    if activate:
+        engine = json.loads(Path(binding["engine_config"]).read_text())
+        with patch("mindie_knowledge.loop.activation.time.time", return_value=1792065599):
+            Admission(engine["admission_path"]).activate(session, project_root=str(root / "project"))
     return canonical, binding, event, env, model_marker, old_retirement
 
 
@@ -268,6 +272,10 @@ def test_stop_outside_scope_and_explicit_off_remain_quiet_during_cutover(tmp_pat
     transcript = Path(event["transcript_path"])
     rows = [json.loads(raw) for raw in transcript.read_text(encoding="utf-8").splitlines()]
     rows[-1]["cwd"] = str(tmp_path / "outside-approved-scope")
+    # A manual session binding owns its scope; moving that binding outside
+    # contribution scope must keep capture quiet without revoking knowledge.
+    engine = config_at(binding["engine_config"])
+    Admission(engine["admission_path"]).activate(event["session_id"], project_root=rows[-1]["cwd"])
     transcript.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
     with OperationLock(binding).exclusive():
         raw_stop(event, env)
