@@ -144,6 +144,7 @@ class RemoteObservationBoundTests(unittest.TestCase):
             session = "native-session"
 
             def uncertain(_name, _args):
+                self.assertEqual(os.environ.get("REMOTE_DEV_HARNESS_PROFILE"), "claude")
                 root = Path(os.environ["REMOTE_DEV_STATE_DIR"])
                 self.assertEqual(root, state / "remote" / session)
                 self.assertTrue((root.parent / "remote-layout.json").is_file())
@@ -151,6 +152,7 @@ class RemoteObservationBoundTests(unittest.TestCase):
                 raise RuntimeError("submission uncertain")
 
             with patch.object(mcp_server, "state_dir", return_value=state), \
+                    patch.dict(os.environ, {"REMOTE_DEV_HARNESS_PROFILE": "codex"}), \
                     patch("remote_dev.mcp.tools.call_tool", side_effect=uncertain):
                 with self.assertRaisesRegex(RuntimeError, "submission uncertain"):
                     mcp_server.remote_call("remote_bash", {}, session)

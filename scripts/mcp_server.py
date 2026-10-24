@@ -507,6 +507,9 @@ def remote_tools():
 
 
 def remote_call(name, args, session):
+    # Trusted plugin binding for this MCP process. The launcher injects the
+    # same literal value; tool arguments can never select or override it.
+    os.environ["REMOTE_DEV_HARNESS_PROFILE"] = "claude"
     from remote_dev.mcp.schemas import ALIASES
     from remote_dev.mcp.tools import call_tool
     from remote_dev.core.errors import RemoteExecutionError
