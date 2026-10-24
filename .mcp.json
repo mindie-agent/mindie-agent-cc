@@ -32,8 +32,7 @@
       "env": {
         "REMOTE_DEV_HARNESS_PROFILE": "claude",
         "MCP_TOOL_TIMEOUT": "660000"
-      },
-      "timeout": 660000
+      }
     }
   }
 }
