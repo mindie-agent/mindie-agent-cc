@@ -13,8 +13,60 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from support import SCRIPTS, env_for, make_config
+
+
+def real_explore_result(method="query"):
+    """One real `mode="explore"` payload from the installed knowledge engine.
+
+    Explore stripping, foundation promotion and the subagent fact pack are the
+    engine's contract; adapter tests assert against its actual output rather
+    than a hand-written response that could drift from the real schema.
+    """
+    from mindie_knowledge.graded.index import RoutingIndex
+    from mindie_knowledge.graded.units import GradedUnit
+
+    observed = {"soc": "Ascend910B"}
+
+    def graded_unit(ident, tier, category, body, parents=(), strength="single_observation"):
+        return GradedUnit.from_parts(
+            {
+                "schema": "mindie-graded-unit/1", "id": ident, "tier": tier,
+                "category": category, "evidence_strength": strength,
+                "domain_path": "serving/graph", "inherits_from": list(parents),
+                "title": f"{ident} probe",
+                "triggers": {"error_signatures": [], "keywords": ["rmsnorm"]},
+                "conditions": {"soc": ["Ascend910B"]},
+                "provenance": {"source_type": "session_distill",
+                               "source_locator": "fixture@abc:probe.txt",
+                               "source_digest": "0" * 64,
+                               "evidence_refs": ["fixture"], "supersedes": []},
+            },
+            body,
+            f"serving/graph/{ident}.md",
+        )
+
+    units = [
+        graded_unit("unit-l1-foundation", "L1", "axiom", "Keep 32B UB alignment.",
+                    strength="hardware_spec"),
+        graded_unit("unit-l3-workflow", "L3", "workflow", "Old rmsnorm workflow steps.",
+                    parents=["unit-l1-foundation"]),
+        graded_unit("unit-l4-mutator", "L4", "mutator", "Fuse the rmsnorm epilogue."),
+    ]
+    index = RoutingIndex(units)
+    options = dict(
+        conditions=observed, mode="explore", token_budget=16000,
+        native_subcontext=True, goal="Fuse RMSNorm epilogue",
+        ledger_entries=[{"run_id": "r1", "verdict": "refuted", "hypothesis": "tile=64",
+                         "conditions": observed, "axes": {"evidence_validity": "valid"}}],
+    )
+    if method == "explain":
+        return index.explain_closure(
+            ["mindie://mindie/units/unit-l3-workflow", "mindie://mindie/units/unit-l4-mutator"],
+            domain="mindie", **options)
+    return index.query("rmsnorm", **options)
 
 SESSION = "645fae2e-ef23-4e7d-9559-f4dd0cb9db6a"
 NATIVE = "mcp__plugin_mindie-agent_knowledge__knowledge_explain"
@@ -514,31 +566,66 @@ class KnowledgePageTests(unittest.TestCase):
                 max_output=512 * 1024,
             )
 
-    def test_rsi_explore_mode_strips_l3_and_builds_subagent_pack(self):
+    def test_rsi_explore_arguments_are_shaped_and_the_engine_result_is_untouched(self):
         import rsi_explore
 
         with self.assertRaises(ValueError):
             rsi_explore.forwarded({"query": "rmsnorm", "mode": "invalid"})
+
+        plain = rsi_explore.forwarded({"query": "rmsnorm", "limit": 3})
+        self.assertEqual(plain["query"], "rmsnorm")
+        self.assertEqual(plain["mode"], "reuse")
+
         args = rsi_explore.forwarded({
             "query": "rmsnorm", "mode": "explore", "native_subcontext": True,
             "goal": "Fuse RMSNorm epilogue",
             "ledger_entries": [{"run_id": "r1", "verdict": "refuted", "hypothesis": "tile=64"}],
         })
-        shaped = rsi_explore.attach(
-            {
-                "cards": [
-                    {"id": "u-l1", "tier": "L1", "title": "32B UB alignment"},
-                    {"id": "u-l3", "tier": "L3", "title": "old workflow"},
-                ],
-            },
-            args,
-        )
-        self.assertEqual(shaped["mode"], "explore")
-        self.assertEqual(shaped["stripped_l3_ids"], ["u-l3"])
-        self.assertEqual([c["id"] for c in shaped["cards"]], ["u-l1"])
-        pack = shaped["exploration_context"]["subagent_fact_pack"]
+        self.assertEqual(args["mode"], "explore")
+        self.assertIs(args["native_subcontext"], True)
+        self.assertEqual(args["goal"], "Fuse RMSNorm epilogue")
+
+        # Explore semantics belong to the knowledge engine. The adapter must
+        # deliver its result verbatim, with no second L3 filter or rebuilt pack.
+        import mcp_server
+
+        engine_result = real_explore_result()
+        served = json.loads(json.dumps(engine_result))
+        with patch("knowledge_service.ensure_service", return_value={}), \
+                patch("knowledge_service.select_engine", return_value=(None, None)), \
+                patch("mindie_knowledge.loop.cli.rpc", return_value=served) as rpc:
+            delivered = mcp_server.knowledge_call("knowledge_query", args, "session-explore")
+        self.assertEqual(rpc.call_args.args[2]["mode"], "explore")
+        self.assertEqual(delivered, engine_result)
+        self.assertEqual(delivered["stripped_l3_ids"], ["unit-l3-workflow"])
+        pack = delivered["exploration_context"]["subagent_fact_pack"]
         self.assertEqual(pack["schema_version"], "mindie-rsi-subagent-pack/1")
         self.assertEqual(pack["isolation_mode"], "native_subcontext")
+        # The engine's own conditional-avoid record keeps all of its fields.
+        self.assertIn("avoid", delivered["exploration_context"]["conditional_avoid"][0])
+        self.assertEqual(delivered["usage"], engine_result["usage"])
+
+        # knowledge_explain dropped the same host-side reshaping; its result is
+        # delivered verbatim too, through the read/feedback dispatch path.
+        explain_args = rsi_explore.forwarded({
+            "mode": "explore", "native_subcontext": True,
+            "refs": ["mindie://mindie/units/unit-l3-workflow", "mindie://mindie/units/unit-l4-mutator"],
+            "goal": "Fuse RMSNorm epilogue", "conditions": {"soc": "Ascend910B"},
+            "ledger_entries": [{"run_id": "r1", "verdict": "refuted", "hypothesis": "tile=64"}],
+        })
+        engine_result = real_explore_result("explain")
+        served = json.loads(json.dumps(engine_result))
+        with patch("knowledge_service.select_engine_for_refs", return_value=(None, None)), \
+                patch("knowledge_service.ensure_service", return_value={}), \
+                patch("mindie_knowledge.loop.cli.rpc", return_value=served) as explain_rpc:
+            explained = mcp_server.knowledge_call(
+                "knowledge_explain", explain_args, "session-explore")
+        self.assertEqual(explain_rpc.call_args.args[1], "explain")
+        self.assertEqual(explain_rpc.call_args.args[2]["mode"], "explore")
+        self.assertEqual(explained, engine_result)
+        self.assertEqual(explained["exploration_context"]["conditional_avoid"],
+                         engine_result["exploration_context"]["conditional_avoid"])
+        self.assertEqual(explained["usage"], engine_result["usage"])
 
 
 if __name__ == "__main__":
