@@ -32,7 +32,7 @@ class ManifestTests(unittest.TestCase):
         self.assertIn("remote", mcp["mcpServers"])
         self.assertEqual(
             mcp["mcpServers"]["remote"].get("env"),
-            {"REMOTE_DEV_HARNESS_PROFILE": "claude"},
+            {"REMOTE_DEV_HARNESS_PROFILE": "claude", "MCP_TOOL_TIMEOUT": "660000"},
         )
         self.assertNotIn("env", mcp["mcpServers"]["knowledge"])
         self.assertNotIn("hooks", plugin)
