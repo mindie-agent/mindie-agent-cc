@@ -33,11 +33,14 @@ def test_mcp_dispatch_has_no_total_deadline_and_keeps_caller_cancel(tmp_path):
                 patch.object(mindie_launch.bounded, "run",
                              return_value=json.dumps(response)) as runner:
             assert mindie_launch._dispatch(surface, raw, "slow-read", cancel) == response
-        assert runner.call_args.kwargs.get("timeout") == mindie_launch.CALL_CHILD_BUDGET
+        expected = (mindie_launch.REMOTE_MIN_BUDGET_SECONDS if surface == "remote"
+                    else mindie_launch.CALL_CHILD_BUDGET)
+        assert runner.call_args.kwargs.get("timeout") == expected
         assert runner.call_args.kwargs["cancel"] is cancel
         assert runner.call_args.args[0][-2:] == [surface, "--once"]
-        if surface == "knowledge":
-            assert runner.call_args.kwargs["max_output"] == mindie_launch.KNOWLEDGE_MAX_OUTPUT
+        expected_output = (mindie_launch.KNOWLEDGE_MAX_OUTPUT if surface == "knowledge"
+                           else mindie_launch.REMOTE_MAX_OUTPUT)
+        assert runner.call_args.kwargs["max_output"] == expected_output
 
 
 def test_only_knowledge_business_calls_can_transfer_service_ownership(tmp_path):
@@ -85,7 +88,8 @@ def test_only_stop_and_explicit_contribution_entries_allow_service_transfer():
         event["command_source"] = "user"
         assert mindie_launch._hook_can_start_service("expansion", json.dumps(event).encode()) is False
 
-def _run(tmp, env, payload=b"", *, warning=False):
+def _run(tmp, env, payload=b"", *, warning=False,
+         expected_stage=None, expected_category=None):
     env = dict(env)
     env["MINDIE_DIAGNOSTICS_ROOT"] = str(tmp / "diag")
     env["MINDIE_DIAGNOSTICS_CONFIG"] = str(tmp / "diagnostics.json")
@@ -97,16 +101,51 @@ def _run(tmp, env, payload=b"", *, warning=False):
         env=env,
         timeout=5,
     )
-    assert proc.returncode == 0, proc.stderr.decode()
-    value = json.loads(proc.stdout.decode() or "{}")
+    stdout = proc.stdout.decode("utf-8", errors="replace")
+    stderr = proc.stderr.decode("utf-8", errors="replace")
+    paths = sorted((tmp / "diag").rglob("*.jsonl*"))
+    evidence = (f"returncode={proc.returncode}\nstdout={stdout!r}\nstderr={stderr!r}\n"
+                f"diagnostic_paths={[str(path) for path in paths]}")
+    assert proc.returncode == 0, f"hook failed\n{evidence}"
+    try:
+        value = json.loads(stdout or "{}")
+    except ValueError as exc:
+        raise AssertionError(f"hook stdout is not JSON: {exc}\n{evidence}") from None
     if warning:
-        assert set(value) == {"systemMessage"}
-        assert "encountered an error" in value["systemMessage"]
-        assert "decision" not in value and "continue" not in value
+        assert set(value) == {"systemMessage"}, evidence
+        assert "encountered an error" in value["systemMessage"], evidence
+        assert "decision" not in value and "continue" not in value, evidence
     else:
-        assert value == {}
-    events = list((tmp / "diag").rglob("*.jsonl"))
-    return "\n".join(path.read_text(encoding="utf-8") for path in events)
+        assert value == {}, evidence
+    records = []
+    text = []
+    for path in paths:
+        raw = path.read_text(encoding="utf-8")
+        text.append(raw)
+        for line in raw.splitlines():
+            try:
+                records.append(json.loads(line))
+            except ValueError as exc:
+                raise AssertionError(f"invalid diagnostic record {path}: {exc}\n{evidence}") from None
+    if expected_stage is not None or expected_category is not None:
+        def matches(record):
+            attributes = record.get("attributes") if isinstance(record, dict) else None
+            if not isinstance(attributes, dict):
+                return False
+            return ((expected_stage is None or attributes.get("stage") == expected_stage)
+                    and (expected_category is None
+                         or attributes.get("category") == expected_category))
+        observed = []
+        for record in records:
+            attributes = record.get("attributes") if isinstance(record, dict) else None
+            if isinstance(attributes, dict):
+                observed.append((record.get("operation"), attributes.get("stage"),
+                                 attributes.get("category")))
+        assert any(matches(record) for record in records), (
+            f"expected a recorded diagnostic event "
+            f"stage={expected_stage!r} category={expected_category!r}; "
+            f"observed={observed}\n{evidence}")
+    return "\n".join(text)
 
 
 def test_missing_config_and_explicit_off_stay_quiet(tmp_path):
@@ -124,7 +163,8 @@ def test_existing_bad_community_is_recorded_and_user_visible(tmp_path):
     bad = tmp_path / "bad"
     config = make_config(bad, sharing=True)
     (bad / "cc.community.json").write_text("{", encoding="utf-8")
-    text = _run(bad, env_for(config), warning=True)
+    text = _run(bad, env_for(config), warning=True,
+                expected_stage="sharing-probe", expected_category="configuration")
     assert "configuration" in text
     assert "forwarded" not in text
 
@@ -139,13 +179,16 @@ def test_invalid_community_is_not_explicit_off(tmp_path):
         root = tmp_path / name
         config = make_config(root, sharing=False)
         (root / "cc.community.json").write_text(json.dumps(value), encoding="utf-8")
-        assert "configuration" in _run(root, env_for(config), warning=True)
+        assert "configuration" in _run(
+            root, env_for(config), warning=True,
+            expected_stage="sharing-probe", expected_category="configuration")
 
 
 def test_bad_adapter_configuration_has_nonblocking_warning(tmp_path):
     config = make_config(tmp_path, sharing=False)
     config.write_text('{"PRIVATE_SENTINEL":', encoding="utf-8")
-    text = _run(tmp_path, env_for(config), warning=True)
+    text = _run(tmp_path, env_for(config), warning=True,
+                expected_stage="installation", expected_category="configuration")
     assert "configuration" in text
     assert "PRIVATE_SENTINEL" not in text
 

@@ -10,7 +10,7 @@
         "3.13",
         "python",
         "-c",
-        "import os,runpy,sys;from pathlib import Path;e=Path(os.environ['CLAUDE_PLUGIN_DATA'])/'releases'/'0.1.5'/'entry.py';p=e if e.is_file() else Path(os.environ['CLAUDE_PLUGIN_ROOT'])/'scripts'/'bootstrap.py';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='__main__')",
+        "import os,runpy,sys;from pathlib import Path;e=Path(os.environ['CLAUDE_PLUGIN_DATA'])/'releases'/'0.1.6'/'entry.py';p=e if e.is_file() else Path(os.environ['CLAUDE_PLUGIN_ROOT'])/'scripts'/'bootstrap.py';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='__main__')",
         "mcp",
         "knowledge"
       ]
@@ -25,10 +25,15 @@
         "3.13",
         "python",
         "-c",
-        "import os,runpy,sys;from pathlib import Path;e=Path(os.environ['CLAUDE_PLUGIN_DATA'])/'releases'/'0.1.5'/'entry.py';p=e if e.is_file() else Path(os.environ['CLAUDE_PLUGIN_ROOT'])/'scripts'/'bootstrap.py';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='__main__')",
+        "import os,runpy,sys;from pathlib import Path;e=Path(os.environ['CLAUDE_PLUGIN_DATA'])/'releases'/'0.1.6'/'entry.py';p=e if e.is_file() else Path(os.environ['CLAUDE_PLUGIN_ROOT'])/'scripts'/'bootstrap.py';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='__main__')",
         "mcp",
         "remote"
-      ]
+      ],
+      "env": {
+        "REMOTE_DEV_HARNESS_PROFILE": "claude",
+        "MCP_TOOL_TIMEOUT": "660000"
+      },
+      "timeout": 660000
     }
   }
 }

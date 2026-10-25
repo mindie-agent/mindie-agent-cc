@@ -121,8 +121,19 @@ class McpTests(unittest.TestCase):
         )
         self.assertTrue(replay["result"]["isError"])
 
-
-
+    def test_remote_tools_follow_the_trusted_profile_env(self):
+        import mcp_server
+        with patch.dict(os.environ, {"REMOTE_DEV_HARNESS_PROFILE": "claude"}):
+            tools = {item["name"]: item for item in mcp_server.remote_tools()}
+        self.assertIn("remote_read", tools)
+        self.assertEqual(len(tools), 30)
+        self.assertTrue(
+            {"remote_Read", "remote_Write", "remote_Edit", "remote_Bash",
+             "remote_TaskOutput", "remote_TaskStop", "remote_NotebookEdit",
+             "remote_BashOutput"} <= set(tools)
+        )
+        self.assertNotIn("remote_TaskList", tools)
+        self.assertNotIn("remote_write_stdin", tools)
 
 
 class RemoteObservationBoundTests(unittest.TestCase):
@@ -144,6 +155,7 @@ class RemoteObservationBoundTests(unittest.TestCase):
             session = "native-session"
 
             def uncertain(_name, _args):
+                self.assertEqual(os.environ.get("REMOTE_DEV_HARNESS_PROFILE"), "claude")
                 root = Path(os.environ["REMOTE_DEV_STATE_DIR"])
                 self.assertEqual(root, state / "remote" / session)
                 self.assertTrue((root.parent / "remote-layout.json").is_file())
@@ -151,6 +163,7 @@ class RemoteObservationBoundTests(unittest.TestCase):
                 raise RuntimeError("submission uncertain")
 
             with patch.object(mcp_server, "state_dir", return_value=state), \
+                    patch.dict(os.environ, {"REMOTE_DEV_HARNESS_PROFILE": "codex"}), \
                     patch("remote_dev.mcp.tools.call_tool", side_effect=uncertain):
                 with self.assertRaisesRegex(RuntimeError, "submission uncertain"):
                     mcp_server.remote_call("remote_bash", {}, session)

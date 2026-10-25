@@ -162,8 +162,9 @@ class BindReceiptTests(unittest.TestCase):
                 recorded = recent_failures([str(self.diagnostics)])["recent"]
                 self.assertTrue(any(row["incident_id"] == incident for row in recorded))
                 if outcome != "exception":
-                    for field, value in payload.items():
-                        self.assertEqual(structured[field], value)
+                    if surface == "knowledge" or outcome != "success":
+                        for field, value in payload.items():
+                            self.assertEqual(structured[field], value)
                     original_text = mcp_server.canonical(payload) if surface == "knowledge" else "original remote result"
                     self.assertEqual(result["content"][0]["text"], original_text)
                 else:

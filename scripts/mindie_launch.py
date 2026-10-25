@@ -14,6 +14,9 @@ Top-level entrypoint invoked by Claude Code hooks (`SessionStart`,
 [Timeouts & Locks]
 - Enforces `HOOK_TOTAL = 10.0s`, `HOOK_LOCK_BUDGET = 2.0s`, and
   `BOOTSTRAP_TOTAL = 540.0s` (`outer_timeout >= sum(inner_budgets) + grace`).
+- Remote MCP children use the native inner wait (Bash/TaskOutput up to 600s)
+  plus `REMOTE_GRACE_SECONDS = 60s`; knowledge/entry children stay on their
+  own bounded budgets.
 
 [Side-Effect Policy]
 - Dispatches into `entry.py`, `bridge.py`, `mcp_server.py`, or background
@@ -23,6 +26,7 @@ Top-level entrypoint invoked by Claude Code hooks (`SessionStart`,
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import sys
@@ -52,6 +56,17 @@ EOF_JOIN = 3.0
 OUTPUT_BUDGET = 1.0
 CALL_CHILD_BUDGET = 60.0
 ENTRY_CHILD_BUDGET = 180.0
+# Remote child budget: outer >= legal native inner wait + transport/cleanup
+# grace. Claude Bash/TaskOutput can legally wait 600s; a fixed 60s or 120s
+# outer deadline would cut off a native call that is still doing useful work.
+REMOTE_GRACE_SECONDS = 60.0
+REMOTE_MIN_BUDGET_SECONDS = 180.0
+REMOTE_MAX_OUTPUT = bounded.REMOTE_MAX_OUTPUT
+REMOTE_NATIVE_MAX_WAIT_MS = {
+    "remote_bash": 600000,
+    "remote_bashoutput": 600000,
+    "remote_taskoutput": 600000,
+}
 CONTROL_TOOLS = {"remote_job_status", "remote_job_stop", "remote_job_tail"}
 JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{2,95}$")
 CONFIG_ENV = "MINDIE_CC_CONFIG"
@@ -387,8 +402,50 @@ def _stage_error(ident, message, stage: str, surface: str):
     )
 
 
-def _dispatch_budget(message):
-    if _local_tool_name(message) == "mindie_entry":
+def remote_inner_wait_seconds(name, arguments):
+    """Largest legal native inner wait for this remote tool, in seconds."""
+    key = name.rsplit("__", 1)[-1].lower() if isinstance(name, str) else ""
+    native_ms = REMOTE_NATIVE_MAX_WAIT_MS.get(key, 0)
+    explicit_ms = 0
+    if isinstance(arguments, dict):
+        for field in ("timeout", "yield_time_ms", "timeout_ms"):
+            value = arguments.get(field)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                continue
+            if math.isfinite(value) and value > 0:
+                explicit_ms = max(explicit_ms, float(value))
+    return max(float(native_ms) / 1000.0, explicit_ms / 1000.0)
+
+
+def remote_budget(name, arguments=None, *, native_wait_ms=None,
+                  grace=REMOTE_GRACE_SECONDS, minimum=REMOTE_MIN_BUDGET_SECONDS):
+    """Outer child budget: native wait + SSH/framing/drain/cleanup grace.
+
+    Pure and injectable so the arithmetic is proven without a 600s sleep.
+    """
+    if isinstance(grace, bool) or not isinstance(grace, (int, float)) \
+            or not math.isfinite(grace) or grace <= 0:
+        raise ValueError("remote grace must be a positive finite number")
+    if isinstance(minimum, bool) or not isinstance(minimum, (int, float)) \
+            or not math.isfinite(minimum) or minimum <= 0:
+        raise ValueError("remote minimum budget must be a positive finite number")
+    if native_wait_ms is None:
+        wait = remote_inner_wait_seconds(name, arguments)
+    else:
+        if isinstance(native_wait_ms, bool) or not isinstance(native_wait_ms, (int, float)) \
+                or not math.isfinite(native_wait_ms) or native_wait_ms < 0:
+            raise ValueError("native wait must be a nonnegative finite number of milliseconds")
+        wait = float(native_wait_ms) / 1000.0
+    return max(float(minimum), wait + float(grace))
+
+
+def _dispatch_budget(surface, message):
+    name = _local_tool_name(message)
+    arguments = (message.get("params") or {}).get("arguments") or {}
+    if surface == "remote":
+        # Control calls still permit an SSH round-trip; they are not local.
+        return remote_budget(name, arguments)
+    if name == "mindie_entry":
         return ENTRY_CHILD_BUDGET
     return CALL_CHILD_BUDGET
 
@@ -412,8 +469,9 @@ def _dispatch(surface: str, raw: bytes, ident, cancel=None, *, binding=None, dea
             selected = _runtime(current)
             script = Path(selected["scripts"]) / "mcp_server.py"
             process = {}
+            child_budget = _dispatch_budget(surface, message)
             timeout = (
-                (ENTRY_CHILD_BUDGET if name == "mindie_entry" else CALL_CHILD_BUDGET)
+                child_budget
                 if deadline is None
                 else max(0.01, deadline - time.monotonic())
             )
@@ -423,7 +481,8 @@ def _dispatch(surface: str, raw: bytes, ident, cancel=None, *, binding=None, dea
                 env=_child_env(selected), cwd=str(script.parent), cancel=cancel,
                 receipt=process,
                 allow_service=allow_service,
-                **({"max_output": KNOWLEDGE_MAX_OUTPUT} if surface == "knowledge" else {}),
+                **({"max_output": KNOWLEDGE_MAX_OUTPUT} if surface == "knowledge"
+                   else {"max_output": REMOTE_MAX_OUTPUT}),
             )
     except bounded.CommandCancelled:
         raise
