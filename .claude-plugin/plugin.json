@@ -1,7 +1,7 @@
 {
   "name": "mindie-agent",
   "displayName": "MindIE Agent",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "MindIE Agent for Claude Code: explicit-task knowledge, optional public contribution, and independent remote-dev. One-time setup persists; the task binds from the mindie-agent entry.",
   "author": {
     "name": "MindIE Agent",

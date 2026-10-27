@@ -12,6 +12,10 @@ tools in Claude Code.
 - Once a remote or knowledge tool call succeeds, a local SQLite bind-accounting
   failure (`finish_bind`) attaches `bind_warning` + `diagnostic_ref` and never
   flips `isError=True` on the succeeded result.
+- Trusted local caller/`not_sent` failures preserve the shared bounded
+  `input_repair` (`missing` fields and action) in `structuredContent` and
+  model-visible text. Exception prose, stderr, paths and credentials are never
+  copied into that projection.
 
 [Timeouts & Locks]
 - Consumes one-shot SQLite WAL binds (`identity.py`) and prepares remote receipt
@@ -280,9 +284,29 @@ def remote_stage_failure(args, name, stage, exc=None):
             structured["submission_state"] = certainty
         if type(details.get("retryable")) is bool:
             structured["retryable"] = details["retryable"]
+        repair = details.get("input_repair")
+        # Only the shared caller classification is trusted to describe a local
+        # pre-dispatch correction. Transport and uncertain outcomes never gain
+        # replay instructions here.
+        if (structured["category"] == "caller"
+                and structured.get("submission_state") == "not_sent"
+                and isinstance(repair, dict)):
+            structured["input_repair"] = repair
+            structured["remote_outcome"] = "not_sent"
     key, value = _validated_job_ref(args)
     if key:
         structured[key] = value
+    repair = structured.get("input_repair")
+    if isinstance(repair, dict):
+        missing = [item for item in repair.get("missing", ()) if isinstance(item, str)]
+        action = repair.get("action") if isinstance(repair.get("action"), str) else None
+        # Render only bounded shared repair metadata; never exception prose.
+        text = f"Remote request was not sent ({stage})."
+        if missing:
+            text += f" Missing required argument(s): {', '.join(missing)}."
+        if action:
+            text += f" {action}"
+    elif key:
         text = (
             f"Remote outcome unconfirmed ({stage}). "
             f"Inspect or stop original {key} {value} before a deliberate repeat."

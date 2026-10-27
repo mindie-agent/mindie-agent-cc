@@ -4,12 +4,12 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mindie-agent-cc"
-version = "0.1.6"
+version = "0.1.7"
 description = "Native Claude Code adapter for MindIE Agent"
 requires-python = ">=3.11,<3.15"
 dependencies = [
   "mindie-knowledge @ git+https://github.com/mindie-agent/knowledge@6e921b205c00d592c25f849653cbfb72b73fe318",
-  "remote-dev @ git+https://github.com/mindie-agent/remote-dev@4c40cb5d302ddb8400ff6abb7dc47873b931eaa9",
+  "remote-dev @ git+https://github.com/mindie-agent/remote-dev@4b1c5cab5d36cdaff79d27e4288c6d5f60667c72",
   "mindie-diagnostics @ git+https://github.com/mindie-agent/diagnostics@5ae643e19223f2181ecdbaa3edaf464137c4805e",
 ]
 
