@@ -39,8 +39,8 @@ MindIE Agent combines **manual on-demand activation for domain knowledge & skill
 
 | Capability | Trigger Mode | When to Use | How to Use |
 | :--- | :--- | :--- | :--- |
-| **Experience, Knowledge & Skill System**<br/>(`mindie-knowledge` + `mindie-agent` Skill) | **🎯 Manual Per-Session Trigger** | When designing Ascend AI Infra features, developing in `vLLM-Ascend`, writing `AscendC` / `Triton` kernels, authoring unit/accuracy tests, or tuning performance | Explicitly type **`/mindie-agent` + your task description** once in the current session to enable knowledge search, feedback, distillation, and sync across subsequent turns (`/mindie-agent deactivate` turns it off for the session) |
-| **Remote Ascend NPU Dev & Testing**<br/>(`remote-dev` MCP toolset + `mindie_status`) | **⚡ Default Auto-Trigger** | When syncing local code/tests to a remote Ascend server/container, running NPU builds/tests, checking `npu-smi`, or tailing long job logs | **No slash command needed**—just describe the remote task in natural language |
+| **Experience, Knowledge & Skill System**<br/>(`mindie-knowledge` + `mindie-agent` Skill) | **🎯 Manual Per-Session Trigger** | When designing Ascend AI Infra features, developing in `vLLM-Ascend`, writing `AscendC` / `Triton` kernels, authoring unit/accuracy tests, or tuning performance | Explicitly type **`/mindie-agent` + your task description** once in the current session to enable knowledge search (`knowledge_query` / `knowledge_explain`), feedback (`knowledge_feedback`), distillation (`knowledge_distill`), and sync (`knowledge_sync`) across subsequent turns (`/mindie-agent deactivate` turns it off for the session) |
+| **Remote Ascend NPU Dev & Component Tools**<br/>(`remote` + `components` MCP servers + `mindie_status`) | **⚡ Default Auto-Trigger** | When syncing local code/tests to a remote Ascend server/container, running NPU builds/tests, checking `npu-smi`, managing host/NPU leases, analyzing profiling captures, running simulation calculations, or exporting a local support bundle | **No `/mindie-agent` command needed**—just describe the operation in natural language |
 | **Engineering Experience Loop**<br/>(`Stop` Auto-Capture + Gitleaks Redaction) | **🔄 Background Run in Enabled Sessions** | When contributing sanitized design, kernel development, testing, or tuning takeaways back to the open-source knowledge base | **Configure Consent Once, Active in `/mindie-agent` Sessions**—once contribution is enabled in setup, every `/mindie-agent`-enabled session is automatically redacted and packaged into a knowledge PR in the background; unactivated sessions perform zero `Stop` capture |
 
 ### Scenario 1: Type `/mindie-agent` for Feature Design, Kernel Development & Test Authoring (Manual Trigger)
@@ -59,26 +59,16 @@ MindIE Agent combines **manual on-demand activation for domain knowledge & skill
 > ```
 > **What Happens**: The built-in `remote-dev` MCP server is always on and **triggers automatically by default** whenever your prompt involves remote servers, containers, or NPU commands—handling remote file reads/writes, patch application, managed background jobs, and live log polling over SSH. It works completely independently, even if the knowledge service or community sharing is turned off.
 
-The `components` MCP server also exposes `coordinator`, `profiler`, `sim`,
-`diagnostics_status`, and `diagnostics_bundle` without `/mindie-agent`.
-The first three forward an `argv` array to the real component CLI; pass
-`["--help"]` to inspect the installed parser. Relative paths use the native
-tool call's working directory, with an optional absolute `cwd` override.
-Calls retain stdout, stderr, and the exit code.
-`timeout_ms` defaults to 120000 and is capped at 600000 to leave time for native
-MCP cleanup; `max_output_tokens` defaults to 16384 and
-bounds combined output to four times that many bytes. Local diagnostic status
-and sanitized support bundles use the locked plugin environment, without
-starting a reporter or uploading files. The human-facing `npu-top` dashboard
-is not registered as an Agent tool.
+#### `components` Local Diagnostics & Analysis Tools (Always On, No `/mindie-agent` Needed)
 
-`mindie-coordinator`, `mindie-profiler`, and `mindie-sim` are separately
-installed optional components. Resolution checks beside the configured Python
-interpreter before `PATH`; missing components produce an explicit error.
-MindIE's adapter configuration can also specify executable arguments, for
-example `{"component_commands":{"sim":["/opt/mindie/bin/mindie-sim"]}}`.
-This does not install components or modify Claude settings. Device collection
-and measurement still require the appropriate NPU lease.
+The `components` MCP server provides 5 tools by default in every session without running `/mindie-agent` (the interactive `npu-top` terminal viewer is for human terminal use and is not registered as an MCP tool):
+
+| Tool | Purpose | Installation | Arguments & Output |
+| :--- | :--- | :--- | :--- |
+| `diagnostics_status`<br/>`diagnostics_bundle` | Check local diagnostic/reporting status or export a sanitized local support bundle (saved locally only; never starts the reporter or uploads to GitHub) | **Built in** (uses the plugin's bundled `mindie-diagnostics` runtime) | `diagnostics_status` accepts optional `config`; `diagnostics_bundle` requires `root` (optional `operation_id`, `output`) |
+| `coordinator`<br/>`profiler`<br/>`sim` | Run `mindie-coordinator` (device probing and leases), `mindie-profiler` (trace analysis), and `mindie-sim` (performance simulation) CLIs | **Optional separate install** (not preinstalled). Searched in the configured Python environment first, then `PATH`, or specified via `component_commands` in `${XDG_CONFIG_HOME:-$HOME/.config}/mindie-agent/cc.json` | Pass argument array `argv` (e.g. `["--help"]`) and optional absolute `cwd`; returns `component`, `status`, `exit_code`, `stdout`, `stderr` (plus parsed `result` only when `stdout` is JSON) |
+
+For `coordinator`, `profiler`, and `sim`, relative paths resolve against the current session working directory. If an optional CLI is not installed, the tool returns a clear error without installing packages or modifying Claude settings. Physical NPU collection and timing runs still require holding the corresponding device lease first. Timeout defaults to 120 seconds (`timeout_ms=120000`) up to 10 minutes (`600000`). Combined output defaults to at most 64 KiB (`max_output_tokens=16384`) and can be set up to 1 MiB (`262144`), counted at 4 bytes per token across `stdout` and `stderr`; save large reports to a file.
 
 ### Scenario 3: Background Experience Capture & Unified Contribution Switch (Zero Daily Overhead)
 > **The Problem**: After completing a complex architecture design, kernel implementation, or NPU test verification, that engineering insight usually disappears when you close the terminal—yet sharing raw transcripts risks leaking internal IPs, tokens, or file paths.  
@@ -139,7 +129,7 @@ If you are an AI Agent asked by the user to install this plugin, run the followi
    claude mcp list
    ```
    - Confirm `claude plugin list --json` shows `mindie-agent@mindie-agent-cc` (`0.1.7`) enabled with `user` scope.
-   - Confirm `claude mcp list` reports the plugin's `knowledge`, `remote`, and `components` servers as `Connected`. A connected `components` server confirms tool registration; optional component executables must also be installed or configured. Then report the verified GitHub account (`$GH_USER`) and plugin readiness to the user.
+   - Confirm `claude mcp list` reports the plugin's `knowledge`, `remote`, and `components` MCP servers as `Connected`. A connected `components` server confirms MCP tool registration; calling `coordinator`, `profiler`, or `sim` still requires the corresponding optional CLI to be installed or configured in `component_commands`. Then report the verified GitHub account (`$GH_USER`) and plugin readiness to the user.
 
    Continue with step 5 after verification, then report the complete setup result.
 
