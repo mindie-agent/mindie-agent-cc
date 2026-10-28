@@ -161,7 +161,9 @@ class _Cap:
         self.max_output = max_output
         self.size = 0
 
-    def add(self, chunk):
+    def add(self, chunk, dest=None):
+        if dest is not None:
+            dest.extend(chunk[:max(0, self.max_output - self.size)])
         self.size += len(chunk)
         if self.size > self.max_output:
             raise OutputLimitExceeded("output exceeds the bound")
@@ -413,15 +415,12 @@ def _run_posix(process, timeout, max_output, pgid, check, cancel, transport=Fals
                     if not chunk:
                         selector.unregister(key.fileobj)
                         continue
-                    cap.add(chunk)
+                    cap.add(chunk, output if key.data == "out" else errors)
                     if key.data == "out":
-                        output.extend(chunk)
                         if terminal is not None and terminal(bytes(output)):
                             # Terminal evidence closes the business operation;
                             # reaping below has its own small cleanup wait.
                             terminated = True
-                    elif errors is not None:
-                        errors.extend(chunk)
                 if terminated:
                     break
                 continue
@@ -471,6 +470,7 @@ def _run_posix(process, timeout, max_output, pgid, check, cancel, transport=Fals
         raise
     finally:
         if capture_stderr:
+            receipt["stdout"] = bytes(output).decode("utf-8", "replace")
             receipt["stderr"] = bytes(errors).decode("utf-8", "replace")
         # Cleanup never masks the business result; failures land on the receipt.
         _cleanup_step(receipt, lambda: _kill_tree(process, pgid), "terminate_owned_tree")
@@ -503,9 +503,7 @@ def _run_windows(process, timeout, max_output, pgid, check, cancel, transport=Fa
                 if not chunk:
                     return
                 with lock:
-                    cap.add(chunk)
-                    if dest is not None:
-                        dest.extend(chunk)
+                    cap.add(chunk, dest)
         except TimeoutError:
             raise
         except (OSError, ValueError) as exc:
@@ -595,6 +593,7 @@ def _run_windows(process, timeout, max_output, pgid, check, cancel, transport=Fa
             _cleanup_step(receipt, stream.close, "close_pipe")
         if capture_stderr:
             with lock:
+                receipt["stdout"] = bytes(output).decode("utf-8", "replace")
                 receipt["stderr"] = bytes(errors).decode("utf-8", "replace")
 
 
@@ -751,6 +750,8 @@ def run(
             exc.cleanup = receipt["cleanup"]
             raise
         finally:
+            if capture_stderr:
+                receipt["returncode"] = process.poll()
             owner_fd = getattr(process, "_mindie_owner_fd", None)
             if owner_fd is not None:
                 process._mindie_owner_fd = None

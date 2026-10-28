@@ -14,6 +14,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import identity
 import mcp_server
 import mindie_launch
+import process_probe
 
 SESSION = "645fae2e-ef23-4e7d-9559-f4dd0cb9db6a"
 CAPTURE = ROOT / "tests/fixtures/profiler/rank_0"
@@ -75,7 +76,8 @@ def test_native_manifest_discovery_and_hook_reach_real_local_diagnostics(compone
     assert not Path(json.loads(component_config.read_text())["engine_config"]).exists()
 
 
-def test_profiler_inventory_uses_real_capture(component_config):
+def test_profiler_inventory_uses_real_capture_without_path(component_config, monkeypatch):
+    monkeypatch.setenv("PATH", "")
     result = bound_call("profiler", {"argv": ["inventory", "--root", str(CAPTURE)]})
     assert not result["isError"], result
     inventory = result["structuredContent"]["result"]
@@ -153,6 +155,65 @@ def test_component_stderr_obeys_the_same_output_bound(component_config):
     })
     assert response["isError"]
     assert "output exceeds the bound" in response["content"][0]["text"]
+    payload = response["structuredContent"]
+    assert payload["status"] == "output_limit"
+    assert payload["stdout"] == "" and payload["stderr"]
+    assert len(payload["stderr"].encode()) <= 32
+
+
+@pytest.mark.parametrize("mode", ["wait", "overflow"])
+def test_interrupted_component_preserves_bounded_output_and_reaps_child(component_config, mode):
+    adapter = json.loads(component_config.read_text())
+    adapter["component_commands"] = {
+        "sim": [sys.executable, str(ROOT / "tests/fixtures/component_boundary.py")],
+    }
+    component_config.write_text(json.dumps(adapter))
+    result = bound_call("sim", {
+        "argv": [mode], "timeout_ms": 1000, "max_output_tokens": 32,
+    })
+    assert result["isError"], result
+    payload = result["structuredContent"]
+    assert payload["status"] == ("timeout" if mode == "wait" else "output_limit")
+    assert payload["stdout"].startswith("component began pid=")
+    pid = int(payload["stdout"].splitlines()[0].split("pid=")[1])
+    assert not process_probe.alive(pid)
+    assert len((payload["stdout"] + payload["stderr"]).encode()) <= 128
+    assert payload["output_truncated"] is (mode == "overflow")
+    assert "remote_outcome" not in payload and "retryable" not in payload
+    if mode == "wait":
+        assert "component warning" in payload["stderr"]
+    assert payload["exit_code"] is not None
+
+
+def test_component_identity_timeout_does_not_claim_a_remote_outcome(component_config, monkeypatch):
+    def storage_timeout(*_args):
+        raise TimeoutError("local bind store timed out")
+
+    monkeypatch.setattr(mcp_server, "claim_bind", storage_timeout)
+    result = bound_call("diagnostics_status", {})
+    assert result["isError"]
+    assert result["structuredContent"] == {"stage": "timeout"}
+
+
+def test_facade_delivers_invalid_component_input_to_the_bound_helper(component_config):
+    adapter = json.loads(component_config.read_text())
+    adapter.update(
+        schema="mindie-cc-installation/1", facade_protocol=1,
+        adapter_config=str(component_config), runtime_scripts=str(ROOT / "scripts"),
+    )
+    component_config.write_text(json.dumps(adapter))
+    call_id = "invalid_component_timeout"
+    args = {"argv": ["--help"], "timeout_ms": 0}
+    identity.publish_bind(
+        SESSION, call_id, identity.canonical_native_name("components", "sim"), args,
+    )
+    request = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+        "name": "sim", "arguments": args, "_meta": {"claudecode/toolUseId": call_id},
+    }}
+    result = mindie_launch._dispatch("components", json.dumps(request).encode(), 1)["result"]
+    assert result["isError"] and "timeout_ms" in result["content"][0]["text"]
+    replay = mcp_server.handle("components", request)["result"]
+    assert replay["isError"] and "replay" in replay["content"][0]["text"]
 
 
 def test_completed_component_survives_bind_accounting_timeout(component_config, tmp_path, monkeypatch):
@@ -182,7 +243,7 @@ def test_component_dispatch_budget_covers_requested_wait_and_cleanup():
         "name": "sim", "arguments": {"argv": [], "timeout_ms": maximum},
     }}
     outer = mindie_launch._dispatch_budget("components", message)
-    assert outer >= maximum / 1000 + 15
+    assert outer >= maximum / 1000 + 5 + 5 + (2 + 2 + 2)
     native = json.loads((ROOT / ".mcp.json").read_text())["mcpServers"]["components"]
     assert native["timeout"] >= outer * 1000
     assert int(native["env"]["MCP_TOOL_TIMEOUT"]) >= outer * 1000

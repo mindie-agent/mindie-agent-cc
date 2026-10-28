@@ -18,8 +18,10 @@ import json
 import os
 from pathlib import Path
 import shutil
+import sys
+import sysconfig
 
-from bounded import run
+from bounded import CommandTimedOut, OutputLimitExceeded, run
 from paths import config_path, load_adapter_config
 
 MAX_TIMEOUT_MS = 600000
@@ -101,8 +103,10 @@ def command(adapter, component):
     if component == "diagnostics":
         return [adapter["python"], "-I", "-m", "mindie_diagnostics.cli"]
     name = "mindie-" + component
-    runtime_bin = str(Path(adapter["python"]).parent)
-    executable = shutil.which(name, path=runtime_bin) or shutil.which(name)
+    runtime_bins = [str(Path(adapter["python"]).parent)]
+    if Path(adapter["python"]) == Path(sys.executable):
+        runtime_bins.append(sysconfig.get_path("scripts"))
+    executable = shutil.which(name, path=os.pathsep.join(runtime_bins)) or shutil.which(name)
     if executable is None:
         raise FileNotFoundError(
             "mindie-" + component + " is not installed on PATH; install the component "
@@ -149,16 +153,23 @@ def execute(name, arguments, session, *, cwd=None):
     environment["CLAUDE_SESSION_ID"] = session
     receipt = {}
     executable = command(adapter, component)
+    status, error = "completed", None
     try:
         stdout = run(executable + argv, timeout=milliseconds / 1000,
                      max_output=budget * 4, env=environment, cwd=cwd,
                      check=False, receipt=receipt, capture_stderr=True)
     except FileNotFoundError as exc:
         raise FileNotFoundError(f"Could not start {executable[0]}: {exc}") from exc
-    value = dict(component=component, exit_code=receipt["returncode"],
+    except (CommandTimedOut, OutputLimitExceeded) as exc:
+        status = "timeout" if isinstance(exc, CommandTimedOut) else "output_limit"
+        error, stdout = str(exc), receipt.get("stdout", "")
+    value = dict(component=component, status=status, exit_code=receipt.get("returncode"),
                  stdout=stdout, stderr=receipt["stderr"])
+    if error is not None:
+        value["error"] = error
+        value["output_truncated"] = status == "output_limit"
     if receipt["cleanup_failed"]:
-        value["cleanup_warning"] = "Owned component cleanup failed; do not repeat the completed operation."
+        value["cleanup_warning"] = "Owned component cleanup failed; inspect the original operation before repeating it."
     # JSON output is additive: keep the exact stdout and exit status even when
     # a component emits help text or a non-JSON failure.
     try:
@@ -166,4 +177,5 @@ def execute(name, arguments, session, *, cwd=None):
     except json.JSONDecodeError:
         pass
     return dict(content=[dict(type="text", text=json.dumps(value, ensure_ascii=False))],
-                structuredContent=value, isError=receipt["returncode"] != 0)
+                structuredContent=value,
+                isError=status != "completed" or receipt["returncode"] != 0)

@@ -158,15 +158,17 @@ def remote_stage_failure(args, name, stage, exc=None):
 
 
 def _timeout_failure(surface, args, name, exc):
-    """A timeout is retryable and is never mislabeled as a helper failure."""
-    if surface == "knowledge":
+    """Timeout evidence stays with the surface that performed the operation."""
+    if surface in {"knowledge", "components"}:
         from diagnostic_support import attach
 
         result = dict(
             content=[dict(type="text", text="Unavailable: timeout. Continue independently.")],
             isError=True,
-            structuredContent=dict(stage="timeout", retryable=True),
+            structuredContent=dict(stage="timeout"),
         )
+        if surface == "knowledge":
+            result["structuredContent"]["retryable"] = True
         return attach(result, getattr(exc, "mindie_diagnostic", None))
     result = remote_stage_failure(args, name, "timeout", exc)
     structured = result.setdefault("structuredContent", {})

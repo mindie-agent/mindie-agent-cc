@@ -54,7 +54,10 @@ def test_sync_runs_empty_feed_cli_without_starting_knowledge_service(sync_profil
     assert result["structuredContent"] == {"result": "ok", "results": []}
     service.assert_not_called()
     message = {"method": "tools/call", "params": {"name": "knowledge_sync", "arguments": {}}}
-    assert mindie_launch._dispatch_budget("knowledge", message) >= mcp_server.KNOWLEDGE_SYNC_TIMEOUT + 15
+    outer = mindie_launch._dispatch_budget("knowledge", message)
+    assert outer >= mcp_server.KNOWLEDGE_SYNC_TIMEOUT + 5 + 5 + 5 + (2 + 2 + 2)
+    native = json.loads((Path(__file__).resolve().parents[1] / ".mcp.json").read_text())
+    assert native["mcpServers"]["knowledge"]["timeout"] >= outer * 1000
 
 
 def test_sync_preserves_real_failed_feed_row_as_mcp_error(sync_profile, tmp_path):
