@@ -148,9 +148,13 @@ def execute(name, arguments, session, *, cwd=None):
     environment.update(adapter.get("diagnostics_context", {}))
     environment["CLAUDE_SESSION_ID"] = session
     receipt = {}
-    stdout = run(command(adapter, component) + argv, timeout=milliseconds / 1000,
-                 max_output=budget * 4, env=environment, cwd=cwd,
-                 check=False, receipt=receipt, capture_stderr=True)
+    executable = command(adapter, component)
+    try:
+        stdout = run(executable + argv, timeout=milliseconds / 1000,
+                     max_output=budget * 4, env=environment, cwd=cwd,
+                     check=False, receipt=receipt, capture_stderr=True)
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"Could not start {executable[0]}: {exc}") from exc
     value = dict(component=component, exit_code=receipt["returncode"],
                  stdout=stdout, stderr=receipt["stderr"])
     if receipt["cleanup_failed"]:
