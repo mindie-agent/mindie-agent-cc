@@ -9,7 +9,7 @@ description = "Native Claude Code adapter for MindIE Agent"
 requires-python = ">=3.11,<3.15"
 dependencies = [
   "mindie-knowledge @ git+https://github.com/mindie-agent/knowledge@6e921b205c00d592c25f849653cbfb72b73fe318",
-  "remote-dev @ git+https://github.com/mindie-agent/remote-dev@153813703a3cc64c695dd8e5f19e8a173e144dda",
+  "remote-dev @ git+https://github.com/mindie-agent/remote-dev@2a750ec8c74d7f053410d48dd820aeb542e7d3b1",
   "mindie-diagnostics @ git+https://github.com/mindie-agent/diagnostics@5ae643e19223f2181ecdbaa3edaf464137c4805e",
 ]
 
