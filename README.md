@@ -59,6 +59,21 @@ MindIE Agent 采用**「领域知识与 Skill 手动按需触发 + 远端开发�
 > ```
 > **会发生什么**：内置的 `remote-dev` MCP 服务作为常驻工具集，会在识别到远端开发意图时**默认自动触发**，完成文件读写、补丁同步、长耗时编译/测试后台托管与实时日志轮询。即使不开启知识库服务或社区贡献，`remote-dev` 也能完全独立工作。
 
+`components` MCP 服务同时暴露 `coordinator`、`profiler`、`sim`、
+`diagnostics_status` 和 `diagnostics_bundle`，无需 `/mindie-agent`。
+前三项透传 `argv` 数组到真实组件 CLI；可先传 `["--help"]` 查看已安装版本的参数。
+相对路径以原生工具调用的工作目录解析，也可用绝对路径 `cwd` 显式覆盖。
+调用保留 stdout、stderr 和退出码，
+`timeout_ms` 默认 120000、最大 600000，保留原生 MCP 的收尾预算；`max_output_tokens` 默认 16384（两路输出合计最多四倍字节数）。
+诊断状态与本地脱敏支持包使用插件锁定环境，不启动 reporter 或上传文件。
+`npu-top` 是面向人的监控看板，不注册为 Agent 工具。
+
+`mindie-coordinator`、`mindie-profiler`、`mindie-sim` 是独立安装的可选组件，
+插件先在配置的 Python 解释器同目录查找，再查 `PATH`；缺失时明确报错。
+也可在 MindIE 的适配器配置中用 `component_commands` 指定可执行文件及固定参数，例如
+`{"component_commands":{"sim":["/opt/mindie/bin/mindie-sim"]}}`。
+这不会安装组件或修改 Claude 配置；需要设备的采集与测量仍须持有对应 NPU 租约。
+
 ### 场景 3：研发经验后台沉淀与统一贡献开关（一次配置，无日常额外操作）
 > **痛点**：完成了一项复杂的特性设计、算子适配或深度调优后，关掉终端经验就散落了；想分享又担心泄露机器 IP、Token 或私有路径。  
 > **用法示例（像平时一样正常开展研发与测试即可）**：
@@ -118,7 +133,7 @@ MindIE Agent 采用**「领域知识与 Skill 手动按需触发 + 远端开发�
    claude mcp list
    ```
    - 确认 `claude plugin list --json` 中包含 `mindie-agent@mindie-agent-cc`（版本 `0.1.7`，状态已启用）。
-   - 确认 `claude mcp list` 中 `mindie-knowledge` 与 `remote-dev` 两个服务均显示 `Connected`。验证通过后，向用户汇报已验证的 GitHub 账号（`$GH_USER`）以及插件就绪状态。
+   - 确认 `claude mcp list` 中插件的 `knowledge`、`remote`、`components` 三个服务均显示 `Connected`。`components` 连接成功代表工具入口可用，独立组件仍须已安装或配置命令路径。验证通过后，向用户汇报已验证的 GitHub 账号（`$GH_USER`）以及插件就绪状态。
 
    验证成功后继续第 5 步，完成首次配置后一起汇报安装结果。
 

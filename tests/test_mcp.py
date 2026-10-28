@@ -48,7 +48,7 @@ class McpTests(unittest.TestCase):
         self.assertEqual(
             names,
             {"mindie_status", "knowledge_query", "knowledge_explain",
-             "knowledge_feedback", "knowledge_distill"},
+             "knowledge_feedback", "knowledge_distill", "knowledge_sync"},
         )
         for item in tools:
             props = item["inputSchema"].get("properties") or {}
@@ -123,17 +123,14 @@ class McpTests(unittest.TestCase):
 
     def test_remote_tools_follow_the_trusted_profile_env(self):
         import mcp_server
+        from remote_dev.mcp.tools import list_tools
+
         with patch.dict(os.environ, {"REMOTE_DEV_HARNESS_PROFILE": "claude"}):
-            tools = {item["name"]: item for item in mcp_server.remote_tools()}
-        self.assertIn("remote_read", tools)
-        self.assertEqual(len(tools), 30)
-        self.assertTrue(
-            {"remote_Read", "remote_Write", "remote_Edit", "remote_Bash",
-             "remote_TaskOutput", "remote_TaskStop", "remote_NotebookEdit",
-             "remote_BashOutput"} <= set(tools)
-        )
-        self.assertNotIn("remote_TaskList", tools)
-        self.assertNotIn("remote_write_stdin", tools)
+            expected = list_tools()
+            tools = mcp_server.handle("remote", {
+                "id": 1, "method": "tools/list",
+            })["result"]["tools"]
+        self.assertEqual(tools, expected)
 
 
 class RemoteObservationBoundTests(unittest.TestCase):

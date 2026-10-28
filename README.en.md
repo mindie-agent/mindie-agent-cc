@@ -59,6 +59,27 @@ MindIE Agent combines **manual on-demand activation for domain knowledge & skill
 > ```
 > **What Happens**: The built-in `remote-dev` MCP server is always on and **triggers automatically by default** whenever your prompt involves remote servers, containers, or NPU commands—handling remote file reads/writes, patch application, managed background jobs, and live log polling over SSH. It works completely independently, even if the knowledge service or community sharing is turned off.
 
+The `components` MCP server also exposes `coordinator`, `profiler`, `sim`,
+`diagnostics_status`, and `diagnostics_bundle` without `/mindie-agent`.
+The first three forward an `argv` array to the real component CLI; pass
+`["--help"]` to inspect the installed parser. Relative paths use the native
+tool call's working directory, with an optional absolute `cwd` override.
+Calls retain stdout, stderr, and the exit code.
+`timeout_ms` defaults to 120000 and is capped at 600000 to leave time for native
+MCP cleanup; `max_output_tokens` defaults to 16384 and
+bounds combined output to four times that many bytes. Local diagnostic status
+and sanitized support bundles use the locked plugin environment, without
+starting a reporter or uploading files. The human-facing `npu-top` dashboard
+is not registered as an Agent tool.
+
+`mindie-coordinator`, `mindie-profiler`, and `mindie-sim` are separately
+installed optional components. Resolution checks beside the configured Python
+interpreter before `PATH`; missing components produce an explicit error.
+MindIE's adapter configuration can also specify executable arguments, for
+example `{"component_commands":{"sim":["/opt/mindie/bin/mindie-sim"]}}`.
+This does not install components or modify Claude settings. Device collection
+and measurement still require the appropriate NPU lease.
+
 ### Scenario 3: Background Experience Capture & Unified Contribution Switch (Zero Daily Overhead)
 > **The Problem**: After completing a complex architecture design, kernel implementation, or NPU test verification, that engineering insight usually disappears when you close the terminal—yet sharing raw transcripts risks leaking internal IPs, tokens, or file paths.  
 > **Copy-Paste Example (just work on your engineering task normally)**:
@@ -118,7 +139,7 @@ If you are an AI Agent asked by the user to install this plugin, run the followi
    claude mcp list
    ```
    - Confirm `claude plugin list --json` shows `mindie-agent@mindie-agent-cc` (`0.1.7`) enabled with `user` scope.
-   - Confirm `claude mcp list` reports both `mindie-knowledge` and `remote-dev` as `Connected`, then report the verified GitHub account (`$GH_USER`), and plugin readiness to the user.
+   - Confirm `claude mcp list` reports the plugin's `knowledge`, `remote`, and `components` servers as `Connected`. A connected `components` server confirms tool registration; optional component executables must also be installed or configured. Then report the verified GitHub account (`$GH_USER`) and plugin readiness to the user.
 
    Continue with step 5 after verification, then report the complete setup result.
 

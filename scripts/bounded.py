@@ -366,13 +366,13 @@ def _cleanup_step(receipt, operation, stage):
         return True
 
 
-def _run_posix(process, timeout, max_output, pgid, check, cancel, transport=False, owner=None, receipt=None, terminal=None):
+def _run_posix(process, timeout, max_output, pgid, check, cancel, transport=False, owner=None, receipt=None, terminal=None, capture_stderr=False):
     selector = selectors.DefaultSelector()
     selector.register(process.stdout, selectors.EVENT_READ, "out")
     selector.register(process.stderr, selectors.EVENT_READ, "err")
     deadline = None if timeout is None else time.monotonic() + timeout
     output = bytearray()
-    errors = bytearray() if transport else None
+    errors = bytearray() if transport or capture_stderr else None
     cap = _Cap(max_output)
     terminated = False
 
@@ -470,6 +470,8 @@ def _run_posix(process, timeout, max_output, pgid, check, cancel, transport=Fals
         exc.returncode = process.poll()
         raise
     finally:
+        if capture_stderr:
+            receipt["stderr"] = bytes(errors).decode("utf-8", "replace")
         # Cleanup never masks the business result; failures land on the receipt.
         _cleanup_step(receipt, lambda: _kill_tree(process, pgid), "terminate_owned_tree")
         def reap():
@@ -484,11 +486,11 @@ def _run_posix(process, timeout, max_output, pgid, check, cancel, transport=Fals
         _cleanup_step(receipt, process.stderr.close, "close_stderr")
 
 
-def _run_windows(process, timeout, max_output, pgid, check, cancel, transport=False, owner=None, receipt=None, terminal=None):
+def _run_windows(process, timeout, max_output, pgid, check, cancel, transport=False, owner=None, receipt=None, terminal=None, capture_stderr=False):
     # Windows reader threads drain the pipes; the Job owns all pipe holders.
     deadline = None if timeout is None else time.monotonic() + timeout
     output = bytearray()
-    errors = bytearray() if transport else None
+    errors = bytearray() if transport or capture_stderr else None
     cap = _Cap(max_output)
     lock = threading.Lock()
     failure = []
@@ -591,6 +593,9 @@ def _run_windows(process, timeout, max_output, pgid, check, cancel, transport=Fa
                 # block this cleanup indefinitely after an ownership failure.
                 continue
             _cleanup_step(receipt, stream.close, "close_pipe")
+        if capture_stderr:
+            with lock:
+                receipt["stderr"] = bytes(errors).decode("utf-8", "replace")
 
 
 def _reader_only_cleanup(receipt: dict) -> bool:
@@ -624,6 +629,7 @@ def run(
     terminal=None,
     allow_service=False,
     core_managed=False,
+    capture_stderr=False,
 ):
     active = _OPERATION.get()
     if input_text is not None:
@@ -696,12 +702,12 @@ def run(
             if POSIX:
                 result = _run_posix(
                     process, timeout, max_output, pgid, check, cancel, transport,
-                    owner=owner, receipt=receipt, terminal=terminal,
+                    owner=owner, receipt=receipt, terminal=terminal, capture_stderr=capture_stderr,
                 )
             else:
                 result = _run_windows(
                     process, timeout, max_output, pgid, check, cancel, transport,
-                    owner=owner, receipt=receipt, terminal=terminal,
+                    owner=owner, receipt=receipt, terminal=terminal, capture_stderr=capture_stderr,
                 )
             receipt["completed"] = True
             receipt["returncode"] = process.returncode
