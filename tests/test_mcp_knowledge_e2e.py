@@ -104,7 +104,13 @@ class McpKnowledgeEndToEndTests(unittest.TestCase):
             "knowledge_query",
             {"query": "HCCL ring initialization timeout", "limit": 5},
         )
-        self.assertFalse(query_res.get("isError"), f"Unexpected query error: {query_res}")
+        if query_res.get("isError"):
+            from mindie_knowledge.loop.diagnostics import snapshot
+            evidence = snapshot(str(self.engine), session=SESSION)
+            self.fail(
+                f"Unexpected query error: {query_res}; "
+                f"service={evidence['service']}; startup={evidence['startup']}"
+            )
         structured_query = query_res["structuredContent"]
         self.assertEqual(structured_query["domain"], "vllm-ascend")
         self.assertGreaterEqual(len(structured_query["results"]), 1)
