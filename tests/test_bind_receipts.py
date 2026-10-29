@@ -114,6 +114,8 @@ class BindReceiptTests(unittest.TestCase):
             ("update", "knowledge", "success"),
             ("commit", "knowledge", "success"),
             ("open", "knowledge", "success"),
+            ("timeout", "knowledge", "success"),
+            ("timeout", "remote", "success"),
             ("update", "remote", "success"),
             ("update", "remote", "failed"),
             ("update", "remote", "exception"),
@@ -136,6 +138,8 @@ class BindReceiptTests(unittest.TestCase):
                     return payload if surface == "knowledge" else {"text": "original remote result", "result": payload}
 
                 def accounting_connection(path, *, create):
+                    if business_done and phase == "timeout":
+                        raise TimeoutError("receipt budget exhausted")
                     if business_done and phase == "open":
                         raise OSError("receipt storage unavailable")
                     connection = connect(path, create=create)
@@ -156,6 +160,8 @@ class BindReceiptTests(unittest.TestCase):
                 self.assertEqual(result["isError"], outcome != "success")
                 structured = result["structuredContent"]
                 self.assertIn("bind_warning", structured)
+                if phase == "timeout":
+                    self.assertEqual(structured["bind_error_type"], "TimeoutError")
                 diagnostic = structured["diagnostic_ref"]
                 self.assertFalse(diagnostic["logging_failed"])
                 incident = diagnostic["incident_id"]

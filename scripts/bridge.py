@@ -208,6 +208,8 @@ def handle_stop():
             return 0
         try:
             settings = sharing_mod.load()
+        except TimeoutError:
+            raise
         except Exception as exc:
             return _stop_failure("configuration", "unavailable", exc)
         if not settings.allows_capture():
@@ -245,6 +247,8 @@ def handle_stop():
         from mindie_knowledge.loop.cli import capture_hook
 
         failed = _observe_stop(capture_hook(str(engine_path()), forwarded))
+    except TimeoutError as exc:
+        return _stop_failure("handoff" if attempted else "configuration", "timeout", exc)
     except Exception as exc:
         return _stop_failure("handoff" if attempted else "configuration", "internal", exc)
     return _stop_output(failed)

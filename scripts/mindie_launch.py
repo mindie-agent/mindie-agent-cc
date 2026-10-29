@@ -305,7 +305,8 @@ def _hook(op: str) -> int:
         print(json.dumps(value, ensure_ascii=False), flush=True)
         return 0
     except Exception as exc:
-        category = "child_failure" if stage == "helper_failed" else "configuration"
+        category = ("timeout" if isinstance(exc, TimeoutError) else
+                    "child_failure" if stage == "helper_failed" else "configuration")
         _record_hook(stage, category, op, exc)
         if isinstance(exc, LockTimeout):
             return _hook_warning(unavailable=True)
@@ -498,6 +499,8 @@ def _dispatch(surface: str, raw: bytes, ident, cancel=None, *, binding=None, dea
             )
     except bounded.CommandCancelled:
         raise
+    except (TimeoutError, bounded.CommandTimedOut):
+        raise
     except (InstallationUnavailable, LockTimeout) as exc:
         raise _dispatch_failure(selected, "installation_unavailable", "configuration",
                                 exc, started) from None
@@ -585,7 +588,7 @@ def _mcp(surface: str) -> int:
                 response["result"] = diagnostic_support.attach(
                     response["result"], exc.diagnostic
                 )
-            except bounded.CommandTimedOut:
+            except (TimeoutError, bounded.CommandTimedOut):
                 response = _stage_error(ident, message, "deadline", surface)
             except Exception:
                 response = _stage_error(ident, message, "helper_failed", surface)
@@ -772,8 +775,9 @@ def main(argv=None) -> int:
         except (InstallationUnavailable, LockTimeout):
             return _hook_warning(unavailable=True)
         except Exception as exc:
-            _record_hook("maintenance", "unavailable", op="session-start", exception=exc)
-            result = {"status": "incomplete"}
+            category = "timeout" if isinstance(exc, TimeoutError) else "unavailable"
+            _record_hook("maintenance", category, op="session-start", exception=exc)
+            result = {"status": "incomplete", "error_type": type(exc).__name__}
         if result["status"] != "ready":
             print(json.dumps({"systemMessage": "MindIE startup maintenance is incomplete."}))
             return 0

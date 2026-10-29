@@ -42,6 +42,25 @@ knowledge available; it does not require a query before each repair.
   acceptance checks; skipping knowledge needs no feedback call and does not
   disable this conversation's eligible background capture.
 
+## Finish the verified task
+
+Identify the requested behavior and its acceptance checks from the task and
+relevant callers. Once the change satisfies those invariants and the affected
+behavior checks pass, give the final response with the result, validation and
+any remaining limitation. Let the host emit its normal completion event.
+
+Extend the implementation or repeat validation only for a concrete failing
+case, a required acceptance check, or new evidence that challenges the result.
+Do not add optional parameter combinations, speculative compatibility paths or
+defensive fallbacks after success without that evidence. An offline parser or
+code repair does not require an invented hardware condition or an unrelated
+live NPU run. Keep any hardware checks the actual task requires.
+
+Knowledge feedback and background capture must not prolong a finished task.
+A passing check alone does not fabricate native completion or C6 admission;
+report unfinished requirements honestly if a budget or external dependency
+prevents completion.
+
 1. **Domain Knowledge (`L1–L4`), Multi-Domain Routing, Three-Valued `conditions` & Remote NPU Execution**:
    - Use native knowledge tools when a missing decision calls for domain knowledge, remote execution tools (`mindie-remote-dev`) when the task requires remote work, and component tools (`coordinator`, `profiler`, `sim`, `diagnostics_status`, `diagnostics_bundle`) for their deterministic operations. `knowledge_sync` refreshes configured public feeds for the current manually activated domain (or an explicitly activated optional `domain`), returns per-feed sync results, and neither starts the background knowledge service nor changes contribution settings.
    - **Graded Knowledge, Multi-Domain Routing, Reference Identity & `knowledge_distill`**: `knowledge_query` accepts `query`, optional `domain` (selecting the default domain or a registered `domain_configs` Engine/Feed such as `"vllm-ascend"` or `"operators"`), `limit` (1–20), `conditions`, `continuation`, `domain_path`, `token_budget` (1–16000), and `include_unknown`. For graded units, `results[]` return `id`, `ref` (`mindie://<domain>/units/<id>@<integer revision>`), `unit_ref` (without revision), and `feedback_ref` (equal to `ref` for graded units); copy the actual returned revision-bound `ref` into `knowledge_explain(refs=[...], conditions=..., known_refs=..., token_budget=...)`, including a single graded unit and copy the exact `feedback_ref` to `knowledge_feedback` (for graded units `ref` and `feedback_ref` share the same revision-bound URI value, whereas legacy material keeps `ref` and `feedback_ref` distinct; never pass a bare `id`; both `knowledge_explain` and `knowledge_feedback` route by the `mindie://<domain>/...` URI authority). Use `knowledge_distill(inputs, task_state, domain=...)` at `task_state="verified_milestone"` or `"completed"` on caller-selected, already-authorized evidence (`completed` or `verified_milestone` with `observed` or fault/environment/build evidence [`compile_failed` / `infra_failed` / `measurement_invalid`] is allowed and can yield `single_observation` or `hypothesis` without elevating unverified faults to `hardware_spec` or `reproduced_empirical`, while `reproduced_empirical` requires repeated `verified` evidence and `L4` requires a valid ablation receipt); only `task_state="in_flight"` (or all-`in_flight` / empty inputs) is a zero-call no-op. Graded query options, multi-domain routing, and `knowledge_distill` require the paired `mindie-knowledge 0.13.0` runtime. Graded Git publication (`mindie-publication-contract/2`), independent Feed sync, and revision-bound unit feedback use that runtime; check the selected feed revision and installed runtime identity separately when diagnosing a mismatch.
