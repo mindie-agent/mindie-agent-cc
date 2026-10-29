@@ -18,15 +18,27 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from product_contract import identity, package_files
 
 
-def prepare(source, python, root, *, current_python=None, force=False, current_source=None):
+def prepare(source, python, root, *, current_python=None, force=False, current_source=None,
+            plugin_upgrade=False):
+    from mindie_knowledge.component_bindings import managed_commands, required_components, rebind_commands
     from mindie_knowledge.component_runtime import build, discover
     from bootstrap import readback
+    from paths import config_path
+    config = config_path()
+    adapter = json.loads(config.read_text()) if config.is_file() else {}
+    if adapter.get("base_config"):
+        adapter = json.loads(Path(adapter["base_config"]).read_text())
+    if plugin_upgrade and not adapter.get("component_source") and not managed_commands(adapter):
+        return None
     baseline = identity(source)
-    selected = discover(current_python or python, baseline["runtime"], force=force)
-    if not selected["changed"] and current_source == baseline["source_sha256"]:
+    selected = discover(current_python or python, baseline["runtime"], force=force,
+                        required_components=required_components(adapter))
+    needs_binding = bool(adapter.get("component_commands")) and (
+        rebind_commands(adapter, python, selected["runtime"]) != adapter["component_commands"])
+    if not selected["changed"] and current_source == baseline["source_sha256"] and not needs_binding:
         return None
     pins = {name: row["revision"] for name, row in selected["runtime"].items()}
-    if pins == baseline["runtime"]:
+    if pins == baseline["runtime"] and not needs_binding:
         return None
     artifact = build(source, root, baseline, selected["runtime"], python=python,
                      adapter_distribution="mindie-agent-cc",
@@ -57,7 +69,7 @@ def main():
     parser.add_argument("current_python")
     args = parser.parse_args()
     print(json.dumps(prepare(args.source, args.python, args.root,
-                             current_python=args.current_python), sort_keys=True))
+                             current_python=args.current_python, plugin_upgrade=True), sort_keys=True))
 
 
 if __name__ == "__main__":
