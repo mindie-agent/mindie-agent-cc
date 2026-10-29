@@ -1789,7 +1789,7 @@ wheels = [
 
 [[package]]
 name = "mindie-agent-cc"
-version = "0.1.8"
+version = "0.1.9"
 source = { editable = "." }
 dependencies = [
     { name = "mindie-diagnostics" },
@@ -1816,16 +1816,16 @@ requires-dist = [
 [package.metadata.requires-dev]
 test = [
     { name = "hatchling", specifier = "==1.32.4" },
-    { name = "mindie-coordinator", git = "https://github.com/mindie-agent/coordinator?rev=0ec71fb947ab24df8e543dcf056f4f06664baad8" },
-    { name = "mindie-profiler", git = "https://github.com/mindie-agent/profiler?rev=065b382d3bd0d39890fc8379798331ce059a65b4" },
+    { name = "mindie-coordinator", git = "https://github.com/mindie-agent/coordinator?rev=e4a86c972a99c442c78ad7f7ba627af7da5ef7f2" },
+    { name = "mindie-profiler", git = "https://github.com/mindie-agent/profiler?rev=25c789cd42389c893234c5db20eca67e63b8878a" },
     { name = "mindie-sim", git = "https://github.com/mindie-agent/sim?rev=15f93f3f0247b2653d0e9441eae56959e4d16d4e" },
     { name = "pytest", specifier = "==9.1.1" },
 ]
 
 [[package]]
 name = "mindie-coordinator"
-version = "0.6.3"
-source = { git = "https://github.com/mindie-agent/coordinator?rev=0ec71fb947ab24df8e543dcf056f4f06664baad8#0ec71fb947ab24df8e543dcf056f4f06664baad8" }
+version = "0.7.0"
+source = { git = "https://github.com/mindie-agent/coordinator?rev=e4a86c972a99c442c78ad7f7ba627af7da5ef7f2#e4a86c972a99c442c78ad7f7ba627af7da5ef7f2" }
 dependencies = [
     { name = "mindie-diagnostics" },
     { name = "remote-dev" },
@@ -1853,8 +1853,8 @@ dependencies = [
 
 [[package]]
 name = "mindie-profiler"
-version = "0.5.0"
-source = { git = "https://github.com/mindie-agent/profiler?rev=065b382d3bd0d39890fc8379798331ce059a65b4#065b382d3bd0d39890fc8379798331ce059a65b4" }
+version = "0.5.1"
+source = { git = "https://github.com/mindie-agent/profiler?rev=25c789cd42389c893234c5db20eca67e63b8878a#25c789cd42389c893234c5db20eca67e63b8878a" }
 
 [[package]]
 name = "mindie-sim"
