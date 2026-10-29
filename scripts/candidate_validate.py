@@ -82,6 +82,8 @@ def adapter_check(source):
         "bounded_win32.py",
         "owned_process.py",
         "mcp_server.py",
+        "mcp_catalog.py",
+        "component_tools.py",
         "receipt_layout.py",
         "candidate_validate.py",
         "product_contract.py",
@@ -99,9 +101,9 @@ def adapter_check(source):
         if not (plugin / "scripts" / name).is_file():
             raise ValueError("missing bounded runtime entry: " + name)
     # The catalogue is source text. Executable selection stays on the Git pin.
-    text = (plugin / "scripts" / "mcp_server.py").read_text(encoding="utf-8")
+    text = (plugin / "scripts" / "mcp_catalog.py").read_text(encoding="utf-8")
     for name in ("knowledge_query", "knowledge_explain", "knowledge_feedback",
-                 "knowledge_distill"):
+                 "knowledge_distill", "knowledge_sync"):
         if f'name="{name}"' not in text and f"name='{name}'" not in text:
             raise ValueError("adapter knowledge catalogue is incomplete")
     if "knowledge_use" in text or "knowledge_judge" in text:

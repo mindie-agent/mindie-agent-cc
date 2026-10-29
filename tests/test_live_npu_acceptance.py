@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -195,6 +196,12 @@ class LiveNpuAcceptanceTests(unittest.TestCase):
 
         consent_store.record_choice(self.tmp / "mindie-consent.json", "contribute")
         prepare_schema(str(self.engine))
+        # The real Stop gate requires this session's explicit entry, separately
+        # from installation-wide contribution consent.
+        Admission(str(self.admission)).activate(
+            self.session, project_root=str(self.project),
+        )
+        captured_at = datetime.now(timezone.utc).isoformat()
 
         transcript = self.tmp / "claude" / "projects" / "live" / f"{self.session}.jsonl"
         transcript.parent.mkdir(parents=True, exist_ok=True)
@@ -204,13 +211,13 @@ class LiveNpuAcceptanceTests(unittest.TestCase):
                 "type": "queue-operation",
                 "operation": "enqueue",
                 "sessionId": self.session,
-                "timestamp": "2026-10-18T12:00:00Z",
+                "timestamp": captured_at,
             },
             {
                 "type": "user",
                 "sessionId": self.session,
                 "cwd": str(self.project),
-                "timestamp": "2026-10-18T12:00:05Z",
+                "timestamp": captured_at,
                 "message": {
                     "role": "user",
                     "content": f"Inspect A2 NPU on root@173.125.1.2 with token {secret_token} and A3 on root@192.168.13.165",
@@ -220,7 +227,7 @@ class LiveNpuAcceptanceTests(unittest.TestCase):
                 "type": "assistant",
                 "sessionId": self.session,
                 "cwd": str(self.project),
-                "timestamp": "2026-10-18T12:00:10Z",
+                "timestamp": captured_at,
                 "message": {
                     "role": "assistant",
                     "content": [

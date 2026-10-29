@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Adapter-owned MCP: knowledge tools and general remote-dev.
+"""Adapter-owned MCP: knowledge, remote-dev and deterministic components.
 
 [Role]
-Serves stdio JSON-RPC MCP requests for MindIE knowledge tools and `remote_dev`
-tools in Claude Code.
+Serves stdio JSON-RPC MCP requests for MindIE knowledge, `remote_dev`, and
+explicit component CLI tools in Claude Code.
 
 [Invariants]
 - Session identity is never taken from model-supplied tool arguments; `PreToolUse`
@@ -22,7 +22,7 @@ tools in Claude Code.
   layouts (`receipt_layout.py`) before external execution.
 
 [Side-Effect Policy]
-- Dispatches authorized tool calls to `mindie_knowledge` and `remote_dev.mcp.server`.
+- Dispatches authorized calls to shared engines and explicit component CLIs.
 """
 
 from __future__ import annotations
@@ -48,10 +48,12 @@ from identity import (
 )
 from paths import state_dir
 from product_contract import installed_version
+from mcp_catalog import KNOWLEDGE_TOOL_DEFS
 import rsi_explore
 
 MAX_YIELD_TIME_MS = 30000
 KNOWLEDGE_RPC_TIMEOUT = 30.0
+KNOWLEDGE_SYNC_TIMEOUT = 120.0
 REMOTE_ERROR_CATEGORIES = frozenset({
     "internal", "caller", "validation", "permission", "remote_execution",
     "cancelled", "connection_capacity", "connection_timeout",
@@ -60,194 +62,6 @@ REMOTE_ERROR_CATEGORIES = frozenset({
     "worker_capacity",
 })
 JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{2,95}$")
-
-KNOWLEDGE_TOOL_DEFS = [
-    dict(
-        name="mindie_status",
-        description=(
-            "Read MindIE status and first-use choices for the current bound task. "
-            "Includes safe failure categories and this task's contribution batch IDs "
-            "for recovery inspection. Does not activate, enable sharing or retry work."
-        ),
-        inputSchema=dict(type="object", properties={}, additionalProperties=False),
-    ),
-    dict(
-        name="knowledge_query",
-        description=(
-            "Use when a missing contract, mechanism or method could change the next action. "
-            "Skip retrieval when code and current evidence support a fix and verification; "
-            "probe missing environment facts first. "
-            "Search graded rules and task material in the selected domain. Each match has a readable ref "
-            "and feedback_ref for its observed revision. Pass known task conditions to filter graded rules. "
-            "Graded corpora return bounded cards plus deduplicated foundation_cards; include_archived "
-            "also discovers archived or superseded units when investigating old conclusions. "
-            "navigation_only returns navigation cards without inline bodies; run_id records "
-            "deduplicated delivery events for an existing run. "
-            "For related task blocks, pass related_next as continuation without query. "
-            "A changed corpus rejects the continuation. References are advisory."
-        ),
-        inputSchema=dict(
-            type="object",
-            properties=dict(
-                query={"type": "string"},
-                limit={"type": "integer", "minimum": 1, "maximum": 20},
-                conditions={"type": "object"},
-                continuation={"type": "string"},
-                domain={
-                    "type": "string",
-                    "description": "Optional configured domain name; omit for the installation default.",
-                },
-                domain_path={"type": "string"},
-                token_budget={"type": "integer", "minimum": 1, "maximum": 16000},
-                include_unknown={"type": "boolean"},
-                include_archived={"type": "boolean"},
-                navigation_only={
-                    "type": "boolean",
-                    "default": False,
-                    "description": "Return navigation cards only; omit inline result bodies while keeping exact read costs.",
-                },
-                run_id={
-                    "type": "string",
-                    "description": "Bind delivery and discovered events to this run for deduplicated usage accounting.",
-                },
-                **rsi_explore.schema_properties(),
-            ),
-            additionalProperties=False,
-        ),
-    ),
-    dict(
-        name="knowledge_explain",
-        description=(
-            "Read only knowledge needed for the next action; an exact returned ref needs no new query. "
-            "For graded units, prefer refs even for one unit, with observed conditions, fully visible "
-            "known_refs and an explicit token_budget. Copy revision references exactly. Stop reading "
-            "once the next action and required premises are clear; new evidence can reopen retrieval. "
-            "A single ref keeps the "
-            "historical contract: a graded-unit ref returns its exact current revision and conditions; "
-            "a task ref returns the current navigation and first_block_ref; a block ref returns that "
-            "immutable block with previous_block_ref/next_block_ref for walking the task. "
-            "Batch refs return the shared dependency closure once in requires and full unit bodies "
-            "in units, using conditions and known_refs (only exact id@revision units still fully "
-            "visible) to avoid re-sending visible bodies; unresolved reports condition or budget "
-            "exclusions instead of truncated steps. The content is a reference slice, not the full "
-            "case or a verified report. run_id binds the delivered units to an existing run."
-        ),
-        inputSchema=dict(
-            type="object",
-            properties=dict(
-                ref={"type": "string"},
-                refs={"type": "array", "items": {"type": "string"}},
-                conditions={"type": "object"},
-                known_refs={"type": "array", "items": {"type": "string"}},
-                token_budget={"type": "integer", "minimum": 1, "maximum": 16000},
-                run_id={
-                    "type": "string",
-                    "description": "Bind delivery and loaded events to this run for deduplicated usage accounting.",
-                },
-                **rsi_explore.schema_properties(),
-            ),
-            required=[],
-            additionalProperties=False,
-        ),
-    ),
-    dict(
-        name="knowledge_feedback",
-        description=(
-            "Record optional usage evidence for an exact observed ref: the historical up/down rating, "
-            "or a 4-stage usage event (discovered, loaded, applied, evaluated). evaluated requires "
-            "run_id and outcome. evidence_source distinguishes caller-claimed evidence from verified "
-            "run or ablation evidence on evaluated events. "
-            "Copy the exact feedback_ref returned by query/explain into ref. Never required."
-        ),
-        inputSchema=dict(
-            type="object",
-            properties=dict(
-                ref={"type": "string"},
-                rating={"type": "string", "enum": ["up", "down"]},
-                reason={"type": "string"},
-                event_type={
-                    "type": "string",
-                    "enum": ["discovered", "loaded", "applied", "evaluated"],
-                },
-                run_id={"type": "string"},
-                step_id={"type": "string"},
-                outcome={
-                    "type": "string",
-                    "enum": ["supported", "refuted", "inconclusive"],
-                },
-                evidence_source={
-                    "type": "string",
-                    "enum": ["agent_declared", "run_manifest_verified", "ablation_verified"],
-                    "default": "agent_declared",
-                    "description": "How an evaluated outcome was established; defaults to an agent declaration.",
-                },
-            ),
-            required=["ref"],
-            additionalProperties=False,
-        ),
-    ),
-    dict(
-        name="knowledge_distill",
-        description=(
-            "Distill only explicitly selected evidence into C5 graded units. The "
-            "shared runtime redacts the selected inputs before the model call. This "
-            "requires the current active capture lease and saved contribution "
-            "authorization. task_state is explicit; an ordinary Stop does not mean "
-            "completion. Pass related_refs to compare the new evidence against existing units, "
-            "or a foreground mindie-distill-decision/1 proposal for deterministic validation "
-            "and application without another model call. This is one paid native model call "
-            "when no proposal is supplied: it never discovers transcripts, grants publication, "
-            "or retries an uncertain result."
-        ),
-        inputSchema=dict(
-            type="object",
-            properties=dict(
-                inputs=dict(
-                    type="array",
-                    minItems=1,
-                    items=dict(
-                        type="object",
-                        properties=dict(
-                            kind={"enum": [
-                                "experiment_ledger", "run_manifest",
-                                "authorized_transcript", "ecosystem_repo",
-                                "hardware_spec", "ablation_receipt",
-                            ]},
-                            outcome={"enum": [
-                                "observed", "verified", "compile_failed",
-                                "infra_failed", "measurement_invalid", "in_flight",
-                            ]},
-                            source_locator={"type": "string", "minLength": 1},
-                            content={"type": "string", "minLength": 1},
-                            evidence_refs={
-                                "type": "array",
-                                "items": {"type": "string"},
-                            },
-                            repetitions={"type": "integer", "minimum": 1},
-                        ),
-                        required=[
-                            "kind", "outcome", "source_locator", "content",
-                            "evidence_refs",
-                        ],
-                        additionalProperties=False,
-                    ),
-                ),
-                task_state={"enum": [
-                    "in_flight", "verified_milestone", "completed",
-                ]},
-                domain={
-                    "type": "string",
-                    "description": "Optional configured domain name; omit for the installation default.",
-                },
-                related_refs={"type": "array", "items": {"type": "string"}},
-                proposal={"type": "object"},
-            ),
-            required=["inputs", "task_state"],
-            additionalProperties=False,
-        ),
-    ),
-]
-
 
 def canonical(value):
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
@@ -356,15 +170,17 @@ def remote_stage_failure(args, name, stage, exc=None):
 
 
 def _timeout_failure(surface, args, name, exc):
-    """A timeout is retryable and is never mislabeled as a helper failure."""
-    if surface == "knowledge":
+    """Timeout evidence stays with the surface that performed the operation."""
+    if surface in {"knowledge", "components"}:
         from diagnostic_support import attach
 
         result = dict(
             content=[dict(type="text", text="Unavailable: timeout. Continue independently.")],
             isError=True,
-            structuredContent=dict(stage="timeout", retryable=True),
+            structuredContent=dict(stage="timeout"),
         )
+        if surface == "knowledge":
+            result["structuredContent"]["retryable"] = True
         return attach(result, getattr(exc, "mindie_diagnostic", None))
     result = remote_stage_failure(args, name, "timeout", exc)
     structured = result.setdefault("structuredContent", {})
@@ -569,6 +385,19 @@ def knowledge_call(name, args, session):
     from mindie_knowledge.loop.cli import rpc
     from admission import gate
 
+    if name == "knowledge_sync":
+        from knowledge_service import engine_config
+        from maintenance import sync_public_feed
+        from paths import configured_python, engine_config_path
+
+        if set(args) - {"domain"}:
+            raise ValueError("knowledge_sync accepts only the optional domain")
+        selected, _ = select_engine(domain=_public_domain(args))
+        target = selected or engine_config_path()
+        if gate(engine_config(str(target))).knowledge_lease(session) is None:
+            raise ValueError("knowledge sync requires manual /mindie-agent activation in the selected domain")
+        return sync_public_feed(configured_python(), target, timeout=KNOWLEDGE_SYNC_TIMEOUT)
+
     # A consumed toolUseId proves identity, not explicit knowledge activation.
     if gate().knowledge_lease(session) is None:
         from knowledge_service import engine_config, select_engine_for_refs
@@ -685,7 +514,13 @@ def handle(surface, message):
     if method == "notifications/initialized":
         return None
     if method == "tools/list":
-        tools = KNOWLEDGE_TOOL_DEFS if surface == "knowledge" else remote_tools()
+        if surface == "knowledge":
+            tools = KNOWLEDGE_TOOL_DEFS
+        elif surface == "components":
+            from component_tools import catalog
+            tools = catalog()
+        else:
+            tools = remote_tools()
         return dict(jsonrpc="2.0", id=ident, result=dict(tools=tools))
     if method != "tools/call":
         return dict(
@@ -735,11 +570,17 @@ def handle(surface, message):
             if local == "knowledge_distill":
                 from mindie_knowledge.graded.distill import result_view
                 payload, is_error = result_view(payload)
+            elif local == "knowledge_sync":
+                is_error = (payload.get("result") != "ok"
+                            or bool(payload.get("cleanup_failed")))
             result = dict(
                 content=[dict(type="text", text=canonical(payload))],
                 structuredContent=payload,
                 isError=is_error,
             )
+        elif surface == "components":
+            from component_tools import execute
+            result = execute(local, args, session, cwd=bound.get("cwd"))
         else:
             try:
                 payload = remote_call(local, args, session)
@@ -766,8 +607,6 @@ def handle(surface, message):
         if claimed:
             try:
                 finish_bind(call_id, succeeded)
-            except TimeoutError:
-                raise
             except (OSError, sqlite3.Error) as exc:
                 from diagnostic_support import failure as record_failure
 
@@ -827,8 +666,8 @@ def main(argv=None):
     once = "--once" in argv
     args = [item for item in argv if item != "--once"]
     surface = args[0] if args else "knowledge"
-    if surface not in {"knowledge", "remote"}:
-        raise SystemExit("surface must be knowledge or remote")
+    if surface not in {"knowledge", "remote", "components"}:
+        raise SystemExit("surface must be knowledge, remote or components")
     if once:
         serve_once(surface)
         return

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mindie-agent-cc"
-version = "0.1.8"
+version = "0.1.9"
 description = "Native Claude Code adapter for MindIE Agent"
 requires-python = ">=3.11,<3.15"
 dependencies = [
@@ -14,7 +14,13 @@ dependencies = [
 ]
 
 [dependency-groups]
-test = ["pytest==9.1.1", "hatchling==1.32.4"]
+test = [
+  "pytest==9.1.1",
+  "hatchling==1.32.4",
+  "mindie-profiler @ git+https://github.com/mindie-agent/profiler@25c789cd42389c893234c5db20eca67e63b8878a",
+  "mindie-sim @ git+https://github.com/mindie-agent/sim@15f93f3f0247b2653d0e9441eae56959e4d16d4e",
+  "mindie-coordinator @ git+https://github.com/mindie-agent/coordinator@e4a86c972a99c442c78ad7f7ba627af7da5ef7f2",
+]
 
 [tool.hatch.metadata]
 allow-direct-references = true
@@ -34,7 +40,10 @@ scripts = "mindie_cc"
 
 [tool.uv]
 # The reviewed plugin selection also replaces older transitive component pins.
-override-dependencies = ["mindie-diagnostics @ git+https://github.com/mindie-agent/diagnostics@5ae643e19223f2181ecdbaa3edaf464137c4805e"]
+override-dependencies = [
+  "mindie-diagnostics @ git+https://github.com/mindie-agent/diagnostics@5ae643e19223f2181ecdbaa3edaf464137c4805e",
+  "remote-dev @ git+https://github.com/mindie-agent/remote-dev@2a750ec8c74d7f053410d48dd820aeb542e7d3b1",
+]
 cache-keys = [
   { file = "pyproject.toml" },
   { file = "uv.lock" },
