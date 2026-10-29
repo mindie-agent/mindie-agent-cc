@@ -40,6 +40,9 @@ KNOWLEDGE_TOOL_DEFS = [
     dict(
         name="knowledge_query",
         description=(
+            "Use when a missing contract, mechanism or method could change the next action. "
+            "Skip retrieval when code and current evidence support a fix and verification; "
+            "probe missing environment facts first. "
             "Search graded rules and task material in the selected domain. Each match has a readable ref "
             "and feedback_ref for its observed revision. Pass known task conditions to filter graded rules. "
             "Graded corpora return bounded cards plus deduplicated foundation_cards; include_archived "
@@ -81,7 +84,11 @@ KNOWLEDGE_TOOL_DEFS = [
     dict(
         name="knowledge_explain",
         description=(
-            "Read one domain reference or a batch of exact unit references. A single ref keeps the "
+            "Read only knowledge needed for the next action; an exact returned ref needs no new query. "
+            "For graded units, prefer refs even for one unit, with observed conditions, fully visible "
+            "known_refs and an explicit token_budget. Copy revision references exactly. Stop reading "
+            "once the next action and required premises are clear; new evidence can reopen retrieval. "
+            "A single ref keeps the "
             "historical contract: a graded-unit ref returns its exact current revision and conditions; "
             "a task ref returns the current navigation and first_block_ref; a block ref returns that "
             "immutable block with previous_block_ref/next_block_ref for walking the task. "

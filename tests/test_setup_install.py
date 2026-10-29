@@ -320,6 +320,46 @@ def test_domain_registration_after_prepare_defers_and_can_be_reprepared(preparin
     assert value['domain_source_configs'] == changed['domain_configs']
 
 
+def test_component_binding_change_defers_then_reprepares_without_losing_custom_commands(preparing):
+    import component_tools
+
+    f = preparing
+    install(f)
+    previous = setup._read(f["config"])
+    previous["component_commands"] = {
+        "profiler": [sys.executable, "-m", "mindie_profiler"],
+        "sim": ["/user/custom-simulator", "--mode"],
+    }
+    setup.atomic_write(f["config"], previous)
+    with patch("bootstrap.runtime_key", return_value="release-b"):
+        candidate = install(f)
+    changed = dict(previous, component_commands={
+        **previous["component_commands"], "sim": ["/user/new-simulator", "--mode"]})
+    setup.atomic_write(f["config"], changed)
+    with patch("mindie_knowledge.loop.lifecycle.retire_service") as retire:
+        result = setup.activate_binding(candidate["config"])
+    assert result == dict(status="deferred", stage="component_commands_changed", switched=False)
+    retire.assert_not_called()
+    assert setup._read(f["config"]) == changed
+    with patch("bootstrap.runtime_key", return_value="release-b"):
+        refreshed = install(f)
+    assert refreshed["config"] != candidate["config"]
+    value = setup._read(refreshed["config"])
+    assert value["component_source_commands"] == changed["component_commands"]
+    with patch("mindie_knowledge.loop.lifecycle.retire_service",
+               return_value={"idle": True, "service": "stopped"}), \
+            patch("mindie_knowledge.loop.handoff._probe", return_value="absent"):
+        result = setup.activate_binding(refreshed["config"])
+    assert result["status"] == "activated"
+    active = setup._read(f["config"])
+    assert active["component_commands"]["sim"] == changed["component_commands"]["sim"]
+    command = component_tools.command(active, "profiler")
+    assert command == [sys.executable, "-I", "-X", "utf8", "-m", "mindie_profiler"]
+    executed = subprocess.run(command + ["--help"], capture_output=True, text=True, timeout=5)
+    assert executed.returncode == 0, executed.stderr
+    assert "inventory" in executed.stdout
+
+
 def test_ready_candidate_is_selected_only_after_exact_idle_retirement(preparing):
     f = preparing
     original, candidate = new_candidate(f)

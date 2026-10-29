@@ -74,3 +74,16 @@ def test_bootstrap_reuses_the_effective_component_interpreter(tmp_path, monkeypa
         python, scripts = bootstrap.ensure_runtime(ROOT)
     assert (python, scripts) == (Path(sys.executable), SCRIPTS)
     baseline.assert_not_called()
+
+
+def test_custom_only_plugin_upgrade_does_not_claim_component_inventory(tmp_path, monkeypatch):
+    config = tmp_path / "cc.json"
+    config.write_text(json.dumps({"component_commands": {
+        "profiler": ["/user/profiler-wrapper", "--team-config"]}}))
+    monkeypatch.setenv("MINDIE_CC_CONFIG", str(config))
+    with patch("mindie_knowledge.component_runtime.discover") as discover, \
+            patch("mindie_knowledge.component_runtime.build") as build:
+        assert component_update.prepare(ROOT, sys.executable, tmp_path,
+                                        plugin_upgrade=True) is None
+    discover.assert_not_called()
+    build.assert_not_called()

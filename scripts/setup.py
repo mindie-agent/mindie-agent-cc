@@ -125,6 +125,8 @@ def prepare_binding(source, config=None, *, root=None, domain="vllm-ascend",
     from bootstrap import runtime_key
     from capture_config import prepare, prepare_store
     from harness import require_engine_support
+    from importlib.metadata import version
+    from mindie_knowledge.component_bindings import managed_commands, rebind_commands, validate_command_floor
 
     source = Path(source).resolve()
     config = Path(config or default_config_path()).expanduser().resolve()
@@ -149,13 +151,20 @@ def prepare_binding(source, config=None, *, root=None, domain="vllm-ascend",
     with OperationLock(adapter).preparation(timeout=30):
         selected = read_binding(config) if config.exists() else None
         adapter = selected or initial
+        commands = dict(adapter.get("component_commands", {}))
+        command_versions = {name: {"version": version(name)}
+                            for name, _python, _module in managed_commands(adapter).values()}
+        validate_command_floor(adapter, command_versions)
+        candidate_commands = rebind_commands(adapter, sys.executable, command_versions)
         binding = Path(adapter["state_dir"]) / "installations" / key
         adapter_file, engine_file = binding / "cc.adapter.json", binding / "cc.engine.json"
         if adapter_file.exists() and selected is not None:
             prepared = read_binding(adapter_file)
-            if (prepared != selected and prepared.get('domain_source_configs')
-                    != (selected.get('domain_configs') or {})):
-                routes = json.dumps(selected.get('domain_configs') or {}, sort_keys=True).encode()
+            if (prepared != selected and (
+                    prepared.get('domain_source_configs') != (selected.get('domain_configs') or {})
+                    or prepared.get('component_source_commands', {}) != commands)):
+                routes = json.dumps(dict(domains=selected.get('domain_configs') or {},
+                                         commands=commands), sort_keys=True).encode()
                 binding = binding.with_name(key + '-' + hashlib.sha256(routes).hexdigest()[:16])
                 adapter_file, engine_file = binding / 'cc.adapter.json', binding / 'cc.engine.json'
         if adapter_file.exists():
@@ -187,6 +196,9 @@ def prepare_binding(source, config=None, *, root=None, domain="vllm-ascend",
                          product_validation=validation,
                          component_source=str(source) if components else None)
             value['domain_source_configs'] = dict(adapter.get('domain_configs') or {})
+            value["component_source_commands"] = commands
+            if commands:
+                value["component_commands"] = candidate_commands
             from diagnostic_support import reporting_config_path
             value["diagnostics_context"] = {
                 "MINDIE_DIAGNOSTICS_CONFIG": str(reporting_config_path(config)),
@@ -270,6 +282,9 @@ def activate_binding(candidate_file, *, observation_seconds=30.0):
             if ('domain_source_configs' in candidate
                     and (previous.get('domain_configs') or {}) != candidate['domain_source_configs']):
                 return dict(status='deferred', stage='domain_routes_changed', switched=False)
+            if ('component_source_commands' in candidate
+                    and previous.get('component_commands', {}) != candidate['component_source_commands']):
+                return dict(status='deferred', stage='component_commands_changed', switched=False)
             for key in ("base_config", "state_dir", "community_config"):
                 if previous[key] != candidate[key]:
                     raise InstallationUnavailable("candidate changes installation data identity")
