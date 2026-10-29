@@ -115,7 +115,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "^mcp__plugin_mindie-agent_(knowledge|remote)__[A-Za-z0-9_.]+$",
+        "matcher": "^mcp__plugin_mindie-agent_(knowledge|remote|components)__[A-Za-z0-9_.]+$",
         "hooks": [
           {
             "type": "command",

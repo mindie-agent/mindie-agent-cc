@@ -48,7 +48,7 @@ class McpTests(unittest.TestCase):
         self.assertEqual(
             names,
             {"mindie_status", "knowledge_query", "knowledge_explain",
-             "knowledge_feedback", "knowledge_distill"},
+             "knowledge_feedback", "knowledge_distill", "knowledge_sync"},
         )
         for item in tools:
             props = item["inputSchema"].get("properties") or {}
@@ -124,10 +124,16 @@ class McpTests(unittest.TestCase):
     def test_remote_tools_follow_the_trusted_profile_env(self):
         import mcp_server
         from remote_dev.mcp.tools import list_tools
+
         with patch.dict(os.environ, {"REMOTE_DEV_HARNESS_PROFILE": "claude"}):
-            tools = {item["name"]: item for item in mcp_server.remote_tools()}
+            expected = list_tools("claude")
+            listed = mcp_server.handle("remote", {
+                "id": 1, "method": "tools/list",
+            })["result"]["tools"]
+            tools = {item["name"]: item for item in listed}
+        self.assertEqual(listed, expected)
         self.assertIn("remote_read", tools)
-        self.assertEqual(set(tools), {item["name"] for item in list_tools("claude")})
+        self.assertEqual(set(tools), {item["name"] for item in expected})
         authentication = tools["remote_auth"]["inputSchema"]["properties"]
         self.assertIn("password_env", authentication)
         self.assertNotIn("password", authentication)

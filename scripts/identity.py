@@ -58,12 +58,13 @@ KNOWLEDGE_TOOLS = {
     "knowledge_explain",
     "knowledge_feedback",
     "knowledge_distill",
+    "knowledge_sync",
 }
 
 # Native Claude 2.1.269 plugin MCP names from `claude mcp list`
 # `plugin:mindie-agent:knowledge` -> mcp__plugin_mindie-agent_knowledge__TOOL
 NATIVE_TOOL_RE = re.compile(
-    r"^mcp__plugin_mindie-agent_(knowledge|remote)__[A-Za-z0-9_.]+$"
+    r"^mcp__plugin_mindie-agent_(knowledge|remote|components)__[A-Za-z0-9_.]+$"
 )
 
 
@@ -125,13 +126,13 @@ def parse_native_tool(name):
         return None
     rest = name[len("mcp__plugin_mindie-agent_") :]
     surface, _, local = rest.partition("__")
-    if surface not in {"knowledge", "remote"} or not local:
+    if surface not in {"knowledge", "remote", "components"} or not local:
         return None
     return surface, local
 
 
 def canonical_native_name(surface: str, request_name: str) -> str:
-    if surface not in {"knowledge", "remote"}:
+    if surface not in {"knowledge", "remote", "components"}:
         raise ValueError("unknown MCP surface")
     if not isinstance(request_name, str) or not request_name:
         raise ValueError("invalid tool name")

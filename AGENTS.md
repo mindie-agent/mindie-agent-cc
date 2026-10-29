@@ -15,7 +15,8 @@ All plugin scripts live under `scripts/` and include standardized top-of-file Ag
 | **Host Hook Lifecycle** | `entry.py` / `entry_state.py` | Handles `/mindie-agent` slash commands via `UserPromptSubmit` / `UserPromptExpansion` (`activate`, `deactivate`, `status`, `sharing-*`) and exposes factual `status_facts(session)` without onboarding prompt fields (`first_use`, `next`, `recovery`). Returns `status="degraded"` if service binding fails after lease activation. |
 | | `bridge.py` | Implements `PreToolUse` (one-shot `claudecode/toolUseId` bind) and `Stop` (checks `admission.knowledge_lease(session)` before reading `sharing` or transcripts; never exits 2 or forces model continuation). |
 | | `admission.py` | Thin wrapper around `mindie_knowledge.loop.activation.Admission` for manual-entry session lease management (`activate`, `deactivate`, `knowledge_lease`, `capture_lease`, `capture_authorization`, `resolve_capture_lease`). |
-| **MCP Server & Identity** | `mcp_server.py` | Stdio JSON-RPC MCP server for knowledge (`requires knowledge_lease`) and `remote_dev` / `mindie_status` (`status_facts`, available without `/mindie-agent`). Consumes one-shot `claudecode/toolUseId` binds and preserves succeeded remote results even if local `finish_bind` fails. |
+| **MCP Server & Identity** | `mcp_server.py` / `mcp_catalog.py` | Stdio JSON-RPC MCP server and knowledge schemas. Knowledge requires `knowledge_lease`; `remote_dev`, deterministic components, and factual `mindie_status` are available without `/mindie-agent`. Consumes one-shot `claudecode/toolUseId` binds and preserves succeeded results even if local `finish_bind` fails. |
+| | `component_tools.py` | Exposes installed coordinator/profiler/sim CLIs and local diagnostics through the existing bounded runner. Component discovery starts no service; execution preserves stderr and exit status. |
 | | `identity.py` | Validates hook payloads and manages `native-tool-binds.sqlite3` (WAL + `busy_timeout=5000`). |
 | | `receipt_layout.py` | Declares and validates `remote-layout.json` (`mindie-cc-remote-layout/1`) before external remote work. |
 | **Transcript, Summary & Diagnostics** | `transcript.py` / `capture_config.py` | Parses Claude Code JSONL transcripts (`identify`, `read_material`, `capture_source`) with fork-boundary attribution. |
@@ -43,7 +44,8 @@ Claude Code MCP Client (stdio JSON-RPC)
   └─► mindie_launch.py mcp-server ──► mcp_server.py
         ├─► identity.py (claim_bind / finish_bind on claudecode/toolUseId)
         ├─► receipt_layout.py (prepare_layout for remote-dev state)
-        ├─► knowledge_service.py (knowledge tools)
+        ├─► knowledge_service.py / maintenance.py (knowledge queries / explicit feed sync)
+        ├─► component_tools.py ──► installed coordinator / profiler / sim / diagnostics CLI
         └─► remote_dev.mcp.server (remote-dev tools)
 ```
 
@@ -59,7 +61,7 @@ Claude Code MCP Client (stdio JSON-RPC)
 2. **One-Shot Native Tool Binding & Manual-Entry Gate (`PreToolUse` → `mcp_server.py`)**:
    - Claude Code MCP `tools/call` does not carry trusted session metadata in model arguments.
    - `bridge.py` (`PreToolUse`) binds `params._meta['claudecode/toolUseId']` to `(session_id, tool_name, input_sha256)` in `native-tool-binds.sqlite3`; `mcp_server.py` claims and consumes that bind once.
-   - Deterministic `remote-dev` tools and factual `mindie_status` work with the consumed `PreToolUse` bind alone, whereas all `knowledge_*` MCP tools (`knowledge_query`, `knowledge_explain`, `knowledge_feedback`, `knowledge_distill`, `knowledge_sync`) additionally require an active manual-entry lease (`admission.knowledge_lease(session)` / target-domain `knowledge_lease`) before `ensure_service`.
+   - Deterministic `remote-dev` and `components` tools and factual `mindie_status` work with the consumed `PreToolUse` bind alone, whereas all `knowledge_*` MCP tools (`knowledge_query`, `knowledge_explain`, `knowledge_feedback`, `knowledge_distill`, `knowledge_sync`) additionally require an active manual-entry lease (`admission.knowledge_lease(session)` / target-domain `knowledge_lease`). Sync uses the existing feed CLI without starting the knowledge service.
    - **Receipt Honesty Invariant**: Once a remote or knowledge tool call succeeds, if local `finish_bind` raises an `OSError`/`sqlite3.Error`, `mcp_server.py` attaches `bind_warning` + `diagnostic_ref` to `structuredContent` and **never** flips `isError=True` on the succeeded result.
 3. **Turn-End Capture (`Stop`)**:
    - `bridge.py` (`Stop`) never exits 2 and never forces model continuation.
@@ -83,15 +85,16 @@ Claude Code MCP Client (stdio JSON-RPC)
 
 ## 4. Verification & Live NPU Acceptance Commands
 
-Use the shared test virtual environment (`/Volumes/data/code/mindie-release-20261014/codex-interrupt-final-env-20261016/bin/python`) to run the test suite:
+Install the locked test group, including the independently versioned optional component CLIs. Run against these installed packages without a source `PYTHONPATH`:
 
 ```bash
 # 1. Full unit, contract, and E2E MCP knowledge suite (Tier 0 + Tier 1)
-/Volumes/data/code/mindie-release-20261014/codex-interrupt-final-env-20261016/bin/python -m pytest tests -q --ignore=tests/test_live_npu_acceptance.py
+uv sync --locked --no-editable --group test
+uv run --locked --no-editable --group test python -m pytest tests -q -m "not live_npu"
 
 # 2. End-to-end MCP + Knowledge lifecycle verification
-/Volumes/data/code/mindie-release-20261014/codex-interrupt-final-env-20261016/bin/python -m pytest tests/test_mcp_knowledge_e2e.py -q
+uv run --locked --no-editable --group test python -m pytest tests/test_mcp_knowledge_e2e.py -q
 
 # 3. Live Ascend NPU acceptance on standing A2 (173.125.1.2) & A3 (192.168.13.165) clusters (Tier 2)
-/Volumes/data/code/mindie-release-20261014/codex-interrupt-final-env-20261016/bin/python -m pytest tests/test_live_npu_acceptance.py -q
+uv run --locked --no-editable --group test python -m pytest tests/test_live_npu_acceptance.py -q
 ```

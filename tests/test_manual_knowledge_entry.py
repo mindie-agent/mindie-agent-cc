@@ -19,6 +19,7 @@ import maintenance
     ("knowledge_explain", {"ref": "mindie://vllm-ascend/units/kda@1"}),
     ("knowledge_feedback", {"ref": "mindie://vllm-ascend/units/kda@1", "rating": "up"}),
     ("knowledge_distill", {"inputs": [], "task_state": "in_flight"}),
+    ("knowledge_sync", {}),
 ])
 def test_knowledge_denial_precedes_service(tmp_path, monkeypatch, state, name, arguments):
     config = make_config(tmp_path)
@@ -31,10 +32,12 @@ def test_knowledge_denial_precedes_service(tmp_path, monkeypatch, state, name, a
     elif state == "revoked":
         gate.activate("session", project_root=str(tmp_path))
         gate.deactivate("session")
-    with patch("knowledge_service.ensure_service") as ensure:
+    with patch("knowledge_service.ensure_service") as ensure, \
+            patch.object(maintenance, "sync_public_feed") as sync:
         with pytest.raises(ValueError, match="/mindie-agent"):
             mcp_server.knowledge_call(name, arguments, "session")
         ensure.assert_not_called()
+        sync.assert_not_called()
 
 
 def test_passive_stop_has_no_context_or_transcript_access(tmp_path, monkeypatch, capsys):

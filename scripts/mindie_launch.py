@@ -445,6 +445,18 @@ def _dispatch_budget(surface, message):
     if surface == "remote":
         # Control calls still permit an SSH round-trip; they are not local.
         return remote_budget(name, arguments)
+    if surface == "components" and message.get("method") == "tools/call":
+        from component_tools import MAX_TIMEOUT_MS
+        milliseconds = arguments.get("timeout_ms", 120000)
+        if type(milliseconds) is not int or not 1 <= milliseconds <= MAX_TIMEOUT_MS:
+            # The bound helper consumes identity and rejects invalid inputs.
+            milliseconds = 120000
+        # Claim/finish can each wait 5s; Windows cleanup waits 2 + 2 + 2s.
+        # Keep additional room for process startup, diagnostics and output.
+        return milliseconds / 1000 + 30.0
+    if surface == "knowledge" and name == "knowledge_sync":
+        # Sync 120s + domain/claim/finish 15s + cleanup 6s + publication grace.
+        return 150.0
     if name == "mindie_entry":
         return ENTRY_CHILD_BUDGET
     return CALL_CHILD_BUDGET
@@ -768,7 +780,7 @@ def main(argv=None) -> int:
         return _fail_open()
     if kind == "hook" and name in {"expansion", "pretool", "stop"}:
         return _hook(name)
-    if kind == "mcp" and name in {"knowledge", "remote"}:
+    if kind == "mcp" and name in {"knowledge", "remote", "components"}:
         return _mcp(name)
     print("usage: mindie_launch.py hook|mcp ...", file=sys.stderr)
     return 2
