@@ -126,11 +126,24 @@ class McpTests(unittest.TestCase):
         from remote_dev.mcp.tools import list_tools
 
         with patch.dict(os.environ, {"REMOTE_DEV_HARNESS_PROFILE": "claude"}):
-            expected = list_tools()
-            tools = mcp_server.handle("remote", {
+            expected = list_tools("claude")
+            listed = mcp_server.handle("remote", {
                 "id": 1, "method": "tools/list",
             })["result"]["tools"]
-        self.assertEqual(tools, expected)
+            tools = {item["name"]: item for item in listed}
+        self.assertEqual(listed, expected)
+        self.assertIn("remote_read", tools)
+        self.assertEqual(set(tools), {item["name"] for item in expected})
+        authentication = tools["remote_auth"]["inputSchema"]["properties"]
+        self.assertIn("password_env", authentication)
+        self.assertNotIn("password", authentication)
+        self.assertTrue(
+            {"remote_Read", "remote_Write", "remote_Edit", "remote_Bash",
+             "remote_TaskOutput", "remote_TaskStop", "remote_NotebookEdit",
+             "remote_BashOutput"} <= set(tools)
+        )
+        self.assertNotIn("remote_TaskList", tools)
+        self.assertNotIn("remote_write_stdin", tools)
 
 
 class RemoteObservationBoundTests(unittest.TestCase):
@@ -241,6 +254,43 @@ class RemoteFailureProjectionTests(unittest.TestCase):
         text = result["content"][0]["text"]
         self.assertIn("Missing required argument(s): command", text)
         self.assertIn("no remote effect occurred", text)
+
+    def test_real_auth_failure_preserves_safe_recovery_hint(self):
+        import mcp_server
+        from remote_dev.core.errors import AUTH_ERROR_HINTS, RemoteExecutionError
+
+        with tempfile.TemporaryDirectory() as raw, patch.dict(os.environ, {
+                "REMOTE_DEV_AUTH_DIR": raw, "PRIVATE_MISSING_SSH_PASSWORD": ""}):
+            with self.assertRaises(RemoteExecutionError) as caught:
+                self._shared_call("remote_auth", {
+                    "host": "192.0.2.10", "port": 22, "user": "fixture",
+                    "password_env": "PRIVATE_MISSING_SSH_PASSWORD",
+                })
+        result = mcp_server.remote_stage_failure(
+            {}, "remote_auth", "helper_failed", caught.exception)
+        details = result["structuredContent"]
+        self.assertEqual(details["category"], "credential_unavailable")
+        self.assertEqual(details["submission_state"], "not_sent")
+        self.assertEqual(details["remote_outcome"], "not_sent")
+        self.assertIn(AUTH_ERROR_HINTS["credential_unavailable"], result["content"][0]["text"])
+        self.assertNotIn("PRIVATE_MISSING_SSH_PASSWORD", json.dumps(result))
+
+    def test_auth_maintenance_uncertainty_keeps_business_submission(self):
+        import mcp_server
+        from remote_dev.core.errors import RemoteExecutionError
+
+        for state in ("not_sent", "uncertain"):
+            with self.subTest(state=state):
+                error = RemoteExecutionError("PRIVATE_STDERR", category="connection_unavailable",
+                                             submission_state=state)
+                error.bootstrap = dict(status="unknown", installation="unknown",
+                                       key_verified=False, error="PRIVATE_STDERR")
+                result = mcp_server.remote_stage_failure({}, "remote_auth", "helper_failed", error)
+                details = result["structuredContent"]
+                self.assertEqual(details["submission_state"], state)
+                self.assertEqual(details["remote_outcome"], "not_sent" if state == "not_sent" else "unconfirmed")
+                self.assertEqual(details["bootstrap"], dict(status="unknown", installation="unknown", key_verified=False))
+                self.assertNotIn("PRIVATE_STDERR", json.dumps(result))
 
     def test_only_typed_fields_survive(self):
         import mcp_server
