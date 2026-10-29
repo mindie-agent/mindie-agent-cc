@@ -32,6 +32,8 @@ def main():
             if descriptor != owner_pipe:
                 try:
                     os.close(descriptor)
+                except TimeoutError:
+                    raise
                 except OSError as exc:
                     if exc.errno != errno.EBADF:
                         raise

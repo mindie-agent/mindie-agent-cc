@@ -40,6 +40,8 @@ def configure(path, settings, python=None):
             [str(python or sys.executable), '-c', SCRIPT],
             input_text=request, timeout=30.0,
         )
+    except TimeoutError:
+        raise
     except (OSError, RuntimeError) as exc:
         detail = getattr(exc, 'mindie_output', '') or getattr(exc, 'mindie_stderr', '')
         detail = detail.strip()[:400] if isinstance(detail, str) else ''

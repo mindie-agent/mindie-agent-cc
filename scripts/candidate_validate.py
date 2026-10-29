@@ -50,6 +50,8 @@ class CheckFailure(ValueError):
 def checked(stage, code, operation):
     try:
         return operation()
+    except TimeoutError:
+        raise
     except CheckFailure:
         raise
     except Exception as exc:
@@ -136,6 +138,8 @@ def installed_revisions(pins):
     for name, expected in pins.items():
         try:
             raw = importlib.metadata.distribution(name).read_text("direct_url.json")
+        except TimeoutError:
+            raise
         except importlib.metadata.PackageNotFoundError as exc:
             raise CheckFailure("runtime_pins", "package_missing", name) from exc
         except Exception as exc:
@@ -248,6 +252,8 @@ def publication_contract(publication):
             return read_git_contract(
                 directory, observed, publication["domain"], env=env, deadline=deadline,
             )
+        except TimeoutError:
+            raise
         except Exception as exc:
             code = "contract_mismatch" if getattr(exc, "code", None) == "contract_mismatch" else "read_failed"
             raise CheckFailure("publication_contract", code) from exc
@@ -290,7 +296,8 @@ def main():
         previous = json.loads(args.verified_receipt) if args.verified_receipt else None
         result = validate(args.source, expected, previous)
     except Exception as exc:
-        failure = exc.failure if isinstance(exc, CheckFailure) else dict(stage="validation", code="internal_error")
+        failure = (exc.failure if isinstance(exc, CheckFailure) else
+                   dict(stage="validation", code="timeout" if isinstance(exc, TimeoutError) else "internal_error"))
         result = dict(expected, status="failed", failure=failure) if isinstance(expected, dict) else dict(status="failed", failure=failure)
         sys.stdout.buffer.write((json.dumps(result, sort_keys=True) + "\n").encode("utf-8"))
         return 1

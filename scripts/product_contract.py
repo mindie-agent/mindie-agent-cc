@@ -57,7 +57,7 @@ FAILURE_CODES = {
     "publication_fetch": {"init_failed", "fetch_failed", "revision_read_failed", "revision_mismatch"},
     "publication_contract": {"contract_mismatch", "read_failed", "validator_mismatch"},
     "receipt": {"receipt_mismatch"},
-    "validation": {"internal_error"},
+    "validation": {"internal_error", "timeout"},
     "process": {"nonzero_exit"},
 }
 FAILURE_COMPONENTS = {"mindie-knowledge", "remote-dev", "mindie-diagnostics"}
@@ -390,6 +390,8 @@ def probe(python, scripts, command, *, revision=None, verified_receipt=None, com
 
     try:
         output, code = _completed(command, argv)
+    except TimeoutError:
+        raise
     except CandidateValidationError:
         raise
     except TypeError:
@@ -402,6 +404,8 @@ def probe(python, scripts, command, *, revision=None, verified_receipt=None, com
                 on_failure=lambda text, status: failure_receipt(text, expected, status),
             )
         except CandidateValidationError:
+            raise
+        except TimeoutError:
             raise
         except Exception as exc:
             captured = getattr(exc, "mindie_output", "")

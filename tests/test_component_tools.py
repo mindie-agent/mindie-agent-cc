@@ -83,6 +83,10 @@ def test_profiler_inventory_uses_real_capture_without_path(component_config, mon
     inventory = result["structuredContent"]["result"]
     assert inventory["rank_count"] == 1
     assert inventory["ranks"][0]["files"]
+    invalid = bound_call("profiler", {"argv": ["invalid-component-operation"]})
+    assert invalid["isError"]
+    assert invalid["structuredContent"]["exit_code"] == 2
+    assert "unknown command 'invalid-component-operation'" in invalid["structuredContent"]["stderr"]
 
 
 def test_live_component_override_is_read_from_the_stable_profile(component_config, tmp_path, monkeypatch):
@@ -113,20 +117,15 @@ def test_sim_parser_error_preserves_stderr_and_exit_status(component_config, tmp
 
 
 @pytest.mark.parametrize("explicit_cwd", [False, True])
-def test_sim_output_file_uses_native_or_explicit_working_directory(component_config, tmp_path, explicit_cwd):
-    argv = [
-        "pipeline-microbatches", "--stages", "3,5", "--microbatches", "2",
-        "--output", "graph.json",
-    ]
-    arguments = {"argv": argv}
+def test_profiler_output_file_uses_native_or_explicit_working_directory(component_config, tmp_path, explicit_cwd):
+    arguments = {"argv": ["inventory", "--root", str(CAPTURE), "--output", "inventory.json"]}
     if explicit_cwd:
         arguments["cwd"] = str(tmp_path)
-    result = bound_call("sim", arguments, cwd=str(ROOT if explicit_cwd else tmp_path))
+    result = bound_call("profiler", arguments, cwd=str(ROOT if explicit_cwd else tmp_path))
     assert not result["isError"], result
-    graph = json.loads((tmp_path / "graph.json").read_text())
-    assert graph["makespan_ms"] == 13.0
-    assert len(graph["timeline"]) == 4
-    assert result["structuredContent"]["result"] == graph
+    inventory = json.loads((tmp_path / "inventory.json").read_text())
+    assert inventory["rank_count"] == 1
+    assert inventory["ranks"][0]["files"]
 
 
 def test_coordinator_inventory_and_local_bundle(component_config, tmp_path):
@@ -247,3 +246,110 @@ def test_component_dispatch_budget_covers_requested_wait_and_cleanup():
     native = json.loads((ROOT / ".mcp.json").read_text())["mcpServers"]["components"]
     assert native["timeout"] >= outer * 1000
     assert int(native["env"]["MCP_TOOL_TIMEOUT"]) >= outer * 1000
+
+
+@pytest.fixture
+def sim_gate(component_config):
+    # The new model contract may be tested before its independent release;
+    # an explicit installed interpreter never replaces the plugin runtime.
+    runtime = os.environ.get("MINDIE_SIM_CONTRACT_PYTHON")
+    if runtime is None:
+        import importlib.metadata
+        from packaging.version import Version
+        if Version(importlib.metadata.version("mindie-sim")) < Version("0.8.0"):
+            pytest.skip("new sim contract requires MINDIE_SIM_CONTRACT_PYTHON (sim >= 0.8)")
+        runtime = sys.executable
+    value = json.loads(component_config.read_text())
+    value.setdefault("component_commands", {})["sim"] = [runtime, "-I", "-m", "mindie_sim"]
+    component_config.write_text(json.dumps(value))
+    return bound_call
+
+
+@pytest.fixture
+def sim_case(tmp_path):
+    path = tmp_path / "case.json"
+    path.write_text(json.dumps({
+        "machine": {
+            "name": "synthetic-cli-control", "num_devices": 1,
+            "device": {"memory_bytes": 1024**3, "compute_units": 4,
+                       "compute_peaks": {"bf16": 16e9, "fp32": 8e9},
+                       "rates": {"memory": 8e9, "vector": 4e9}},
+        },
+        "model": {"name": "control", "layers": 1, "hidden_size": 32,
+                  "num_heads": 4, "num_kv_heads": 2, "head_dim": 8,
+                  "intermediate_size": 64, "vocab_size": 128},
+        "workload": {"requests": [{"id": "r", "prompt_tokens": 4, "output_tokens": 2}]},
+        "runtime": {"max_num_batched_tokens": 8, "max_model_len": 128, "graph_mode": "none"},
+    }))
+    return path
+
+
+def test_sim_installed_cli_keeps_operator_graph_and_serving_boundaries(sim_gate, sim_case, tmp_path):
+    operators = sim_gate("sim", {"argv": [
+        "operators", str(sim_case), "--phase", "prefill", "--tokens", "4", "--scope", "model",
+    ]})
+    assert not operators["isError"], operators
+    isolated = operators["structuredContent"]["result"]
+    assert isolated["boundary"] == "sum_of_isolated_device_programs"
+    graph_path = tmp_path / "graph.json"
+    graph = sim_gate("sim", {"argv": [
+        "graph", str(sim_case), "--phase", "prefill", "--tokens", "4",
+        "--scope", "model", "--output", str(graph_path),
+    ]})
+    assert not graph["isError"], graph
+    assert graph["structuredContent"]["stdout"] == ""
+    result = json.loads(graph_path.read_text())
+    assert result["boundary"] == "device_graph"
+    assert result["operator_occurrences"] == isolated["operator_occurrences"]
+    assert result["isolated"]["operator_sum_ms"] == pytest.approx(isolated["operator_sum_ms"])
+    prediction_path = tmp_path / "prediction.json"
+    serving = sim_gate("sim", {"argv": [
+        "predict", str(sim_case), "--output", str(prediction_path),
+    ]})
+    assert not serving["isError"], serving
+    prediction = json.loads(prediction_path.read_text())
+    assert prediction["metric_boundary"] == "device_token_commit"
+    assert prediction["requests"][0]["generated_tokens"] == 2
+
+
+def test_sim_preserves_real_cli_error_and_exit_status(sim_gate, tmp_path):
+    bad = sim_gate("sim", {"argv": [
+        "graph", str(tmp_path / "absent.json"), "--phase", "prefill", "--tokens", "4",
+    ]})
+    assert bad["isError"]
+    value = bad["structuredContent"]
+    assert value["exit_code"] == 2
+    assert value["stdout"] == ""
+    error = json.loads(value["stderr"])
+    assert error["status"] == "failed"
+    assert str(tmp_path / "absent.json") in error["error"]
+
+
+def test_sim_partial_study_keeps_success_and_failure_in_the_nonzero_cli_result(
+    sim_gate, sim_case, tmp_path,
+):
+    manifest = tmp_path / "study.json"
+    manifest.write_text(json.dumps({
+        "candidates": [
+            {"id": "ordinary", "case": sim_case.name},
+            {"id": "unavailable", "case": sim_case.name, "overrides": {
+                "runtime": {"kernels": {"lowerings": {
+                    "gqa_attention": "unavailable_source_implementation",
+                }}},
+            }},
+        ],
+        "probes": [{"id": "prefill", "phase": "prefill", "tokens": 4}],
+    }))
+    response = sim_gate("sim", {"argv": ["study", str(manifest)]})
+    assert response["isError"]
+    value = response["structuredContent"]
+    assert value["exit_code"] == 2
+    report = value["result"]
+    assert report["status"] == "partial"
+    evaluations = {row["candidate"]: row for row in report["evaluations"]}
+    assert evaluations["ordinary"]["status"] == "modeled"
+    assert evaluations["ordinary"]["operators"]["operator_sum_ms"] > 0
+    assert evaluations["unavailable"]["status"] == "failed"
+    assert "unavailable_source_implementation" in evaluations["unavailable"]["error"]
+    assert {row["candidate"] for ranking in report["rankings"]
+            for row in ranking["candidates"]} == {"ordinary"}

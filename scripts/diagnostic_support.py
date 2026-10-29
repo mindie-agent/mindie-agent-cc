@@ -122,9 +122,9 @@ def failure(operation, stage, category, *, exception=None, revision=None,
     inner = reference({"diagnostic": getattr(exception, "mindie_diagnostic", None)})
     if inner is not None:
         return inner
-    build = build_metadata()
     explicit = _hex(revision, 40)
     try:
+        build = build_metadata()
         raw = _record()(
             COMPONENT, operation, stage=stage, category=category,
             exception=exception, host=HOST,
@@ -141,6 +141,9 @@ def failure(operation, stage, category, *, exception=None, revision=None,
         if incident:
             result["incident_id"] = incident
         return result
+    except TimeoutError:
+        _warn()
+        return {"logging_failed": True, "error_type": "TimeoutError"}
     except Exception:
         _warn()
         return {"logging_failed": True}

@@ -494,6 +494,19 @@ def remote_call(name, args, session):
     return call_tool(canonical_name, clamp_remote_args(args))
 
 
+def _bind_warning(result, exc):
+    """Receipt storage cannot change a completed tool's remote outcome."""
+    from diagnostic_support import failure as record_failure
+
+    diagnostic = record_failure("mcp.call", "finish_bind", "local_storage", exception=exc)
+    warning = "Local bind receipt could not be saved. The tool result is unchanged; do not repeat the call."
+    result["structuredContent"] = dict(
+        result.get("structuredContent") or {},
+        bind_warning=warning, bind_error_type=type(exc).__name__, diagnostic_ref=diagnostic,
+    )
+    result["content"] = [*result.get("content", []), dict(type="text", text=warning)]
+
+
 def handle(surface, message):
     if "id" not in message:
         return None
@@ -607,16 +620,10 @@ def handle(surface, message):
         if claimed:
             try:
                 finish_bind(call_id, succeeded)
+            except TimeoutError as exc:
+                _bind_warning(result, exc)
             except (OSError, sqlite3.Error) as exc:
-                from diagnostic_support import failure as record_failure
-
-                diagnostic = record_failure("mcp.call", "finish_bind", "local_storage", exception=exc)
-                warning = "Local bind receipt could not be saved. The tool result is unchanged; do not repeat the call."
-                result["structuredContent"] = dict(
-                    result.get("structuredContent") or {},
-                    bind_warning=warning, diagnostic_ref=diagnostic,
-                )
-                result["content"] = [*result.get("content", []), dict(type="text", text=warning)]
+                _bind_warning(result, exc)
 
 
 def _read_line(stdin):
