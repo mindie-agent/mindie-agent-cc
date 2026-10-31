@@ -4,12 +4,12 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mindie-agent-cc"
-version = "0.1.10"
+version = "0.1.11"
 description = "Native Claude Code adapter for MindIE Agent"
 requires-python = ">=3.11,<3.15"
 dependencies = [
-  "mindie-knowledge @ git+https://github.com/mindie-agent/knowledge@9af5a82ad557e2120277693854a0571613c8a115",
-  "remote-dev @ git+https://github.com/mindie-agent/remote-dev@2a750ec8c74d7f053410d48dd820aeb542e7d3b1",
+  "mindie-knowledge @ git+https://github.com/mindie-agent/knowledge@9a4325858e6fadb10715275826a7795843cbbdf4",
+  "remote-dev @ git+https://github.com/mindie-agent/remote-dev@85be999811771e03ecc7d78e5e560fac1636e7ef",
   "mindie-diagnostics @ git+https://github.com/mindie-agent/diagnostics@5ae643e19223f2181ecdbaa3edaf464137c4805e",
 ]
 
@@ -17,9 +17,9 @@ dependencies = [
 test = [
   "pytest==9.1.1",
   "hatchling==1.32.4",
-  "mindie-profiler @ git+https://github.com/mindie-agent/profiler@25c789cd42389c893234c5db20eca67e63b8878a",
-  "mindie-sim @ git+https://github.com/mindie-agent/sim@15f93f3f0247b2653d0e9441eae56959e4d16d4e",
-  "mindie-coordinator @ git+https://github.com/mindie-agent/coordinator@e4a86c972a99c442c78ad7f7ba627af7da5ef7f2",
+  "mindie-profiler @ git+https://github.com/mindie-agent/profiler@22ed2cadff6656c0b26be8cc77ea2bf48a1c0d21",
+  "mindie-sim @ git+https://github.com/mindie-agent/sim@f842e7c0ebbfabae836534152af39665419e7908",
+  "mindie-coordinator @ git+https://github.com/mindie-agent/coordinator@d146c55c414bfb92136cf5fb7fa11ae14c673ef0",
 ]
 
 [tool.hatch.metadata]
@@ -42,7 +42,7 @@ scripts = "mindie_cc"
 # The reviewed plugin selection also replaces older transitive component pins.
 override-dependencies = [
   "mindie-diagnostics @ git+https://github.com/mindie-agent/diagnostics@5ae643e19223f2181ecdbaa3edaf464137c4805e",
-  "remote-dev @ git+https://github.com/mindie-agent/remote-dev@2a750ec8c74d7f053410d48dd820aeb542e7d3b1",
+  "remote-dev @ git+https://github.com/mindie-agent/remote-dev@85be999811771e03ecc7d78e5e560fac1636e7ef",
 ]
 cache-keys = [
   { file = "pyproject.toml" },
