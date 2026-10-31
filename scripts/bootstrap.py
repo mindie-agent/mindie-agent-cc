@@ -150,9 +150,22 @@ def _baseline_runtime(source, *, prepare, on_process=None):
         if uv is None:
             raise FileNotFoundError("uv is required to prepare the locked MindIE runtime")
         env = dict(os.environ, UV_PROJECT_ENVIRONMENT=str(runtime), UV_NO_PROGRESS="1",
-                   GIT_TERMINAL_PROMPT="0")
-        if "UV_SYSTEM_CERTS" not in env:
+                   GIT_TERMINAL_PROMPT="0", GCM_INTERACTIVE="never")
+        if "UV_SYSTEM_CERTS" not in env and "UV_NATIVE_TLS" not in env:
+            env["UV_SYSTEM_CERTS"] = "true"
+            env["UV_NATIVE_TLS"] = "true"
+        elif "UV_SYSTEM_CERTS" not in env:
             env.setdefault("UV_NATIVE_TLS", "true")
+        if "GIT_CONFIG_COUNT" not in env:
+            git_pairs = (
+                ("core.longpaths", "true"),
+                ("core.autocrlf", "false"),
+                ("credential.https://github.com.provider", "github"),
+            )
+            env["GIT_CONFIG_COUNT"] = str(len(git_pairs))
+            for idx, (k, v) in enumerate(git_pairs):
+                env[f"GIT_CONFIG_KEY_{idx}"] = k
+                env[f"GIT_CONFIG_VALUE_{idx}"] = v
         env.pop("PYTHONPATH", None)
         _run("locked-runtime-install",
              [uv, "sync", "--project", str(source), "--locked", "--no-editable",
