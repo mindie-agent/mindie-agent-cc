@@ -85,8 +85,6 @@ MindIE Agent 采用**「领域知识与 Skill 手动按需触发 + 远端开发�
 
 ## 快速开始
 
-### 方式一：通过提示词交由 Agent 自动安装（Quick Install via Prompt）
-
 直接复制下面这句话发送给你的 Claude Code（或其他支持终端执行的 AI Agent），由其自动完成环境核对、插件安装与初始化：
 
 ```text
@@ -144,20 +142,6 @@ MindIE Agent 采用**「领域知识与 Skill 手动按需触发 + 远端开发�
 
 </details>
 
-### 方式二：终端手动一行安装（One-Line Terminal Install）
-
-如果你习惯在终端手动执行（macOS / Linux / WSL 终端或原生 Windows PowerShell），可直接运行：
-
-```sh
-gh api --hostname github.com user --jq .login && gh auth setup-git --hostname github.com && \
-claude plugin marketplace add "https://github.com/mindie-agent/mindie-agent-cc.git#v0.1.10" && \
-claude plugin install mindie-agent@mindie-agent-cc --scope user && \
-claude --init-only && \
-claude mcp list
-```
-
-安装命令完成后，在新会话输入 **`/mindie-agent 帮我完成首次配置`**，按 [工作区配置指南](skills/mindie-agent/references/workspace-setup.md) 完成本次安装引导。Agent 会复用 GitHub 登录，提供工作区创建/复用选择，并在同意后登记到当前客户端；选择当前目录也可完成引导。
-
 #### 环境要求说明
 - **基础工具与硬性指标**：已安装 `git`、`uv`、已登录认证的 **`gh`（GitHub CLI）**，以及已登录的 Claude Code（兼容接口声明支持 Claude Code `2.1.269` 与 `2.1.299`，详见 [`harness-compatibility.json`](harness-compatibility.json)）。
 - **Windows 原生环境**：由 Git for Windows 提供远端开发所需的 SSH 客户端，完全保留你现有的 SSH 与模型配置。
@@ -177,7 +161,7 @@ MindIE Agent 将交互能力收敛在 **`/mindie-agent` 这一统一入口**中�
 
 ### 自动更新与安全卸载
 
-- **后台静默更新**：后台维护线程按冷却周期异步检查兼容当前 Claude Code 版本的最高正式插件 Release 以及各官方共享组件仓库的正式 GitHub Release（参见 [`docs/releases/mindie-agent-cc-0.1.7.md`](docs/releases/mindie-agent-cc-0.1.7.md)）。新版本或新组件组合的 Python 运行时在后台独立构建并通过无模型探针校验，待服务空闲时退役旧服务并冷态原子切换绑定，全程不阻塞当前对话、不主动启动知识服务，也不会重置你的统一贡献开关配置与会话手动 `/mindie-agent` 授权边界。
+- **后台静默更新**：后台维护线程按冷却周期异步检查兼容当前 Claude Code 版本的最高正式插件 Release 以及各官方共享组件仓库的正式 GitHub Release（参见 [`docs/releases/mindie-agent-cc-0.1.10.md`](docs/releases/mindie-agent-cc-0.1.10.md)）。新版本或新组件组合的 Python 运行时在后台独立构建并通过无模型探针校验，待服务空闲时退役旧服务并冷态原子切换绑定，全程不阻塞当前对话、不主动启动知识服务，也不会重置你的统一贡献开关配置与会话手动 `/mindie-agent` 授权边界。
 - **安全卸载**：关闭正在使用插件的会话后，在终端执行原生卸载命令（建议加上 `--keep-data` 保留运行时数据与回执，确保历史任务安全收尾）：
   ```sh
   claude plugin uninstall mindie-agent@mindie-agent-cc --scope user --keep-data --json

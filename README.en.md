@@ -85,8 +85,6 @@ For `coordinator`, `profiler`, and `sim`, relative paths resolve against the cur
 
 ## Quick Start
 
-### Option 1: Quick Install via Prompt
-
 Copy and paste the following prompt directly to Claude Code (or any terminal-capable AI Agent) and let it install and verify the plugin for you:
 
 ```text
@@ -144,20 +142,6 @@ If you are an AI Agent asked by the user to install this plugin, run the followi
 
 </details>
 
-### Option 2: One-Line Terminal Install (Manual)
-
-To install manually from a macOS / Linux / WSL shell or native Windows PowerShell:
-
-```sh
-gh api --hostname github.com user --jq .login && gh auth setup-git --hostname github.com && \
-claude plugin marketplace add "https://github.com/mindie-agent/mindie-agent-cc.git#v0.1.10" && \
-claude plugin install mindie-agent@mindie-agent-cc --scope user && \
-claude --init-only && \
-claude mcp list
-```
-
-After the commands, enter **`/mindie-agent help me finish first-time setup`** in a new session and complete [Workspace Setup](skills/mindie-agent/references/workspace-setup.md) as part of installation. The agent reuses GitHub authentication, offers workspace creation/reuse and adds the approved path to the current client. Keeping the current directory also completes the offer.
-
 #### Environment Notes
 - **Prerequisites (Hard Requirements)**: `git`, `uv`, an authenticated **`gh` (GitHub CLI)**, and an authenticated Claude Code (the compatibility contract lists Claude Code `2.1.269` and `2.1.299`; see [`harness-compatibility.json`](harness-compatibility.json)).
 - **Native Windows**: Git for Windows provides the SSH client used by `remote-dev`, preserving your existing SSH and model settings.
@@ -177,7 +161,7 @@ MindIE Agent routes interactive commands through **a single unified entrypoint: 
 
 ### Silent Updates & Safe Uninstall
 
-- **Silent Compatible Updates**: A background maintenance thread checks asynchronously for both the highest compatible plugin Release declared in [`harness-compatibility.json`](harness-compatibility.json) and formal GitHub Releases of shared runtime components from their official repositories (see [`docs/releases/mindie-agent-cc-0.1.7.en.md`](docs/releases/mindie-agent-cc-0.1.7.en.md)). The candidate `uv` runtime is built in isolation, verified via a model-free probe, and switched cold and atomically when the service is idle—preserving your saved unified contribution setting and per-session manual `/mindie-agent` gate.
+- **Silent Compatible Updates**: A background maintenance thread checks asynchronously for both the highest compatible plugin Release declared in [`harness-compatibility.json`](harness-compatibility.json) and formal GitHub Releases of shared runtime components from their official repositories (see [`docs/releases/mindie-agent-cc-0.1.10.md`](docs/releases/mindie-agent-cc-0.1.10.md)). The candidate `uv` runtime is built in isolation, verified via a model-free probe, and switched cold and atomically when the service is idle—preserving your saved unified contribution setting and per-session manual `/mindie-agent` gate.
 - **Safe Uninstall**: Close active sessions using the plugin, then uninstall via Claude Code while keeping persistent runtime data for clean shutdown:
   ```sh
   claude plugin uninstall mindie-agent@mindie-agent-cc --scope user --keep-data --json
