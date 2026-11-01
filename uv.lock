@@ -15,6 +15,7 @@ resolution-markers = [
 [manifest]
 overrides = [
     { name = "mindie-diagnostics", git = "https://github.com/mindie-agent/diagnostics?rev=5ae643e19223f2181ecdbaa3edaf464137c4805e" },
+    { name = "mindie-sim", git = "https://github.com/mindie-agent/sim?rev=f5608b4943f515c401d2f9b12fffb579a1e2571b" },
     { name = "remote-dev", git = "https://github.com/mindie-agent/remote-dev?rev=85be999811771e03ecc7d78e5e560fac1636e7ef" },
 ]
 
@@ -1863,7 +1864,7 @@ wheels = [
 
 [[package]]
 name = "mindie-agent-cc"
-version = "0.1.11"
+version = "0.1.12"
 source = { editable = "." }
 dependencies = [
     { name = "mindie-diagnostics" },
@@ -1891,8 +1892,8 @@ requires-dist = [
 test = [
     { name = "hatchling", specifier = "==1.32.4" },
     { name = "mindie-coordinator", git = "https://github.com/mindie-agent/coordinator?rev=d146c55c414bfb92136cf5fb7fa11ae14c673ef0" },
-    { name = "mindie-profiler", git = "https://github.com/mindie-agent/profiler?rev=22ed2cadff6656c0b26be8cc77ea2bf48a1c0d21" },
-    { name = "mindie-sim", git = "https://github.com/mindie-agent/sim?rev=f842e7c0ebbfabae836534152af39665419e7908" },
+    { name = "mindie-profiler", git = "https://github.com/mindie-agent/profiler?rev=7cdd56b6cc9e0e7f603368393497487dd2dbfe39" },
+    { name = "mindie-sim", git = "https://github.com/mindie-agent/sim?rev=f5608b4943f515c401d2f9b12fffb579a1e2571b" },
     { name = "pytest", specifier = "==9.1.1" },
 ]
 
@@ -1927,16 +1928,16 @@ dependencies = [
 
 [[package]]
 name = "mindie-profiler"
-version = "0.5.3"
-source = { git = "https://github.com/mindie-agent/profiler?rev=22ed2cadff6656c0b26be8cc77ea2bf48a1c0d21#22ed2cadff6656c0b26be8cc77ea2bf48a1c0d21" }
+version = "0.5.5"
+source = { git = "https://github.com/mindie-agent/profiler?rev=7cdd56b6cc9e0e7f603368393497487dd2dbfe39#7cdd56b6cc9e0e7f603368393497487dd2dbfe39" }
 dependencies = [
     { name = "mindie-sim" },
 ]
 
 [[package]]
 name = "mindie-sim"
-version = "0.8.1"
-source = { git = "https://github.com/mindie-agent/sim.git?rev=f842e7c0ebbfabae836534152af39665419e7908#f842e7c0ebbfabae836534152af39665419e7908" }
+version = "0.9.0"
+source = { git = "https://github.com/mindie-agent/sim?rev=f5608b4943f515c401d2f9b12fffb579a1e2571b#f5608b4943f515c401d2f9b12fffb579a1e2571b" }
 dependencies = [
     { name = "ijson" },
 ]

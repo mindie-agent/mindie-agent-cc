@@ -40,17 +40,13 @@ KNOWLEDGE_TOOL_DEFS = [
     dict(
         name="knowledge_query",
         description=(
-            "Use when a missing contract, mechanism or method could change the next action. "
-            "Skip retrieval when code and current evidence support a fix and verification; "
-            "probe missing environment facts first. "
-            "Search graded rules and task material in the selected domain. Each match has a readable ref "
-            "and feedback_ref for its observed revision. Pass known task conditions to filter graded rules. "
-            "Graded corpora return bounded cards plus deduplicated foundation_cards; include_archived "
-            "also discovers archived or superseded units when investigating old conclusions. "
-            "navigation_only returns navigation cards without inline bodies; run_id records "
-            "deduplicated delivery events for an existing run. "
-            "For related task blocks, pass related_next as continuation without query. "
-            "A changed corpus rejects the continuation. References are advisory."
+            "Search graded rules and task material in the selected domain when a missing "
+            "contract, mechanism, or method is needed for the next step. Returns bounded "
+            "navigation cards and deduplicated foundation_cards; each match includes a "
+            "readable ref and feedback_ref for its observed revision. Pass observed task "
+            "conditions to filter graded rules (include_archived discovers archived or "
+            "superseded units). Pass related_next as continuation for related task blocks, "
+            "navigation_only to omit inline bodies, and run_id to bind delivery events."
         ),
         inputSchema=dict(
             type="object",
@@ -84,19 +80,12 @@ KNOWLEDGE_TOOL_DEFS = [
     dict(
         name="knowledge_explain",
         description=(
-            "Read only knowledge needed for the next action; an exact returned ref needs no new query. "
-            "For graded units, prefer refs even for one unit, with observed conditions, fully visible "
-            "known_refs and an explicit token_budget. Copy revision references exactly. Stop reading "
-            "once the next action and required premises are clear; new evidence can reopen retrieval. "
-            "A single ref keeps the "
-            "historical contract: a graded-unit ref returns its exact current revision and conditions; "
-            "a task ref returns the current navigation and first_block_ref; a block ref returns that "
-            "immutable block with previous_block_ref/next_block_ref for walking the task. "
-            "Batch refs return the shared dependency closure once in requires and full unit bodies "
-            "in units, using conditions and known_refs (only exact id@revision units still fully "
-            "visible) to avoid re-sending visible bodies; unresolved reports condition or budget "
-            "exclusions instead of truncated steps. The content is a reference slice, not the full "
-            "case or a verified report. run_id binds the delivered units to an existing run."
+            "Read complete graded units or task/block references by their exact returned ref. "
+            "For graded units, pass refs (even for one unit) with observed conditions, visible "
+            "known_refs, and token_budget to assemble the dependency closure (shared prerequisites "
+            "appear once in requires and full unit bodies appear in units). A single ref supports "
+            "legacy task and block navigation (first_block_ref and previous_block_ref/next_block_ref "
+            "for walking a task reference slice). Pass run_id to bind delivery events."
         ),
         inputSchema=dict(
             type="object",
@@ -119,11 +108,10 @@ KNOWLEDGE_TOOL_DEFS = [
     dict(
         name="knowledge_feedback",
         description=(
-            "Record optional usage evidence for an exact observed ref: the historical up/down rating, "
-            "or a 4-stage usage event (discovered, loaded, applied, evaluated). evaluated requires "
-            "run_id and outcome. evidence_source distinguishes caller-claimed evidence from verified "
-            "run or ablation evidence on evaluated events. "
-            "Copy the exact feedback_ref returned by query/explain into ref. Never required."
+            "Record optional usage events (discovered, loaded, applied, evaluated) or an "
+            "up/down rating for an exact feedback_ref returned by query or explain. "
+            "evaluated requires run_id and outcome (supported, refuted, inconclusive) with "
+            "optional evidence_source."
         ),
         inputSchema=dict(
             type="object",
@@ -155,15 +143,10 @@ KNOWLEDGE_TOOL_DEFS = [
     dict(
         name="knowledge_distill",
         description=(
-            "Distill only explicitly selected evidence into C5 graded units. The "
-            "shared runtime redacts the selected inputs before the model call. This "
-            "requires the current active capture lease and saved contribution "
-            "authorization. task_state is explicit; an ordinary Stop does not mean "
-            "completion. Pass related_refs to compare the new evidence against existing units, "
-            "or a foreground mindie-distill-decision/1 proposal for deterministic validation "
-            "and application without another model call. This is one paid native model call "
-            "when no proposal is supplied: it never discovers transcripts, grants publication, "
-            "or retries an uncertain result."
+            "Distill caller-selected, authorized evidence into C5 graded units at "
+            "task_state='verified_milestone' or 'completed'. Pass related_refs to compare "
+            "against existing units as a delta, or pass a foreground mindie-distill-decision/1 "
+            "proposal for deterministic validation and local application with zero model calls."
         ),
         inputSchema=dict(
             type="object",
