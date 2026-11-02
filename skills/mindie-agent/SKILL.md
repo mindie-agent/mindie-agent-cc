@@ -12,7 +12,7 @@ The `UserPromptExpansion` hook activates the session before knowledge tools are 
 
 Remote and component tools are always available in every session without `/mindie-agent`:
 - `remote-dev` MCP tools for remote file read/write, command execution, and background job management, plus read-only `mindie_status`.
-- `components` MCP tools: `diagnostics_status` and `diagnostics_bundle` (local-only), plus `coordinator`, `profiler`, and `sim` (running `mindie-coordinator`, `mindie-profiler`, and `mindie-sim` with an `argv` array).
+- `components` MCP tools: `diagnostics_status` and `diagnostics_bundle` (local-only), plus `coordinator`, `debugger`, `profiler`, and `sim` (running `mindie-coordinator`, `mindie-debugger`, `mindie-profiler`, and `mindie-sim` with an `argv` array).
 
 ## On-Demand Knowledge Retrieval
 
