@@ -14,9 +14,9 @@ resolution-markers = [
 
 [manifest]
 overrides = [
-    { name = "mindie-diagnostics", git = "https://github.com/mindie-agent/diagnostics?rev=5ae643e19223f2181ecdbaa3edaf464137c4805e" },
-    { name = "mindie-sim", git = "https://github.com/mindie-agent/sim?rev=f5608b4943f515c401d2f9b12fffb579a1e2571b" },
-    { name = "remote-dev", git = "https://github.com/mindie-agent/remote-dev?rev=85be999811771e03ecc7d78e5e560fac1636e7ef" },
+    { name = "mindie-diagnostics", git = "https://github.com/mindie-agent/diagnostics?rev=f2f2f946c172afc99342a84c0c1ed244f6d44e01" },
+    { name = "mindie-sim", git = "https://github.com/mindie-agent/sim?rev=ced2dba5741af2d98f3a75b2a9cad77b9b94c40d" },
+    { name = "remote-dev", git = "https://github.com/mindie-agent/remote-dev?rev=7c67876d716feb3949e4dbf33eb5e06980ff0d36" },
 ]
 
 [[package]]
@@ -1246,7 +1246,7 @@ name = "importlib-metadata"
 version = "9.0.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "zipp", marker = "python_full_version < '3.12'" },
+    { name = "zipp" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/6f/7e/1e7e8dc30634b93ebb3d58a3dea569ad146e656218d3960ab04f62047b29/importlib_metadata-9.0.1.tar.gz", hash = "sha256:ab830580bc0ef3db61ce8fae716389e5462b67e033018bab6d8f80ef17172f99", size = 59124, upload-time = "2026-08-28T15:30:34.646Z" }
 wheels = [
@@ -1876,6 +1876,7 @@ dependencies = [
 test = [
     { name = "hatchling" },
     { name = "mindie-coordinator" },
+    { name = "mindie-debugger" },
     { name = "mindie-profiler" },
     { name = "mindie-sim" },
     { name = "pytest" },
@@ -1883,24 +1884,25 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "mindie-diagnostics", git = "https://github.com/mindie-agent/diagnostics?rev=5ae643e19223f2181ecdbaa3edaf464137c4805e" },
-    { name = "mindie-knowledge", git = "https://github.com/mindie-agent/knowledge?rev=9a4325858e6fadb10715275826a7795843cbbdf4" },
-    { name = "remote-dev", git = "https://github.com/mindie-agent/remote-dev?rev=85be999811771e03ecc7d78e5e560fac1636e7ef" },
+    { name = "mindie-diagnostics", git = "https://github.com/mindie-agent/diagnostics?rev=f2f2f946c172afc99342a84c0c1ed244f6d44e01" },
+    { name = "mindie-knowledge", git = "https://github.com/mindie-agent/knowledge?rev=7936a4fda67f6808d8fa73824363a4d7345766e5" },
+    { name = "remote-dev", git = "https://github.com/mindie-agent/remote-dev?rev=7c67876d716feb3949e4dbf33eb5e06980ff0d36" },
 ]
 
 [package.metadata.requires-dev]
 test = [
     { name = "hatchling", specifier = "==1.32.4" },
-    { name = "mindie-coordinator", git = "https://github.com/mindie-agent/coordinator?rev=d146c55c414bfb92136cf5fb7fa11ae14c673ef0" },
-    { name = "mindie-profiler", git = "https://github.com/mindie-agent/profiler?rev=7cdd56b6cc9e0e7f603368393497487dd2dbfe39" },
-    { name = "mindie-sim", git = "https://github.com/mindie-agent/sim?rev=f5608b4943f515c401d2f9b12fffb579a1e2571b" },
+    { name = "mindie-coordinator", git = "https://github.com/mindie-agent/coordinator?rev=79a8b28eef72d57f965a01c6660849f024fbb1c0" },
+    { name = "mindie-debugger", git = "https://github.com/mindie-agent/debugger?rev=e9406b2b178335190d5cb59dff4d6985894497ba" },
+    { name = "mindie-profiler", git = "https://github.com/mindie-agent/profiler?rev=79d97e75bff7351b0472b93c03b072c1cf47f5e7" },
+    { name = "mindie-sim", git = "https://github.com/mindie-agent/sim?rev=ced2dba5741af2d98f3a75b2a9cad77b9b94c40d" },
     { name = "pytest", specifier = "==9.1.1" },
 ]
 
 [[package]]
 name = "mindie-coordinator"
-version = "0.7.1"
-source = { git = "https://github.com/mindie-agent/coordinator?rev=d146c55c414bfb92136cf5fb7fa11ae14c673ef0#d146c55c414bfb92136cf5fb7fa11ae14c673ef0" }
+version = "0.7.3"
+source = { git = "https://github.com/mindie-agent/coordinator?rev=79a8b28eef72d57f965a01c6660849f024fbb1c0#79a8b28eef72d57f965a01c6660849f024fbb1c0" }
 dependencies = [
     { name = "mindie-diagnostics" },
     { name = "remote-dev" },
@@ -1908,14 +1910,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "mindie-debugger"
+version = "0.1.0"
+source = { git = "https://github.com/mindie-agent/debugger?rev=e9406b2b178335190d5cb59dff4d6985894497ba#e9406b2b178335190d5cb59dff4d6985894497ba" }
+
+[[package]]
 name = "mindie-diagnostics"
-version = "0.5.4"
-source = { git = "https://github.com/mindie-agent/diagnostics?rev=5ae643e19223f2181ecdbaa3edaf464137c4805e#5ae643e19223f2181ecdbaa3edaf464137c4805e" }
+version = "0.5.5"
+source = { git = "https://github.com/mindie-agent/diagnostics?rev=f2f2f946c172afc99342a84c0c1ed244f6d44e01#f2f2f946c172afc99342a84c0c1ed244f6d44e01" }
 
 [[package]]
 name = "mindie-knowledge"
-version = "0.13.8"
-source = { git = "https://github.com/mindie-agent/knowledge?rev=9a4325858e6fadb10715275826a7795843cbbdf4#9a4325858e6fadb10715275826a7795843cbbdf4" }
+version = "0.13.10"
+source = { git = "https://github.com/mindie-agent/knowledge?rev=7936a4fda67f6808d8fa73824363a4d7345766e5#7936a4fda67f6808d8fa73824363a4d7345766e5" }
 dependencies = [
     { name = "langmem" },
     { name = "mindie-diagnostics" },
@@ -1928,16 +1935,16 @@ dependencies = [
 
 [[package]]
 name = "mindie-profiler"
-version = "0.5.5"
-source = { git = "https://github.com/mindie-agent/profiler?rev=7cdd56b6cc9e0e7f603368393497487dd2dbfe39#7cdd56b6cc9e0e7f603368393497487dd2dbfe39" }
+version = "0.5.6"
+source = { git = "https://github.com/mindie-agent/profiler?rev=79d97e75bff7351b0472b93c03b072c1cf47f5e7#79d97e75bff7351b0472b93c03b072c1cf47f5e7" }
 dependencies = [
     { name = "mindie-sim" },
 ]
 
 [[package]]
 name = "mindie-sim"
-version = "0.9.0"
-source = { git = "https://github.com/mindie-agent/sim?rev=f5608b4943f515c401d2f9b12fffb579a1e2571b#f5608b4943f515c401d2f9b12fffb579a1e2571b" }
+version = "0.9.2"
+source = { git = "https://github.com/mindie-agent/sim?rev=ced2dba5741af2d98f3a75b2a9cad77b9b94c40d#ced2dba5741af2d98f3a75b2a9cad77b9b94c40d" }
 dependencies = [
     { name = "ijson" },
 ]
@@ -3207,8 +3214,8 @@ as = [
 
 [[package]]
 name = "remote-dev"
-version = "0.11.2"
-source = { git = "https://github.com/mindie-agent/remote-dev?rev=85be999811771e03ecc7d78e5e560fac1636e7ef#85be999811771e03ecc7d78e5e560fac1636e7ef" }
+version = "0.11.4"
+source = { git = "https://github.com/mindie-agent/remote-dev?rev=7c67876d716feb3949e4dbf33eb5e06980ff0d36#7c67876d716feb3949e4dbf33eb5e06980ff0d36" }
 dependencies = [
     { name = "mindie-diagnostics" },
 ]
@@ -3377,8 +3384,8 @@ name = "secretstorage"
 version = "3.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cryptography", marker = "sys_platform != 'win32'" },
-    { name = "jeepney", marker = "sys_platform != 'win32'" },
+    { name = "cryptography" },
+    { name = "jeepney" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/1c/03/e834bcd866f2f8a49a85eaff47340affa3bfa391ee9912a952a1faa68c7b/secretstorage-3.5.0.tar.gz", hash = "sha256:f04b8e4689cbce351744d5537bf6b1329c6fc68f91fa666f60a380edddcd11be", size = 19884, upload-time = "2025-11-23T19:02:53.191Z" }
 wheels = [
