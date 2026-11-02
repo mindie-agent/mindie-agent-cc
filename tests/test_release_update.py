@@ -85,9 +85,9 @@ def activation_result(status):
 
 def test_current_interface_registry_is_complete_and_bounded():
     declaration = harness.check_registry(ROOT, ROOT / "tests")
-    for version in ("2.1.269", "2.1.299"):
+    for version in ("2.1.269", "2.1.299", "2.1.300", "2.2.0-rc.1", "2.99.0"):
         assert supports_harness(declaration, harness_name="claude-code", harness_version=version)
-    for version in ("2.1.268", "2.1.300"):
+    for version in ("2.1.268", "1.99.99", "3.0.0-alpha.1", "3.0.0"):
         assert not supports_harness(declaration, harness_name="claude-code", harness_version=version)
     for entry in declaration["interface_registry"].values():
         for code in entry["code_paths"]:

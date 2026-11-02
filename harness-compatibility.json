@@ -4,15 +4,9 @@
   "supported": [
     {
       "minimum": "2.1.269",
-      "maximum": "2.1.269",
+      "maximum": "2.999.999",
       "maximum_inclusive": true,
-      "include_prerelease": false
-    },
-    {
-      "minimum": "2.1.299",
-      "maximum": "2.1.299",
-      "maximum_inclusive": true,
-      "include_prerelease": false
+      "include_prerelease": true
     }
   ],
   "used_interfaces": [
@@ -31,15 +25,9 @@
       "supported": [
         {
           "minimum": "2.1.269",
-          "maximum": "2.1.269",
+          "maximum": "2.999.999",
           "maximum_inclusive": true,
-          "include_prerelease": false
-        },
-        {
-          "minimum": "2.1.299",
-          "maximum": "2.1.299",
-          "maximum_inclusive": true,
-          "include_prerelease": false
+          "include_prerelease": true
         }
       ],
       "code_paths": [
@@ -56,15 +44,9 @@
       "supported": [
         {
           "minimum": "2.1.269",
-          "maximum": "2.1.269",
+          "maximum": "2.999.999",
           "maximum_inclusive": true,
-          "include_prerelease": false
-        },
-        {
-          "minimum": "2.1.299",
-          "maximum": "2.1.299",
-          "maximum_inclusive": true,
-          "include_prerelease": false
+          "include_prerelease": true
         }
       ],
       "code_paths": [
@@ -81,15 +63,9 @@
       "supported": [
         {
           "minimum": "2.1.269",
-          "maximum": "2.1.269",
+          "maximum": "2.999.999",
           "maximum_inclusive": true,
-          "include_prerelease": false
-        },
-        {
-          "minimum": "2.1.299",
-          "maximum": "2.1.299",
-          "maximum_inclusive": true,
-          "include_prerelease": false
+          "include_prerelease": true
         }
       ],
       "code_paths": [
@@ -107,15 +83,9 @@
       "supported": [
         {
           "minimum": "2.1.269",
-          "maximum": "2.1.269",
+          "maximum": "2.999.999",
           "maximum_inclusive": true,
-          "include_prerelease": false
-        },
-        {
-          "minimum": "2.1.299",
-          "maximum": "2.1.299",
-          "maximum_inclusive": true,
-          "include_prerelease": false
+          "include_prerelease": true
         }
       ],
       "code_paths": [
@@ -134,15 +104,9 @@
       "supported": [
         {
           "minimum": "2.1.269",
-          "maximum": "2.1.269",
+          "maximum": "2.999.999",
           "maximum_inclusive": true,
-          "include_prerelease": false
-        },
-        {
-          "minimum": "2.1.299",
-          "maximum": "2.1.299",
-          "maximum_inclusive": true,
-          "include_prerelease": false
+          "include_prerelease": true
         }
       ],
       "code_paths": [
@@ -159,15 +123,9 @@
       "supported": [
         {
           "minimum": "2.1.269",
-          "maximum": "2.1.269",
+          "maximum": "2.999.999",
           "maximum_inclusive": true,
-          "include_prerelease": false
-        },
-        {
-          "minimum": "2.1.299",
-          "maximum": "2.1.299",
-          "maximum_inclusive": true,
-          "include_prerelease": false
+          "include_prerelease": true
         }
       ],
       "code_paths": [
@@ -184,15 +142,9 @@
       "supported": [
         {
           "minimum": "2.1.269",
-          "maximum": "2.1.269",
+          "maximum": "2.999.999",
           "maximum_inclusive": true,
-          "include_prerelease": false
-        },
-        {
-          "minimum": "2.1.299",
-          "maximum": "2.1.299",
-          "maximum_inclusive": true,
-          "include_prerelease": false
+          "include_prerelease": true
         }
       ],
       "code_paths": [
@@ -219,15 +171,9 @@
       "supported": [
         {
           "minimum": "2.1.269",
-          "maximum": "2.1.269",
+          "maximum": "2.999.999",
           "maximum_inclusive": true,
-          "include_prerelease": false
-        },
-        {
-          "minimum": "2.1.299",
-          "maximum": "2.1.299",
-          "maximum_inclusive": true,
-          "include_prerelease": false
+          "include_prerelease": true
         }
       ],
       "code_paths": [
@@ -246,15 +192,9 @@
       "supported": [
         {
           "minimum": "2.1.269",
-          "maximum": "2.1.269",
+          "maximum": "2.999.999",
           "maximum_inclusive": true,
-          "include_prerelease": false
-        },
-        {
-          "minimum": "2.1.299",
-          "maximum": "2.1.299",
-          "maximum_inclusive": true,
-          "include_prerelease": false
+          "include_prerelease": true
         }
       ],
       "code_paths": [
