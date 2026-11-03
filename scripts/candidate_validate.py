@@ -99,6 +99,8 @@ def adapter_check(source):
         "release_update.py",
         "organizer.py",
         "organizer_distill.py",
+        "experiment_ledger.py",
+        "rsi_loop.py",
     ):
         if not (plugin / "scripts" / name).is_file():
             raise ValueError("missing bounded runtime entry: " + name)

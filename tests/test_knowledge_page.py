@@ -188,7 +188,7 @@ class KnowledgePageTests(unittest.TestCase):
                   "known_refs": ["unit-a@1"], "token_budget": 1024},
                  explain["inputSchema"])
         validate({}, explain["inputSchema"])
-        self.assertEqual(query["inputSchema"]["properties"]["token_budget"]["maximum"], 16000)
+        self.assertEqual(query["inputSchema"]["properties"]["token_budget"]["maximum"], 64000)
         for unsupported in ("oneOf", "anyOf", "allOf"):
             self.assertNotIn(unsupported, query["inputSchema"])
 
