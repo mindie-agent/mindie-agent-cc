@@ -201,6 +201,7 @@ def kill_windows_tree(process):
                 [os.path.join(system_root, "System32", "taskkill.exe"),
                  "/F", "/T", "/PID", str(process.pid)],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
         except TimeoutError:
             raise
