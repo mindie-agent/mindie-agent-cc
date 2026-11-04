@@ -10,8 +10,9 @@ explicit component CLI tools in Claude Code.
   binds `claudecode/toolUseId` and this server consumes it at most once via
   `claim_bind` / `finish_bind`. Only the successful claimant finalizes its receipt.
 - Once a remote or knowledge tool call succeeds, a local SQLite bind-accounting
-  failure (`finish_bind`) attaches `bind_warning` + `diagnostic_ref` and never
-  flips `isError=True` on the succeeded result.
+  failure (`finish_bind`) attaches `bind_warning` + `diagnostic_ref` and, for an
+  OSError, `bind_errno` and a fixed `bind_path` label. It never flips
+  `isError=True` on the succeeded result.
 - Trusted local caller/`not_sent` failures preserve the shared bounded
   `input_repair` (`missing` fields and action) in `structuredContent` and
   model-visible text. Exception prose, stderr, paths and credentials are never
@@ -40,6 +41,7 @@ if str(HERE) not in sys.path:
 
 from identity import (
     KNOWLEDGE_TOOLS,
+    bind_storage_facts,
     canonical_native_name,
     claim_bind,
     finish_bind,
@@ -500,10 +502,15 @@ def _bind_warning(result, exc):
 
     diagnostic = record_failure("mcp.call", "finish_bind", "local_storage", exception=exc)
     warning = "Local bind receipt could not be saved. The tool result is unchanged; do not repeat the call."
-    result["structuredContent"] = dict(
-        result.get("structuredContent") or {},
+    fields = dict(
         bind_warning=warning, bind_error_type=type(exc).__name__, diagnostic_ref=diagnostic,
     )
+    facts = bind_storage_facts(exc)
+    if "errno" in facts:
+        fields["bind_errno"] = facts["errno"]
+    if "path" in facts:
+        fields["bind_path"] = facts["path"]
+    result["structuredContent"] = dict(result.get("structuredContent") or {}, **fields)
     result["content"] = [*result.get("content", []), dict(type="text", text=warning)]
 
 

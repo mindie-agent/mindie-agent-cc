@@ -43,16 +43,26 @@ class NativePluginDisabled(RuntimeError):
     """A saved native disable takes precedence over background preparation."""
 
 
-_KNOWN_FETCH_CODES = frozenset({"release_http_error", "release_transport_unavailable"})
+_TRANSPORT_FETCH_CODES = frozenset({"release_http_error", "release_transport_unavailable"})
 
 
 def _typed_update_error(exc):
-    """Attach shared update categories; never copy private exception text."""
-    from mindie_knowledge.releases_io import ReleaseFetchError
+    """Mark real transport failures only. Keep the caller's exception if imports fail.
 
-    if isinstance(exc, ReleaseFetchError) and getattr(exc, "category", None) is None:
-        if getattr(exc, "code", None) not in _KNOWN_FETCH_CODES:
-            exc.category = "rate_limited" if getattr(exc, "status", None) == 429 else "temporary_network"
+    ``releases_io`` imports the release selector, which imports ``semantic_version``.
+    That import must not replace the original failure or skip its receipt.
+    Source-integrity codes stay unlabeled so they remain reportable.
+    """
+    try:
+        from mindie_knowledge.releases_io import ReleaseFetchError
+    except ImportError:
+        return exc
+    if not isinstance(exc, ReleaseFetchError) or getattr(exc, "category", None) is not None:
+        return exc
+    if getattr(exc, "code", None) in _TRANSPORT_FETCH_CODES:
+        return exc
+    if getattr(exc, "status", None) == 429:
+        exc.category = "rate_limited"
     return exc
 
 
@@ -662,7 +672,13 @@ def main():
             except Exception as exc:
                 result.update(status="failed", last_failed_check=time.time(),
                               error_type=type(exc).__name__)
-                result["diagnostic"] = _record_update_failure("native_update", exc)
+                try:
+                    result["diagnostic"] = _record_update_failure("native_update", exc)
+                except ImportError as recording:
+                    result["diagnostic"] = {
+                        "logging_failed": True,
+                        "error_type": type(recording).__name__,
+                    }
             _record(binding, result)
     except LockTimeout:
         return
