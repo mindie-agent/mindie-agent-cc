@@ -5,15 +5,18 @@ Load this reference when performing first-time setup, configuring community cont
 ## 1. Community Experience Contribution & Onboarding
 
 - **Session Activation**: Invoking `/mindie-agent` enables knowledge and background `Stop` capture for the current session (`new` chats, forks, and subagents require their own entry).
-- **First-Use Onboarding**:
+- **First-Use Onboarding & `setup.py sharing`**:
   1. Present [用户须知](user-notice.md).
-  2. Follow [Workspace Setup](workspace-setup.md) (offering workspace creation/initialization, reuse, or keeping the current directory, including when contribution is disabled).
+  2. When `python <runtime_scripts>/setup.py sharing --status` reports `"needs_onboarding_prompt": true`, call Claude Code's native **`AskUserQuestion`** tool to ask the 3 onboarding questions together (Community Knowledge Sharing & Automated Fault Reporting, GitHub Star ⭐ for `mindie-agent/mindie-agent`, and Local Development Workspace `vllm-ascend-workspace`), then follow [Workspace Setup](workspace-setup.md) to resolve `WORKSPACE_ROOT` first.
   3. **Unified Contribution & Fault-Reporting Switch**:
      - `base_config.parent / "mindie-consent.json"` stores the persistent setting governing both scoped knowledge PRs and sanitized product fault Issues.
-     - When enabling contribution (`contribute`) for a public knowledge repository `owner/repo` (e.g., `mindie-agent/knowledge-vllm-ascend`), ensure the personal fork exists (`gh repo fork owner/repo --clone=false --remote=false`) and bind `--fork USER/repo`:
-       ```text
-       /mindie-agent contribute --repository owner/repo --account USER --fork USER/repo --project-root /absolute/path --visibility public
+     - Persist the user's choice via `setup.py sharing`:
+       ```sh
+       python <runtime_scripts>/setup.py sharing --enable --project-root "$WORKSPACE_ROOT"
+       # or when keeping local-only mode:
+       python <runtime_scripts>/setup.py sharing --disable
        ```
+       (You may also use `/mindie-agent contribute --repository owner/repo --account USER --fork USER/repo --project-root /absolute/path --visibility public`.)
      - When the hook returns `reporting.run_outside_hook=true`, execute `reporting.command_line` immediately outside the hook in the same setup flow (90-second timeout).
      - Keep three states distinct when reporting status: (1) local consent config written, (2) background reporter running (`reporting.status == "running"`), and (3) external GitHub Issue/PR created.
 

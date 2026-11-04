@@ -25,7 +25,9 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import secrets
+import shutil
 import sys
 import time
 import tempfile
@@ -386,7 +388,349 @@ def publish_entry(path, adapter_file):
     _publish_bytes(Path(path), value.encode("utf-8"))
 
 
+_REPOSITORY_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]{1,128}\Z")
+_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,255}\Z")
+
+
+def resolve_github_identity(repository, *, account=None, fork=None):
+    """Best-effort GitHub login and fork resolution via `gh` when not explicitly passed."""
+    if fork or not shutil.which("gh"):
+        return account, fork
+    import bounded
+
+    repo_name = repository.split("/", 1)[1]
+    try:
+        if not account:
+            login = bounded.run(
+                ["gh", "api", "--hostname", "github.com", "user", "--jq", ".login"],
+                timeout=5.0,
+            ).strip()
+            if login and "/" not in login and _NAME_RE.fullmatch(login):
+                account = login
+        if account and not fork:
+            try:
+                found = bounded.run(
+                    [
+                        "gh",
+                        "api",
+                        "--hostname",
+                        "github.com",
+                        f"repos/{account}/{repo_name}",
+                        "--jq",
+                        ".full_name",
+                    ],
+                    timeout=5.0,
+                ).strip()
+                if _REPOSITORY_RE.fullmatch(found):
+                    fork = found
+            except Exception:
+                bounded.run(
+                    ["gh", "repo", "fork", repository, "--clone=false"],
+                    timeout=10.0,
+                )
+                fork = f"{account}/{repo_name}"
+    except Exception:
+        pass
+    return account, fork
+
+
+def _read_consent_json(path):
+    try:
+        raw = Path(path).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return dict(state="missing", choice=None, choice_revision=None)
+    except TimeoutError:
+        raise
+    except OSError:
+        return dict(state="unreadable", choice=None, choice_revision=None)
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return dict(state="corrupt", choice=None, choice_revision=None)
+    if not isinstance(data, dict) or data.get("schema") != "mindie-consent/1":
+        return dict(state="corrupt", choice=None, choice_revision=None)
+    choice = data.get("choice")
+    if choice is not None and choice not in {"contribute", "read-only", "later", "disabled"}:
+        return dict(state="corrupt", choice=None, choice_revision=None)
+    rev = data.get("choice_revision")
+    if rev is not None and (
+        not isinstance(rev, str)
+        or len(rev) != 32
+        or any(c not in "0123456789abcdef" for c in rev)
+    ):
+        return dict(state="corrupt", choice=None, choice_revision=None)
+    return dict(state="ok", choice=choice, choice_revision=rev)
+
+
+def sharing_status(config=None):
+    """Read-only fast path for `setup.py sharing --status`."""
+    config = Path(config or default_config_path()).expanduser().resolve()
+    try:
+        import consent
+
+        saved = consent.load(config)
+    except ModuleNotFoundError:
+        saved = _read_consent_json(config.parent / "mindie-consent.json")
+    consent_state = saved.get("state") or "missing"
+    consent_choice = saved.get("choice") if consent_state == "ok" else None
+    choice_revision = saved.get("choice_revision") if consent_state == "ok" else None
+    comm_path = config.with_name("mindie-community.json")
+    if config.is_file():
+        try:
+            bound = _read(config)
+            if isinstance(bound.get("community_config"), str):
+                comm_path = Path(bound["community_config"])
+        except Exception:
+            pass
+    comm_state = "missing"
+    comm = {}
+    try:
+        raw = comm_path.read_text(encoding="utf-8")
+        parsed = json.loads(raw)
+        if not isinstance(parsed, dict) or parsed.get("schema") != "mindie-community-config/1":
+            raise ValueError("community settings schema mismatch")
+        if not isinstance(parsed.get("enabled"), bool):
+            raise ValueError("community enabled flag must be boolean")
+        comm = parsed
+        comm_state = "ok"
+    except FileNotFoundError:
+        comm_state = "missing"
+    except TimeoutError:
+        raise
+    except ValueError:
+        comm_state = "corrupt"
+    except OSError:
+        comm_state = "unreadable"
+    try:
+        from diagnostic_support import reporting_config_path
+
+        diag_path = reporting_config_path(config)
+    except Exception:
+        diag_path = config.parent / "diagnostics.json"
+    diag_enabled = False
+    try:
+        diag_raw = json.loads(diag_path.read_text(encoding="utf-8"))
+        if isinstance(diag_raw, dict):
+            diag_enabled = bool(
+                diag_raw.get("decision") == "enabled" or diag_raw.get("enabled") is True
+            )
+    except TimeoutError:
+        raise
+    except (OSError, ValueError):
+        diag_enabled = False
+    repair_required = (
+        consent_state in {"corrupt", "unreadable"}
+        or comm_state in {"corrupt", "unreadable"}
+    )
+    sharing_enabled = bool(
+        comm_state == "ok"
+        and comm.get("enabled") is True
+        and consent_state == "ok"
+        and consent_choice == "contribute"
+    )
+    reporting_enabled = bool(
+        diag_enabled
+        and consent_state == "ok"
+        and consent_choice == "contribute"
+        and bool(choice_revision)
+    )
+    if repair_required:
+        needs_onboarding_prompt = False
+    else:
+        needs_onboarding_prompt = bool(
+            consent_state == "missing"
+            or (
+                consent_state == "ok"
+                and (
+                    consent_choice not in {"contribute", "disabled"}
+                    or (consent_choice == "contribute" and not choice_revision)
+                )
+            )
+        )
+    return dict(
+        schema="mindie-sharing-status/1",
+        harness="claude-code",
+        consent_state=consent_state,
+        consent_choice=consent_choice,
+        choice_revision=choice_revision,
+        sharing_enabled=sharing_enabled,
+        community_enabled=sharing_enabled,
+        reporting_enabled=reporting_enabled,
+        repository=comm.get("repository") or "mindie-agent/knowledge-vllm-ascend",
+        fork=comm.get("fork"),
+        account=comm.get("account"),
+        project_roots=list(comm.get("project_roots") or []),
+        needs_onboarding_prompt=needs_onboarding_prompt,
+        repair_required=repair_required,
+    )
+
+
+def sharing_main(argv):
+    parser = argparse.ArgumentParser(prog="setup.py sharing", description="Manage community sharing and fault reporting.")
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--status", action="store_true")
+    mode.add_argument("--enable", action="store_true")
+    mode.add_argument("--disable", action="store_true")
+    parser.add_argument("--config", type=Path, default=default_config_path())
+    parser.add_argument("--project-root", action="append", dest="project_root")
+    parser.add_argument("--community-project-root", action="append", dest="community_project_root")
+    parser.add_argument("--fork", dest="fork")
+    parser.add_argument("--community-fork", dest="community_fork")
+    parser.add_argument("--account", dest="account")
+    parser.add_argument("--community-account", dest="community_account")
+    parser.add_argument("--repository", dest="repository")
+    parser.add_argument("--community-repository", dest="community_repository")
+    parser.add_argument("--branch", dest="branch")
+    parser.add_argument("--community-branch", dest="community_branch")
+    parser.add_argument("--visibility", dest="visibility")
+    parser.add_argument("--community-visibility", dest="community_visibility")
+    args = parser.parse_args(argv)
+    config = Path(args.config).expanduser().resolve()
+    if args.status:
+        print(json.dumps(sharing_status(config), indent=2))
+        return
+    import consent
+    from community_config import configure as configure_community
+    from diagnostic_support import activate_reporting
+
+    saved = consent.load(config)
+    if saved["state"] in {"corrupt", "unreadable"}:
+        parser.error("saved setup state is damaged; configuration was not changed")
+    selected = read_binding(config) if config.exists() else None
+    python = (selected.get("python") if selected else None) or sys.executable
+    comm_path = Path(selected["community_config"]) if selected and selected.get("community_config") else config.with_name("mindie-community.json")
+    old = {}
+    if comm_path.exists():
+        try:
+            old = json.loads(comm_path.read_text(encoding="utf-8"))
+        except TimeoutError:
+            raise
+        except (OSError, ValueError):
+            parser.error("community settings file is damaged or unreadable; bytes preserved")
+        if not isinstance(old, dict) or old.get("schema") != "mindie-community-config/1":
+            parser.error("community settings file is not a valid mindie-community-config/1 document")
+    consent_file = str(consent.consent_path(config).resolve())
+    if args.disable:
+        consent.record_choice("disabled", config)
+        disabled_req = dict(
+            schema="mindie-community-config/1",
+            enabled=False,
+            repository=old.get("repository"),
+            branch=old.get("branch") or "main",
+            project_roots=list(old.get("project_roots") or []),
+            idle_seconds=old.get("idle_seconds", 300),
+            consent_config=consent_file,
+        )
+        comm_path.parent.mkdir(parents=True, exist_ok=True)
+        merged = configure_community(comm_path, disabled_req, python=python)
+        reporting = activate_reporting(config)
+        print(
+            json.dumps(
+                dict(
+                    status="configured" if reporting["status"] in {"running", "disabled"} else "degraded",
+                    configuration_status="configured",
+                    reporting=reporting,
+                    community_config=str(comm_path),
+                    sharing="disabled",
+                    sharing_choice="disabled",
+                    repository=merged.get("repository"),
+                    project_roots=merged.get("project_roots", []),
+                ),
+                indent=2,
+            )
+        )
+        if reporting["status"] not in {"running", "disabled"}:
+            raise SystemExit(1)
+        return
+    repository = (
+        args.repository
+        or args.community_repository
+        or old.get("repository")
+        or "mindie-agent/knowledge-vllm-ascend"
+    )
+    if not isinstance(repository, str) or not _REPOSITORY_RE.fullmatch(repository):
+        parser.error("community repository must be owner/repo")
+    visibility = (
+        args.visibility
+        if args.visibility is not None
+        else (args.community_visibility if args.community_visibility is not None else "public")
+    )
+    if visibility != "public":
+        parser.error("community sharing requires --visibility public")
+    branch = args.branch or args.community_branch or old.get("branch") or "main"
+    if not isinstance(branch, str) or not _NAME_RE.fullmatch(branch) or ".." in branch:
+        parser.error("community branch is invalid")
+    raw_roots = (args.project_root or []) + (args.community_project_root or [])
+    if not raw_roots:
+        raw_roots = list(old.get("project_roots") or [str(Path.cwd().resolve())])
+    roots = []
+    for root in raw_roots:
+        canonical = str(Path(root).expanduser().resolve())
+        if not Path(canonical).is_dir():
+            parser.error("community project root does not exist: " + canonical)
+        if canonical not in roots:
+            roots.append(canonical)
+    if not roots:
+        parser.error("community sharing requires at least one --project-root")
+    account = args.account or args.community_account or old.get("account")
+    fork = args.fork or args.community_fork or old.get("fork")
+    if account is not None and (
+        not isinstance(account, str) or "/" in account or not _NAME_RE.fullmatch(account)
+    ):
+        parser.error("community account is invalid")
+    if fork is not None and (
+        not isinstance(fork, str) or not _REPOSITORY_RE.fullmatch(fork)
+    ):
+        parser.error("community fork must be owner/repo")
+    if not fork:
+        account, fork = resolve_github_identity(repository, account=account, fork=fork)
+    enabled_req = dict(
+        schema="mindie-community-config/1",
+        enabled=True,
+        generation=secrets.token_hex(16),
+        enabled_at=time.time(),
+        repository=repository,
+        branch=branch,
+        project_roots=roots,
+        idle_seconds=old.get("idle_seconds", 300),
+        visibility="public",
+        consent_config=consent_file,
+    )
+    if account:
+        enabled_req["account"] = account
+    if fork:
+        enabled_req["fork"] = fork
+    comm_path.parent.mkdir(parents=True, exist_ok=True)
+    merged = configure_community(comm_path, enabled_req, python=python)
+    consent.record_choice("contribute", config)
+    reporting = activate_reporting(config)
+    print(
+        json.dumps(
+            dict(
+                status="configured" if reporting["status"] == "running" else "degraded",
+                configuration_status="configured",
+                reporting=reporting,
+                community_config=str(comm_path),
+                sharing="enabled",
+                sharing_choice="contribute",
+                repository=merged["repository"],
+                fork=merged.get("fork"),
+                account=merged.get("account"),
+                project_roots=merged["project_roots"],
+                enabled_at=merged["enabled_at"],
+            ),
+            indent=2,
+        )
+    )
+    if reporting["status"] != "running":
+        raise SystemExit(1)
+
+
 def main(argv=None):
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    if raw_argv[:1] == ["sharing"]:
+        sharing_main(raw_argv[1:])
+        return
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path)
     parser.add_argument("--activate", type=Path)

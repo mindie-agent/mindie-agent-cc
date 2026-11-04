@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/mindie-agent/mindie-agent-cc/releases"><img src="https://img.shields.io/badge/release-v0.1.15-0F766E.svg" alt="Release v0.1.15"></a>
+  <a href="https://github.com/mindie-agent/mindie-agent-cc/releases"><img src="https://img.shields.io/badge/release-v0.1.16-0F766E.svg" alt="Release v0.1.16"></a>
   <a href="harness-compatibility.json"><img src="https://img.shields.io/badge/Claude_Code-%3E%3D2.1.269_%3C3.0.0-D97757.svg" alt="Claude Code >=2.1.269 <3.0.0"></a>
   <a href="pyproject.toml"><img src="https://img.shields.io/badge/python-3.13-3776AB.svg" alt="Python 3.13"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-0F766E.svg" alt="License: MIT"></a>
@@ -19,15 +19,15 @@
 <p align="center">
   <b>中文</b> | <a href="README.en.md">English</a> ·
   <a href="#快速开始">快速开始</a> ·
-  <a href="#装上之后能做什么">应用场景</a> ·
-  <a href="#日常使用与命令参考">命令参考</a> ·
+  <a href="#装上之后能做什么触发方式与使用示例">应用场景</a> ·
+  <a href="#日常使用与命令参考统一入口-mindie-agent">命令参考</a> ·
   <a href="#架构与组件边界">系统架构</a> ·
   <a href="docs/README.md">技术文档</a>
 </p>
 
 ---
 
-**MindIE Agent for Claude Code**（`mindie-agent-cc`）是 [MindIE Agent](https://github.com/mindie-agent/mindie-agent) 面向 Claude Code 的原生插件，服务于**昇腾（Ascend）NPU 上的 AI Infra 设计、开发与测试全流程**。当前 `v0.1.15`（配套主产品 `0.1.8`）已交付三大核心能力：**本地与社区知识库检索及隐私脱敏**（优先覆盖 `vLLM-Ascend` 特性开发与 `AscendC` / `Triton` 算子工程）、**远端 SSH / Docker 开发与 NPU 状态巡检**，以及**统一故障诊断与脱敏上报**；更多昇腾基础软件领域将随演进路线图持续扩展。
+**MindIE Agent for Claude Code**（`mindie-agent-cc`）是 [MindIE Agent](https://github.com/mindie-agent/mindie-agent) 面向 Claude Code 的原生插件，服务于**昇腾（Ascend）NPU 上的 AI Infra 设计、开发与测试全流程**。当前 `v0.1.16`（配套主产品 `0.1.8`）已交付三大核心能力：**本地与社区知识库检索及隐私脱敏**（优先覆盖 `vLLM-Ascend` 特性开发与 `AscendC` / `Triton` 算子工程）、**远端 SSH / Docker 开发与 NPU 状态巡检**，以及**统一故障诊断与脱敏上报**；更多昇腾基础软件领域将随演进路线图持续扩展。
 
 项目设计遵循 [MindIE Agent 工程设计原则](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.md)：**领域知识与 Skill 体系通过 `/mindie-agent` 手动按需唤醒**，不干扰非昇腾常规任务；**`remote-dev` 远端昇腾开发与测试工具默认常驻自动触发**；所有状态与报错真实透明，不做静默降级或盲目重试。
 
@@ -103,42 +103,60 @@ MindIE Agent 采用**「领域知识与 Skill 手动按需触发 + 远端开发�
    uv --version
    gh --version
    GH_USER=$(gh api --hostname github.com user --jq .login) && echo "GitHub channel verified for account: $GH_USER"
-   gh auth setup-git --hostname github.com
+   GIT_CONFIG_COUNT=2 \
+     GIT_CONFIG_KEY_0=credential.https://github.com.helper \
+     GIT_CONFIG_VALUE_0='!gh auth git-credential' \
+     GIT_CONFIG_KEY_1=credential.interactive \
+     GIT_CONFIG_VALUE_1=never \
+     git ls-remote https://github.com/mindie-agent/mindie-agent-cc.git HEAD
    claude --version
    ```
-   - **硬性门禁（严禁跳过或静默忽略）**：若未安装 `gh`，请先协助安装（macOS：`brew install gh`；Windows：`winget install --id GitHub.cli`；Ubuntu / WSL：`sudo apt update && sudo apt install -y gh`）。账号读取成功时复用已有认证；需要登录时按 [GitHub 登录引导](skills/mindie-agent/references/github-authentication.md) 选择方式：普通网络使用浏览器，企业网络或浏览器授权受阻时优先 Token。已有 Token 就在 `gh` 隐藏输入提示中粘贴（或使用已提供的私有文件），没有则引导创建。验证账号、Git 和后续进程可复用凭据后继续；网络/证书错误先修复传输，不反复要求登录。
-   - 确认 `claude --version` 满足当前发行版 `v0.1.14` 声明支持的兼容版本范围：`>= 2.1.269 < 3.0.0`（定义于 [`harness-compatibility.json`](harness-compatibility.json)）。
+   - **硬性门禁（严禁跳过或静默忽略，且严禁修改宿主机全局或系统级 Git 配置）**：若未安装 `gh`，请先协助安装（macOS：`brew install gh`；Windows：`winget install --id GitHub.cli`；Ubuntu / WSL：`sudo apt update && sudo apt install -y gh`）。账号读取成功时复用已有认证；需要登录时按 [GitHub 登录引导](skills/mindie-agent/references/github-authentication.md) 选择方式：普通网络使用浏览器，企业网络或浏览器授权受阻时优先 Token。已有 Token 就在 `gh` 隐藏输入提示中粘贴（或使用已提供的私有文件），没有则引导创建。仅使用进程级 `GIT_CONFIG_COUNT`（及企业证书场景下的 `UV_SYSTEM_CERTS=true UV_NATIVE_TLS=true`）验证传输通道，切勿污染宿主机全局 Git 配置。
+   - 确认 `claude --version` 满足当前发行版 `v0.1.15` 声明支持的兼容版本范围：`>= 2.1.269 < 3.0.0`（定义于 [`harness-compatibility.json`](harness-compatibility.json)）。
    - 若在 **Linux 或 Windows WSL** 下使用后台知识服务，请额外执行 `systemctl --user show --property=Version` 确认 `systemd >= 254` 且可访问（WSL 内须使用 Linux 原生 `claude`、`git`、`uv` 与 `gh`）。
 
 2. **可选支持与贡献准备**：
-   安装过程不未经询问静默执行 Star 或 Fork；安装汇报完成后显式询问用户是否愿意为主仓 `mindie-agent/mindie-agent` 点亮 Star ⭐。只有用户明确开启知识贡献后，Agent 才按需创建目标知识仓的 Fork，并将其绑定到贡献配置。
+   安装过程不未经询问静默执行 Star 或 Fork；第 5 步通过原生交互弹窗询问用户是否开启社区贡献、是否点亮主仓 `mindie-agent/mindie-agent` Star ⭐ 以及工作区初始化选项。只有用户明确开启知识贡献后，才按需自动解析或创建目标知识仓的 Fork 并绑定到贡献配置。
 
 3. **添加插件源、安装并完成无模型冷启动初始化**：
    ```sh
-   claude plugin marketplace add "https://github.com/mindie-agent/mindie-agent-cc.git#v0.1.15"
+   claude plugin marketplace add "https://github.com/mindie-agent/mindie-agent-cc.git#v0.1.16"
    claude plugin install mindie-agent@mindie-agent-cc --scope user
-   claude --init-only
+   UV_SYSTEM_CERTS=true UV_NATIVE_TLS=true claude --init-only
    ```
    > 说明：`claude --init-only` 会在不发起对话、不消耗模型 Token 的情况下触发 `SessionStart`，通过 `uv` 自动准备 Python 3.13 并安装完整锁定的运行时环境。
 
-4. **核对插件安装状态**：
+4. **核对插件安装与共享授权状态**：
    ```sh
    claude plugin list --json
    claude mcp list
+   SETUP_PY=$(python3 -c "import glob, os; p = sorted(glob.glob(os.path.expanduser('~/.claude/plugins/**/mindie-agent*/scripts/setup.py'), recursive=True)); print(p[-1] if p else '')")
+   uv run --no-project --python 3.13 python "$SETUP_PY" sharing --status
    ```
-   - 确认 `claude plugin list --json` 中包含 `mindie-agent@mindie-agent-cc`（版本 `0.1.14`，状态已启用）。
+   - 确认 `claude plugin list --json` 中包含 `mindie-agent@mindie-agent-cc`（版本 `0.1.15`，状态已启用），并检查 `setup.py sharing --status` 返回的 JSON（含 `needs_onboarding_prompt` 状态）。
    - 确认 `claude mcp list` 中插件的 `knowledge`、`remote`、`components` 三个 MCP 服务均显示 `Connected`。其中 `components` 显示 `Connected` 表示 MCP 工具入口已就绪；调用 `coordinator`、`profiler`、`sim` 时，对应可选 CLI 仍需已安装或在适配器配置中指定路径。验证通过后，向用户汇报已验证的 GitHub 账号（`$GH_USER`）及插件就绪状态。
 
-   验证成功后继续第 5 步，完成首次配置后一起汇报安装结果。
+   验证成功后立即继续第 5 步，完成首次交互式配置后一起汇报安装结果。
 
-5. **完成首次配置与开发工作区引导**：
-   - 向用户简要说明 [用户须知](skills/mindie-agent/references/user-notice.md)，随后按 [工作区配置指南](skills/mindie-agent/references/workspace-setup.md) 引导工作区选择：无论是否开启社区贡献，都提供**新建并初始化 `vllm-ascend-workspace`**、**复用已有工作区目录**或**保持当前目录**三种选择（已有确认记录时直接复用）。
-   - 若用户选择新建或复用工作区，自动通过当前宿主的原生项目/工作区入口完成路径登记并核对结果，调用工作区内的 `repo_init.py` 完成源码与远端分支初始化（直接复用前序已验证的 GitHub 登录与已有 Fork 配置）。
-   - 汇总汇报插件安装状态、工作区路径、宿主登记结果与源码初始化状态（如有需用户在宿主界面点击的尾步一并说明）。
-   - **询问用户是否愿意给主仓点个 Star ⭐**：在汇报末尾主动询问用户：*“如果觉得 MindIE Agent 对你有帮助，需要我顺手帮你在 GitHub 上给主仓 `mindie-agent/mindie-agent` 点个 Star 吗？这能帮助项目更好地成长！⭐”* **严格授权原则**：仅当用户明确表示同意（如回复“好”、“可以”、“yes”等）时才执行以下命令点亮并校验主仓 Star，严禁未经用户同意自动静默执行：
-     ```sh
-     gh api --hostname github.com --silent -X PUT /user/starred/mindie-agent/mindie-agent && gh api --hostname github.com --silent /user/starred/mindie-agent/mindie-agent
-     ```
+5. **弹出原生交互式配置提问框（Step 5 Onboarding Popup）并执行绑定**：
+   - 当刚刚完成安装或 `setup.py sharing --status` 显示 `"needs_onboarding_prompt": true` 时，先简要说明 [用户须知](skills/mindie-agent/references/user-notice.md)，随后**立即调用 Claude Code 原生 `AskUserQuestion` 工具**，一次性弹出以下 3 个首次配置问题：
+     1. **社区知识共享与自动故障上报**（`header: "Sharing"`，`multiSelect: false`）：`Enable (Recommended)`（开启经验脱敏共享 PR 与故障自动上报） vs `Keep Local-Only Mode`（仅本地模式，关闭外发）
+     2. **GitHub Star ⭐ 支持**（`header: "GitHub Star"`，`multiSelect: false`）：`Star on GitHub (Recommended)`（为主仓 `mindie-agent/mindie-agent` 点亮 Star ⭐） vs `Skip for now`（暂不操作）
+     3. **本地开发工作区 `vllm-ascend-workspace`**（`header: "Workspace"`，`multiSelect: false`）：`Initialize vllm-ascend-workspace (Recommended)`（新建并初始化协同工作区） vs `Keep current directory`（保持当前目录） vs `Use existing workspace directory`（复用已有工作区目录）
+   - 收到用户选择后，严格按以下顺序执行：
+     1. **先确定工作区路径 `WORKSPACE_ROOT`**：若用户选择新建或复用工作区，按 [工作区配置指南](skills/mindie-agent/references/workspace-setup.md) 初始化或解析路径并记录为 `WORKSPACE_ROOT`（保持当前目录则 `WORKSPACE_ROOT="$(pwd)"`），并通过宿主的原生项目/工作区入口完成路径登记与 `repo_init.py` 源码初始化。
+     2. **持久化统一贡献与共享设置**：
+        ```sh
+        # 若用户选择 Enable (Recommended)：
+        uv run --no-project --python 3.13 python "$SETUP_PY" sharing --enable --project-root "$WORKSPACE_ROOT"
+        # 若用户选择 Keep Local-Only Mode：
+        uv run --no-project --python 3.13 python "$SETUP_PY" sharing --disable
+        ```
+     3. **按用户授权执行 GitHub Star ⭐**（仅当用户明确选择了 `Star on GitHub (Recommended)` 时执行，严禁未经同意静默执行）：
+        ```sh
+        gh api --hostname github.com --silent -X PUT /user/starred/mindie-agent/mindie-agent && gh api --hostname github.com --silent /user/starred/mindie-agent/mindie-agent
+        ```
+   - 汇总汇报插件安装状态、共享与故障上报开关状态、工作区路径及 Star 状态。
 
 </details>
 
@@ -161,7 +179,7 @@ MindIE Agent 将交互能力收敛在 **`/mindie-agent` 这一统一入口**中�
 
 ### 自动更新与安全卸载
 
-- **后台静默更新**：后台维护线程按冷却周期异步检查兼容当前 Claude Code 版本的最高正式插件 Release 以及各官方共享组件仓库的正式 GitHub Release（参见 [`docs/releases/mindie-agent-cc-0.1.14.md`](docs/releases/mindie-agent-cc-0.1.14.md)）。新版本或新组件组合的 Python 运行时在后台独立构建并通过无模型探针校验，待服务空闲时退役旧服务并冷态原子切换绑定，全程不阻塞当前对话、不主动启动知识服务，也不会重置你的统一贡献开关配置与会话手动 `/mindie-agent` 授权边界。
+- **后台静默更新**：后台维护线程按冷却周期异步检查兼容当前 Claude Code 版本的最高正式插件 Release 以及各官方共享组件仓库的正式 GitHub Release（参见 [`docs/releases/mindie-agent-cc-0.1.15.md`](docs/releases/mindie-agent-cc-0.1.15.md)）。新版本或新组件组合的 Python 运行时在后台独立构建并通过无模型探针校验，待服务空闲时退役旧服务并冷态原子切换绑定，全程不阻塞当前对话、不主动启动知识服务，也不会重置你的统一贡献开关配置与会话手动 `/mindie-agent` 授权边界。
 - **安全卸载**：关闭正在使用插件的会话后，在终端执行原生卸载命令（建议加上 `--keep-data` 保留运行时数据与回执，确保历史任务安全收尾）：
   ```sh
   claude plugin uninstall mindie-agent@mindie-agent-cc --scope user --keep-data --json
@@ -194,7 +212,7 @@ flowchart LR
 ### 本地目录说明
 
 - **锁定运行时目录**：macOS / Linux / WSL 下位于 `${XDG_DATA_HOME:-$HOME/.local/share}/mindie-agent/runtimes/cc`，Windows 下位于 `%LOCALAPPDATA%/mindie-agent/runtimes/cc`（按源码、锁文件与平台哈希隔离存储，构建后不可变）。
-- **持久化发行版入口**：`CLAUDE_PLUGIN_DATA/releases/0.1.14/entry.py`（脱离宿主易失缓存，确保长会话期间入口稳定可用）。
+- **持久化发行版入口**：`CLAUDE_PLUGIN_DATA/releases/0.1.15/entry.py`（脱离宿主易失缓存，确保长会话期间入口稳定可用）。
 - **适配器配置文件**：`${XDG_CONFIG_HOME:-$HOME/.config}/mindie-agent/cc.json`（记录当前安装绑定；用户的贡献授权与范围作为持久数据独立保存）。
 
 ---
@@ -217,7 +235,9 @@ uv run --locked --no-editable --group test python scripts/product_contract.py --
 uv run --locked --no-editable --group test python scripts/harness.py --source . --tests tests --revision "$(git rev-parse HEAD)"
 ```
 
-- **发行版微基准测试（Release Microbenchmark）**：每个 `0.1.14` 插件 Release 均随附 `benchmark-results.json` 和 `benchmark-results.md`，按 [`benchmarks/release.json`](benchmarks/release.json) 测量 `public-transcript` 公开消息解析与隐藏推理过滤的耗时（单位 `us/op`）。该指标作为可复现的本地 CPU 微基准基线，与远端 A2/A3 NPU 实机集成验收及端到端 Agent 研发效率评估相互独立。
+### 发布基准测试（Release Benchmark）
+
+- **发行版微基准测试（Release Microbenchmark）**：每个 `0.1.15` 插件 Release 均随附 `benchmark-results.json` 和 `benchmark-results.md`，按 [`benchmarks/release.json`](benchmarks/release.json) 测量 `public-transcript` 公开消息解析与隐藏推理过滤的耗时（单位 `us/op`）。该指标作为可复现的本地 CPU 微基准基线，与远端 A2/A3 NPU 实机集成验收及端到端 Agent 研发效率评估相互独立。
 
 ---
 

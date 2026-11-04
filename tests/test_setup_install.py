@@ -473,3 +473,67 @@ def test_default_coinstallation_preserves_shared_authority_bytes(tmp_path):
     before = community.read_bytes(), consent.read_bytes()
     assert setup.write_community(community, None, python=sys.executable) == "enabled"
     assert (community.read_bytes(), consent.read_bytes()) == before
+
+
+def test_sharing_mutual_exclusivity_and_validation_preserve_consent(tmp_path):
+    config = tmp_path / "profile" / "cc.json"
+    scope = tmp_path / "workspace"
+    scope.mkdir(parents=True)
+    consent_file = config.with_name("mindie-consent.json")
+    for invalid_argv in (
+        ["sharing", "--config", str(config)],
+        ["sharing", "--config", str(config), "--enable", "--disable"],
+        ["sharing", "--config", str(config), "--status", "--enable"],
+        ["sharing", "--config", str(config), "--enable", "--repository", "invalid_repo", "--project-root", str(scope)],
+        ["sharing", "--config", str(config), "--enable", "--project-root", str(tmp_path / "nonexistent")],
+        ["sharing", "--config", str(config), "--enable", "--visibility", "private", "--project-root", str(scope)],
+    ):
+        with pytest.raises(SystemExit) as exc_info:
+            setup.main(invalid_argv)
+        assert exc_info.value.code == 2
+        assert not consent_file.exists()
+
+
+def test_sharing_status_enable_and_disable_lifecycle(tmp_path, capsys):
+    config = tmp_path / "profile" / "cc.json"
+    scope = tmp_path / "workspace"
+    scope.mkdir(parents=True)
+    diag_cfg = config.parent / "diagnostics.json"
+
+    with patch.dict(os.environ, {"MINDIE_DIAGNOSTICS_CONFIG": str(diag_cfg)}), \
+            patch.object(setup, "resolve_github_identity",
+                         side_effect=lambda _repo, account=None, fork=None: (
+                             account or "alice", fork or "alice/knowledge-vllm-ascend")), \
+            patch("mindie_diagnostics.reporting_commands.ensure", return_value={"status": "running"}):
+        setup.main(["sharing", "--status", "--config", str(config)])
+        status0 = json.loads(capsys.readouterr().out)
+        assert status0["schema"] == "mindie-sharing-status/1"
+        assert status0["harness"] == "claude-code"
+        assert status0["consent_choice"] is None
+        assert status0["sharing_enabled"] is False
+        assert status0["reporting_enabled"] is False
+        assert status0["needs_onboarding_prompt"] is True
+
+        setup.main(["sharing", "--enable", "--config", str(config), "--project-root", str(scope)])
+        capsys.readouterr()
+
+        setup.main(["sharing", "--status", "--config", str(config)])
+        after_enable = json.loads(capsys.readouterr().out)
+        assert after_enable["consent_choice"] == "contribute"
+        assert after_enable["sharing_enabled"] is True
+        assert after_enable["reporting_enabled"] is True
+        assert after_enable["account"] == "alice"
+        assert after_enable["fork"] == "alice/knowledge-vllm-ascend"
+        assert after_enable["project_roots"] == [str(scope.resolve())]
+        assert after_enable["needs_onboarding_prompt"] is False
+
+        setup.main(["sharing", "--disable", "--config", str(config)])
+        capsys.readouterr()
+
+        setup.main(["sharing", "--status", "--config", str(config)])
+        after_disable = json.loads(capsys.readouterr().out)
+        assert after_disable["consent_choice"] == "disabled"
+        assert after_disable["sharing_enabled"] is False
+        assert after_disable["reporting_enabled"] is False
+        assert after_disable["fork"] == "alice/knowledge-vllm-ascend"
+        assert after_disable["needs_onboarding_prompt"] is False
