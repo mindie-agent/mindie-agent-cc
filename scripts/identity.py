@@ -10,22 +10,26 @@ connecting `PreToolUse` to `mcp_server.py`.
   `PreToolUse` binds that ID to `(session_id, tool_name, input_sha256)` and
   `mcp_server.py` consumes it at most once within `BIND_TTL_SECONDS`.
 - Never trusts session identity passed inside model-controlled tool arguments.
+- Bind-store OSErrors keep errno and the fixed label `mcp-binds.sqlite3`.
+  Absolute locations are not copied into the exception text.
 
 [Timeouts & Locks]
 - Uses SQLite WAL mode with `busy_timeout=5000` (`timeout=5.0`) and `BEGIN IMMEDIATE`
   transactions for atomic bind claim/finish.
 
 [Side-Effect Policy]
-- Mutates only `state_dir() / "native-tool-binds.sqlite3"`.
+- Mutates only `state_dir() / "mcp-binds.sqlite3"`.
 """
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
 import re
 import sqlite3
+import stat
 import time
 from pathlib import Path
 
@@ -180,20 +184,150 @@ def bind_db_path(config=None) -> Path:
     return state_dir(config) / "mcp-binds.sqlite3"
 
 
-def _connect(path: Path, *, create: bool):
-    if not path.exists() and not create:
-        raise FileNotFoundError(str(path))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(path, timeout=5.0)
-    db.execute("PRAGMA busy_timeout=5000;")
-    if create:
-        db.execute("PRAGMA journal_mode=WAL;")
+_BIND_DB_NAME = "mcp-binds.sqlite3"
+_SAFE_LABEL = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,80}\Z")
+
+
+def _known_errnos(*names: str) -> frozenset:
+    values = []
+    for name in names:
+        value = getattr(errno, name, None)
+        if type(value) is int and value > 0:
+            values.append(value)
+    return frozenset(values)
+
+
+_DISK_ERRNOS = _known_errnos("ENOSPC", "EROFS", "EIO", "EDQUOT")
+_PATH_ERRNOS = _known_errnos("ENOENT", "ENOTDIR", "EISDIR", "ENAMETOOLONG", "ELOOP", "EEXIST")
+_PERM_ERRNOS = _known_errnos("EACCES", "EPERM")
+_MODE_UNSUPPORTED = _known_errnos("ENOTSUP", "EOPNOTSUPP", "EINVAL")
+
+
+def _safe_store_label(path: Path) -> str:
+    name = path.name
+    if name == _BIND_DB_NAME and _SAFE_LABEL.fullmatch(name):
+        return name
+    return "bind-store"
+
+
+def _storage_kind(exc) -> str:
+    if isinstance(exc, TimeoutError) or not isinstance(exc, OSError):
+        return "other"
+    if isinstance(exc, PermissionError):
+        return "permission"
+    if isinstance(exc, (FileNotFoundError, NotADirectoryError, IsADirectoryError, FileExistsError)):
+        return "path"
+    number = exc.errno if type(exc.errno) is int else None
+    if number in _DISK_ERRNOS:
+        return "disk"
+    if number in _PATH_ERRNOS:
+        return "path"
+    if number in _PERM_ERRNOS:
+        return "permission"
+    return "io"
+
+
+def _annotate_storage(path: Path, exc: OSError) -> OSError:
+    """Rebuild the OSError so its text cannot carry an absolute location."""
+    number = exc.errno if type(exc.errno) is int else None
+    label = _safe_store_label(path)
+    detail = exc.strerror if isinstance(exc.strerror, str) else ""
+    if not detail or any(mark in detail for mark in ("/", "\\", "\n")):
+        detail = "bind store unavailable"
+    if number is None:
+        cloned = type(exc)(detail)
+    else:
+        cloned = type(exc)(number, detail, label)
+    cloned.diagnostic_path = label
+    return cloned
+
+
+def _raise_storage(path: Path, exc: OSError) -> None:
+    if isinstance(exc, TimeoutError):
+        raise exc
+    raised = _annotate_storage(path, exc)
+    raise raised.with_traceback(exc.__traceback__) from None
+
+
+def bind_storage_facts(exc) -> dict:
+    """Errno and safe path label for a bind-store OSError. Empty for other errors."""
+    if isinstance(exc, TimeoutError) or not isinstance(exc, OSError):
+        return {}
+    facts = {}
+    number = exc.errno
+    if type(number) is int:
+        facts["errno"] = number
+    label = getattr(exc, "diagnostic_path", None)
+    if isinstance(label, str) and _SAFE_LABEL.fullmatch(label):
+        facts["path"] = label
+    return facts
+
+
+def _probe_store(path: Path):
+    """Stat the bind database. A symlink loop is not reported as a missing file."""
+    try:
+        return path.stat()
+    except TimeoutError:
+        raise
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        _raise_storage(path, exc)
+
+
+def _restrict_mode(path: Path) -> None:
+    """Owner-only mode. Disk and path failures stay visible; mode metadata may not."""
     try:
         os.chmod(path, 0o600)
     except TimeoutError:
         raise
+    except OSError as exc:
+        # A filesystem that rejects chmod can still store the receipt. Disk and
+        # path errors mean the write itself is not trustworthy.
+        kind = _storage_kind(exc)
+        if kind == "permission" or (type(exc.errno) is int and exc.errno in _MODE_UNSUPPORTED):
+            return
+        _raise_storage(path, exc)
+
+
+def _connect(path: Path, *, create: bool):
+    info = _probe_store(path)
+    if info is None and not create:
+        _raise_storage(
+            path, FileNotFoundError(errno.ENOENT, "bind store is missing", _safe_store_label(path)),
+        )
+    if info is not None and not stat.S_ISREG(info.st_mode):
+        number = errno.EISDIR if stat.S_ISDIR(info.st_mode) else errno.EINVAL
+        _raise_storage(path, OSError(number, "bind store is not a regular file", _safe_store_label(path)))
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except TimeoutError:
+        raise
+    except OSError as exc:
+        _raise_storage(path, exc)
+    db = None
+    try:
+        db = sqlite3.connect(path, timeout=5.0)
+        db.execute("PRAGMA busy_timeout=5000;")
+        if create:
+            db.execute("PRAGMA journal_mode=WAL;")
+    except TimeoutError:
+        if db is not None:
+            db.close()
+        raise
+    except OSError as exc:
+        if db is not None:
+            db.close()
+        _raise_storage(path, exc)
+    except sqlite3.Error:
+        if db is not None:
+            db.close()
+        raise
+    try:
+        _restrict_mode(path)
     except OSError:
-        pass
+        db.close()
+        raise
     return db
 
 

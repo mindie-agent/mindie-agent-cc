@@ -71,17 +71,24 @@ def build_metadata():
         else:
             # Old updaters do not emit diagnostic-build.json. Their completed
             # Git generation and stamped host manifest are existing facts.
+            # A native plugin tree keeps the same version in `.claude-plugin`.
             generation = here.parent
-            if here.name != "scripts" or generation.parent.name != "generations":
+            if here.name == "scripts" and generation.parent.name == "generations":
+                revision = _hex(generation.name, 40)
+                marker = _read_small(generation / ".mindie-generation-complete")
+                if not revision or marker is None or marker.strip() != revision:
+                    return {}
+                manifest = json.loads(_read_small(generation / "host-package" / ".claude-plugin" / "plugin.json") or "null")
+                data = {"revision": revision}
+                if isinstance(manifest, dict) and manifest.get("name") == "mindie-agent":
+                    data["version"] = manifest.get("version")
+            elif here.name == "scripts":
+                manifest = json.loads(_read_small(generation / ".claude-plugin" / "plugin.json") or "null")
+                if not isinstance(manifest, dict) or manifest.get("name") != "mindie-agent":
+                    return {}
+                data = {"version": manifest.get("version")}
+            else:
                 return {}
-            revision = _hex(generation.name, 40)
-            marker = _read_small(generation / ".mindie-generation-complete")
-            if not revision or marker is None or marker.strip() != revision:
-                return {}
-            manifest = json.loads(_read_small(generation / "host-package" / ".claude-plugin" / "plugin.json") or "null")
-            data = {"revision": revision}
-            if isinstance(manifest, dict) and manifest.get("name") == "mindie-agent":
-                data["version"] = manifest.get("version")
         if not isinstance(data, dict):
             return {}
         revision = _hex(data.get("revision"), 40)
