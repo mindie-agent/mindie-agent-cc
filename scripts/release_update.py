@@ -27,7 +27,7 @@ import sys
 import threading
 import time
 
-from bounded import run
+from bounded import classify_transport_text, run
 from harness import HARNESS, REPOSITORY, compatibility, native_version
 from install_state import OperationLock, LockTimeout, atomic_write, read_binding
 from paths import MARKETPLACE, PLUGIN_QUALIFIED
@@ -41,6 +41,47 @@ RECEIPT_NAME = "release-update.json"
 
 class NativePluginDisabled(RuntimeError):
     """A saved native disable takes precedence over background preparation."""
+
+
+_KNOWN_FETCH_CODES = frozenset({"release_http_error", "release_transport_unavailable"})
+
+
+def _typed_update_error(exc):
+    """Attach shared update categories; never copy private exception text."""
+    from mindie_knowledge.releases_io import ReleaseFetchError
+
+    if isinstance(exc, ReleaseFetchError) and getattr(exc, "category", None) is None:
+        if getattr(exc, "code", None) not in _KNOWN_FETCH_CODES:
+            exc.category = "rate_limited" if getattr(exc, "status", None) == 429 else "temporary_network"
+    return exc
+
+
+def _record_update_failure(stage, exc):
+    import diagnostic_support
+
+    typed = _typed_update_error(exc)
+    code = getattr(typed, "returncode", None)
+    return diagnostic_support.failure(
+        "release.update", stage, "update", exception=typed,
+        exit_code=code if type(code) is int else None,
+    )
+
+
+def _forget_process_streams(process):
+    return process.pop("stdout", None), process.pop("stderr", None)
+
+
+def _native_writer_error(process, streams):
+    error = RuntimeError("native installation did not complete cleanly; inspect its receipt")
+    code = process.get("returncode")
+    if type(code) is int:
+        error.returncode = code
+    kind = classify_transport_text("\n".join(part for part in streams if isinstance(part, str)))
+    if kind is not None:
+        error.category, retry_after = kind
+        if retry_after is not None:
+            error.retry_after = retry_after
+    return error
 
 
 class BackgroundCheck:
@@ -114,8 +155,7 @@ class BackgroundCheck:
 
     @staticmethod
     def _record_error(exc):
-        import diagnostic_support
-        diagnostic_support.failure("release.update", "background_check", "update", exception=exc)
+        _record_update_failure("background_check", exc)
 
     def close(self):
         self.cancel.set()
@@ -193,13 +233,14 @@ def native_binary(binding):
     engine = config_at(binding["engine_config"])
     native = engine.get("service_launch_context", {}).get("paths", {}).get("MINDIE_CC_BIN")
     if not isinstance(native, str) or not os.path.isabs(native):
-        raise ValueError("native Claude executable is not bound to the installation")
+        raise FileNotFoundError("native Claude executable is not bound to the installation")
     return native
 
 
 def _native_json(native, args):
     value = json.loads(run(
         [native, "plugin", *args], timeout=120.0, max_output=4 * 1024 * 1024,
+        transport=True,
     ))
     return value
 
@@ -210,7 +251,7 @@ def installed_plugin(native):
         raise ValueError("native plugin list is malformed")
     matches = [row for row in rows if isinstance(row, dict) and row.get("id") == PLUGIN_QUALIFIED]
     if len(matches) != 1 or matches[0].get("scope") != "user":
-        raise ValueError("one user-scoped MindIE native installation is required")
+        raise FileNotFoundError("one user-scoped MindIE native installation is required")
     row = matches[0]
     if type(row.get("enabled")) is not bool:
         raise ValueError("native plugin enablement is malformed")
@@ -294,8 +335,9 @@ def _mutation(binding, state, native, args, stage):
     process = {}
     try:
         output = run([native, "plugin", *args], timeout=120.0, check=False, receipt=process,
-                     max_output=4 * 1024 * 1024)
+                     transport=True, capture_stderr=True, max_output=4 * 1024 * 1024)
     except BaseException as original:
+        _forget_process_streams(process)
         if process.get("started") is False:
             state["native_effect"] = "not_started"
         state["process"] = process
@@ -305,13 +347,14 @@ def _mutation(binding, state, native, args, stage):
             state["recording_error"] = type(recording).__name__
             original.add_note("native outcome recording failed: " + type(recording).__name__)
         raise
+    streams = _forget_process_streams(process)
     state["process"] = process
     if process.get("completed") is True and process.get("cleanup_failed") is False:
         state["native_effect"] = "completed"
     _record(binding, state)
     if (process.get("returncode") != 0 or process.get("completed") is not True
             or process.get("cleanup_failed") is not False):
-        raise RuntimeError("native installation did not complete cleanly; inspect its receipt")
+        raise _native_writer_error(process, streams)
     return output
 
 
@@ -326,7 +369,8 @@ def _verify_catalog(native, candidate):
     if not isinstance(location, str) or not os.path.isabs(location):
         raise ValueError("native catalog path is invalid")
     source = Path(location)
-    revision = run(["git", "-C", str(source), "rev-parse", "HEAD"], timeout=30.0).strip()
+    revision = run(["git", "-C", str(source), "rev-parse", "HEAD"], timeout=30.0,
+                   transport=True).strip()
     if revision != metadata["source"]["sha"]:
         raise ValueError("native catalog checkout differs from the selected immutable SHA")
     if compatibility(source) != metadata["compatibility"]:
@@ -618,9 +662,7 @@ def main():
             except Exception as exc:
                 result.update(status="failed", last_failed_check=time.time(),
                               error_type=type(exc).__name__)
-                import diagnostic_support
-                result["diagnostic"] = diagnostic_support.failure(
-                    "release.update", "native_update", "update", exception=exc)
+                result["diagnostic"] = _record_update_failure("native_update", exc)
             _record(binding, result)
     except LockTimeout:
         return
