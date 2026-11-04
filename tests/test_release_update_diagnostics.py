@@ -1,5 +1,6 @@
 """native_update classifies environment misses; real crashes stay internal."""
 
+import builtins
 import json
 import os
 from pathlib import Path
@@ -60,12 +61,46 @@ def test_http_catalog_miss_is_connectivity_not_internal(tmp_path):
     assert event["reportable"] is False
 
 
-def test_malformed_release_feed_is_not_an_internal_product_fault(tmp_path):
-    receipt, event = _record_check_failure(tmp_path, ReleaseFetchError("invalid_release_json"))
+@pytest.mark.parametrize("code", (
+    "release_source_blob_mismatch",
+    "release_source_declaration_mismatch",
+    "invalid_release_json",
+))
+def test_source_integrity_failure_stays_reportable(tmp_path, code):
+    receipt, event = _record_check_failure(tmp_path, ReleaseFetchError(code))
+    assert receipt["status"] == "failed"
+    assert receipt["error_type"] == "ReleaseFetchError"
+    assert event["attributes"]["category"] == "internal"
+    assert event["attributes"]["error_code"] == "update_internal_failure"
+    assert event["attributes"]["error_type"] == "ReleaseFetchError"
+    assert event["reportable"] is True
+
+
+def test_rate_limited_catalog_is_connectivity(tmp_path):
+    receipt, event = _record_check_failure(
+        tmp_path, ReleaseFetchError("release_response_too_large", status=429))
     assert receipt["status"] == "failed"
     assert event["attributes"]["category"] == "connectivity"
     assert event["attributes"]["error_code"] == "update_transport_unavailable"
     assert event["reportable"] is False
+
+
+def test_release_import_failure_still_records_the_original_error(tmp_path, monkeypatch):
+    original_import = builtins.__import__
+
+    def fail_release_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "mindie_knowledge.releases_io":
+            raise ImportError("semantic_version is not installed")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", fail_release_import)
+    original = RuntimeError("native helper dumped core")
+    receipt, event = _record_check_failure(tmp_path, original)
+    assert receipt["status"] == "failed"
+    assert receipt["error_type"] == "RuntimeError"
+    assert event["attributes"]["error_type"] == "RuntimeError"
+    assert event["attributes"]["category"] == "internal"
+    assert event["reportable"] is True
 
 
 def test_missing_native_binary_is_a_local_prerequisite(tmp_path):
