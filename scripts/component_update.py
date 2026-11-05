@@ -38,7 +38,7 @@ def prepare(source, python, root, *, current_python=None, force=False, current_s
     if not selected["changed"] and current_source == baseline["source_sha256"] and not needs_binding:
         return None
     pins = {name: row["revision"] for name, row in selected["runtime"].items()}
-    if pins == baseline["runtime"] and not needs_binding:
+    if (current_python is not None or not selected["changed"]) and pins == baseline["runtime"] and not needs_binding:
         return None
     artifact = build(source, root, baseline, selected["runtime"], python=python,
                      adapter_distribution="mindie-agent-cc",

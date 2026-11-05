@@ -155,8 +155,15 @@ def installed_revisions(pins):
             raise CheckFailure("runtime_pins", "receipt_invalid", name) from exc
         if actual != expected:
             raise CheckFailure("runtime_pins", "revision_mismatch", name)
-        repository = {"mindie-knowledge": "knowledge", "remote-dev": "remote-dev",
-                      "mindie-diagnostics": "diagnostics"}[name]
+        repository = {
+            "mindie-knowledge": "knowledge",
+            "remote-dev": "remote-dev",
+            "mindie-diagnostics": "diagnostics",
+            "mindie-debugger": "debugger",
+            "mindie-profiler": "profiler",
+            "mindie-sim": "sim",
+            "mindie-coordinator": "coordinator",
+        }[name]
         if direct.get("url") not in (
             f"https://github.com/mindie-agent/{repository}",
             f"https://github.com/mindie-agent/{repository}.git",

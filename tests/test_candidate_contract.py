@@ -115,7 +115,18 @@ class ProductContractTests(unittest.TestCase):
             self.assertEqual(first["candidate_revision"], "a" * 40)
             declared = json.loads((source / "product-contract.json").read_text())
             self.assertEqual(first["publication"], declared["publication"])
-            self.assertEqual(set(first["runtime"]), {"mindie-knowledge", "remote-dev", "mindie-diagnostics"})
+            self.assertEqual(
+                set(first["runtime"]),
+                {
+                    "mindie-knowledge",
+                    "remote-dev",
+                    "mindie-diagnostics",
+                    "mindie-debugger",
+                    "mindie-profiler",
+                    "mindie-sim",
+                    "mindie-coordinator",
+                },
+            )
             (source / "scripts" / "marker.py").write_text("value = 2\n", encoding="utf-8")
             second = product_contract.identity(source, "a" * 40)
             self.assertNotEqual(second["source_sha256"], first["source_sha256"])

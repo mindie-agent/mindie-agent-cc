@@ -6,8 +6,10 @@ Computes deterministic source/product/dependency digests (`product-contract.json
 
 [Invariants]
 - `uv.lock` is the sole dependency authority, requiring exact 40-hex commit pins
-  for `mindie-knowledge`, `remote-dev`, and `mindie-diagnostics`; a declared
-  `project.dependencies` block in `pyproject.toml` must agree with those pins.
+  for all declared runtime components (`mindie-knowledge`, `remote-dev`,
+  `mindie-diagnostics`, `mindie-debugger`, `mindie-profiler`, `mindie-sim`,
+  `mindie-coordinator`); a declared `project.dependencies` block in `pyproject.toml`
+  must agree with those pins.
 - Exit status stays authoritative in `failure_receipt`.
 
 [Timeouts & Locks]
@@ -60,7 +62,15 @@ FAILURE_CODES = {
     "validation": {"internal_error", "timeout"},
     "process": {"nonzero_exit"},
 }
-FAILURE_COMPONENTS = {"mindie-knowledge", "remote-dev", "mindie-diagnostics"}
+FAILURE_COMPONENTS = {
+    "mindie-knowledge",
+    "remote-dev",
+    "mindie-diagnostics",
+    "mindie-debugger",
+    "mindie-profiler",
+    "mindie-sim",
+    "mindie-coordinator",
+}
 PUBLICATION_PROCESS_CODES = {"init_failed", "fetch_failed", "revision_read_failed"}
 
 
@@ -172,8 +182,15 @@ def requirements(source):
     if len(raw) > 4 * 1024 * 1024:
         raise ValueError("uv.lock exceeds the metadata byte bound")
     pins = {}
-    expected = {"mindie-knowledge": "knowledge", "remote-dev": "remote-dev",
-                "mindie-diagnostics": "diagnostics"}
+    expected = {
+        "mindie-knowledge": "knowledge",
+        "remote-dev": "remote-dev",
+        "mindie-diagnostics": "diagnostics",
+        "mindie-debugger": "debugger",
+        "mindie-profiler": "profiler",
+        "mindie-sim": "sim",
+        "mindie-coordinator": "coordinator",
+    }
     for package in tomllib.loads(raw.decode("utf-8")).get("package", []):
         name = package.get("name")
         if name not in expected:

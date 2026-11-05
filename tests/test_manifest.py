@@ -41,7 +41,18 @@ class ManifestTests(unittest.TestCase):
     def test_runtime_pins(self):
         from product_contract import requirements
         pins, digest = requirements(ROOT)
-        self.assertEqual(set(pins), {"mindie-knowledge", "remote-dev", "mindie-diagnostics"})
+        self.assertEqual(
+            set(pins),
+            {
+                "mindie-knowledge",
+                "remote-dev",
+                "mindie-diagnostics",
+                "mindie-debugger",
+                "mindie-profiler",
+                "mindie-sim",
+                "mindie-coordinator",
+            },
+        )
         self.assertEqual(len(digest), 64)
         for pin in pins.values():
             self.assertRegex(pin, r"^[0-9a-f]{40}$")

@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.11, <3.15"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
@@ -1867,35 +1867,35 @@ name = "mindie-agent-cc"
 version = "0.1.16"
 source = { editable = "." }
 dependencies = [
+    { name = "mindie-coordinator" },
+    { name = "mindie-debugger" },
     { name = "mindie-diagnostics" },
     { name = "mindie-knowledge" },
+    { name = "mindie-profiler" },
+    { name = "mindie-sim" },
     { name = "remote-dev" },
 ]
 
 [package.dev-dependencies]
 test = [
     { name = "hatchling" },
-    { name = "mindie-coordinator" },
-    { name = "mindie-debugger" },
-    { name = "mindie-profiler" },
-    { name = "mindie-sim" },
     { name = "pytest" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "mindie-coordinator", git = "https://github.com/mindie-agent/coordinator?rev=14d7cec7247bdcbea9b9878db4770e3a05a6ea41" },
+    { name = "mindie-debugger", git = "https://github.com/mindie-agent/debugger?rev=e9406b2b178335190d5cb59dff4d6985894497ba" },
     { name = "mindie-diagnostics", git = "https://github.com/mindie-agent/diagnostics?rev=f338788cecc56f7aff1dccab1d53426c9e28fe7f" },
     { name = "mindie-knowledge", git = "https://github.com/mindie-agent/knowledge?rev=1840bd4e238e718676768489058917818d18cd3c" },
+    { name = "mindie-profiler", git = "https://github.com/mindie-agent/profiler?rev=79d97e75bff7351b0472b93c03b072c1cf47f5e7" },
+    { name = "mindie-sim", git = "https://github.com/mindie-agent/sim?rev=dbadff04b60937a0722b0a227cdad01beed083cd" },
     { name = "remote-dev", git = "https://github.com/mindie-agent/remote-dev?rev=131b24533479e9cefc572144adccdcb345f70846" },
 ]
 
 [package.metadata.requires-dev]
 test = [
     { name = "hatchling", specifier = "==1.32.4" },
-    { name = "mindie-coordinator", git = "https://github.com/mindie-agent/coordinator?rev=14d7cec7247bdcbea9b9878db4770e3a05a6ea41" },
-    { name = "mindie-debugger", git = "https://github.com/mindie-agent/debugger?rev=e9406b2b178335190d5cb59dff4d6985894497ba" },
-    { name = "mindie-profiler", git = "https://github.com/mindie-agent/profiler?rev=79d97e75bff7351b0472b93c03b072c1cf47f5e7" },
-    { name = "mindie-sim", git = "https://github.com/mindie-agent/sim?rev=dbadff04b60937a0722b0a227cdad01beed083cd" },
     { name = "pytest", specifier = "==9.1.1" },
 ]
 
