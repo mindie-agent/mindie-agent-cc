@@ -11,16 +11,16 @@ dependencies = [
   "mindie-knowledge @ git+https://github.com/mindie-agent/knowledge@1840bd4e238e718676768489058917818d18cd3c",
   "remote-dev @ git+https://github.com/mindie-agent/remote-dev@131b24533479e9cefc572144adccdcb345f70846",
   "mindie-diagnostics @ git+https://github.com/mindie-agent/diagnostics@f338788cecc56f7aff1dccab1d53426c9e28fe7f",
+  "mindie-debugger @ git+https://github.com/mindie-agent/debugger@e9406b2b178335190d5cb59dff4d6985894497ba",
+  "mindie-profiler @ git+https://github.com/mindie-agent/profiler@79d97e75bff7351b0472b93c03b072c1cf47f5e7",
+  "mindie-sim @ git+https://github.com/mindie-agent/sim@dbadff04b60937a0722b0a227cdad01beed083cd",
+  "mindie-coordinator @ git+https://github.com/mindie-agent/coordinator@14d7cec7247bdcbea9b9878db4770e3a05a6ea41",
 ]
 
 [dependency-groups]
 test = [
   "pytest==9.1.1",
   "hatchling==1.32.4",
-  "mindie-debugger @ git+https://github.com/mindie-agent/debugger@e9406b2b178335190d5cb59dff4d6985894497ba",
-  "mindie-profiler @ git+https://github.com/mindie-agent/profiler@79d97e75bff7351b0472b93c03b072c1cf47f5e7",
-  "mindie-sim @ git+https://github.com/mindie-agent/sim@dbadff04b60937a0722b0a227cdad01beed083cd",
-  "mindie-coordinator @ git+https://github.com/mindie-agent/coordinator@14d7cec7247bdcbea9b9878db4770e3a05a6ea41",
 ]
 
 [tool.hatch.metadata]
