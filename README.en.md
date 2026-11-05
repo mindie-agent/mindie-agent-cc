@@ -116,7 +116,7 @@ If you are an AI Agent asked by the user to install this plugin, run the followi
    - On **Linux or Windows WSL**, if the background knowledge service will be used, also run `systemctl --user show --property=Version` to verify `systemd >= 254` is reachable (inside WSL, use Linux-native `claude`, `git`, `uv`, and `gh`).
 
 2. **Optional project support and contribution setup**:
-   Installing the plugin requires no unprompted Star or Fork of the product repository. Step 5 presents a native interactive popup for community sharing, starring `mindie-agent/mindie-agent` ⭐, and workspace initialization. A target knowledge-repository fork is resolved or created only after the user explicitly enables contribution.
+   Installing the plugin requires no unprompted Star or Fork of the product repository. Step 5 presents a native interactive popup for workspace initialization, community sharing, and optionally giving `mindie-agent/mindie-agent` a Star ⭐. A target knowledge-repository fork is resolved or created only after the user explicitly enables contribution.
 
 3. **Add the marketplace, install the plugin, and initialize the locked runtime**:
    ```sh
@@ -140,9 +140,9 @@ If you are an AI Agent asked by the user to install this plugin, run the followi
 
 5. **Present the Native Interactive Onboarding Popup (Step 5) and apply choices**:
    - Right after installation or whenever `setup.py sharing --status` reports `"needs_onboarding_prompt": true`, summarize the [User & Contribution Notice](skills/mindie-agent/references/user-notice.md) and **immediately invoke Claude Code's native `AskUserQuestion` tool** to ask the 3 onboarding questions in a single popup:
-     1. **Community Knowledge Sharing & Automated Fault Reporting** (`header: "Sharing"`, `multiSelect: false`): `Enable (Recommended)` vs `Keep Local-Only Mode`
-     2. **GitHub Star ⭐ for `mindie-agent/mindie-agent`** (`header: "GitHub Star"`, `multiSelect: false`): `Star on GitHub (Recommended)` vs `Skip for now`
-     3. **Local Development Workspace `vllm-ascend-workspace`** (`header: "Workspace"`, `multiSelect: false`): `Initialize vllm-ascend-workspace (Recommended)` vs `Keep current directory` vs `Use existing workspace directory`
+     1. **Local Development Workspace `vllm-ascend-workspace`** (`header: "Workspace"`, `multiSelect: false`): `Initialize vllm-ascend-workspace (Recommended)` vs `Keep current directory` vs `Use existing workspace directory`
+     2. **Community Knowledge Sharing & Automated Fault Reporting** (`header: "Sharing"`, `multiSelect: false`): `Enable (Recommended)` vs `Keep Local-Only Mode`
+     3. **Would you like to give mindie-agent a Star on GitHub ⭐?** (`header: "GitHub Star"`, `multiSelect: false`): `Sure, star it ⭐ (Recommended)` (Star `mindie-agent/mindie-agent` on GitHub to support the project) vs `Maybe later` (Continue without starring)
    - Once the user responds, execute in this exact order:
      1. **Resolve `WORKSPACE_ROOT` first**: If the user chose to initialize or use an existing workspace, follow [Workspace Setup](skills/mindie-agent/references/workspace-setup.md) to initialize/resolve the directory and store it in `WORKSPACE_ROOT` (or `WORKSPACE_ROOT="$(pwd)"` if keeping the current directory), then register the path in the host client and run `repo_init.py`.
      2. **Persist the unified contribution & sharing choice**:
@@ -152,11 +152,11 @@ If you are an AI Agent asked by the user to install this plugin, run the followi
         # If the user chose Keep Local-Only Mode:
         uv run --no-project --python 3.13 python "$SETUP_PY" sharing --disable
         ```
-     3. **Apply GitHub Star ⭐ only if authorized** (run only when the user explicitly selected `Star on GitHub (Recommended)`):
+     3. **Apply GitHub Star ⭐ only if authorized** (run only when the user explicitly selected `Sure, star it ⭐ (Recommended)`):
         ```sh
         gh api --hostname github.com --silent -X PUT /user/starred/mindie-agent/mindie-agent && gh api --hostname github.com --silent /user/starred/mindie-agent/mindie-agent
         ```
-   - Report the plugin installation status, sharing & fault reporting state, workspace path, and GitHub Star status together.
+   - Report the plugin installation status, workspace path, sharing & fault reporting state, and GitHub Star status together.
 
 </details>
 
