@@ -136,7 +136,8 @@ class McpTests(unittest.TestCase):
         self.assertEqual(set(tools), {item["name"] for item in expected})
         authentication = tools["remote_auth"]["inputSchema"]["properties"]
         self.assertIn("password_env", authentication)
-        self.assertNotIn("password", authentication)
+        self.assertTrue(authentication["password"]["writeOnly"])
+        self.assertNotIn("password", tools["remote_read"]["inputSchema"]["properties"])
         self.assertTrue(
             {"remote_Read", "remote_Write", "remote_Edit", "remote_Bash",
              "remote_TaskOutput", "remote_TaskStop", "remote_NotebookEdit",
