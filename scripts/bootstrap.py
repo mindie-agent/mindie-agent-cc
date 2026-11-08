@@ -11,7 +11,8 @@ for `mindie-agent-cc` and invokes `setup.py` to record the installation binding.
 
 [Timeouts & Locks]
 - Acquires `OperationLock` and runs subprocesses through `bounded.run` with
-  explicit deadlines (`BOOTSTRAP_TOTAL = 540.0s` from `mindie_launch.py`).
+  the shared SessionStart deadline (`BOOTSTRAP_TOTAL = 1200.0s` in
+  `mindie_launch.py`, exported as `MINDIE_SESSION_START_DEADLINE_MONOTONIC`).
 
 [Side-Effect Policy]
 - Materializes the isolated runtime under `runtime_root()` and writes atomic
@@ -27,6 +28,7 @@ from pathlib import Path
 import shutil
 import sys
 import sysconfig
+import time
 
 import bounded
 from install_state import OperationLock
@@ -52,7 +54,7 @@ def runtime_key(source):
     return digest.hexdigest()
 
 
-def readback(python, source, *, on_process=None):
+def readback(python, source, *, on_process=None, deadline_at=None):
     """Check the actual interpreter and noneditable installed adapter bytes."""
     script = """
 import importlib.metadata as m, importlib.util, json, pathlib, sys
@@ -66,7 +68,7 @@ print(json.dumps({'scripts':str(pathlib.Path(spec.origin).parent),
 """
     output = _run(
         "runtime-readback", [str(python), "-I", "-c", script],
-        on_process=on_process, timeout=60.0,
+        on_process=on_process, timeout=60.0, deadline_at=deadline_at,
     )
     value = json.loads(output)
     if value["version"] != native_version(source):
@@ -81,7 +83,9 @@ print(json.dumps({'scripts':str(pathlib.Path(spec.origin).parent),
     return scripts
 
 
-def _run(stage, command, *, on_process=None, **kwargs):
+def _run(stage, command, *, on_process=None, deadline_at=None, **kwargs):
+    if deadline_at is not None:
+        kwargs["deadline_at"] = deadline_at
     process = {}
     if on_process is not None:
         on_process(stage, None)
@@ -103,38 +107,47 @@ def _run(stage, command, *, on_process=None, **kwargs):
     return output
 
 
-def ensure_runtime(source, *, prepare=True, on_process=None):
+def ensure_runtime(source, *, prepare=True, on_process=None, deadline_at=None):
     with bounded.operation(signals=True):
-        return _ensure_runtime(source, prepare=prepare, on_process=on_process)
+        return _ensure_runtime(
+            source, prepare=prepare, on_process=on_process, deadline_at=deadline_at)
 
 
-def _ensure_runtime(source, *, prepare, on_process=None):
+def _ensure_runtime(source, *, prepare, on_process=None, deadline_at=None):
     from paths import config_path
     config = config_path()
     current = json.loads(config.read_text(encoding="utf-8")) if config.is_file() else {}
     active = current.get("component_source")
     if active and current["product_validation"]["source_sha256"] == source_identity(source):
         python = Path(current["python"])
-        return python, readback(python, source, on_process=on_process)
-    python, scripts = _baseline_runtime(source, prepare=prepare, on_process=on_process)
+        return python, readback(python, source, on_process=on_process, deadline_at=deadline_at)
+    python, scripts = _baseline_runtime(
+        source, prepare=prepare, on_process=on_process, deadline_at=deadline_at)
     if active or current.get("component_commands"):
         output = _run("component-floor", [str(python), "-I", "-B", str(scripts / "component_update.py"),
                       str(source), str(python), str(Path(current["state_dir"]) / "component-runtimes"),
-                      current["python"]], on_process=on_process, timeout=830)
+                      current["python"]], on_process=on_process, timeout=830,
+                      deadline_at=deadline_at)
         effective = json.loads(output)
         if effective:
             return Path(effective["python"]), Path(effective["scripts"])
     return python, scripts
 
 
-def _baseline_runtime(source, *, prepare, on_process=None):
+def _baseline_runtime(source, *, prepare, on_process=None, deadline_at=None):
     source = Path(source).resolve()
     if not (source / "uv.lock").is_file():
         raise ValueError("the native plugin does not contain its complete uv.lock")
     runtime = runtime_root() / runtime_key(source)
     python = runtime / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     adapter = {"state_dir": str(runtime.parent)}
-    with OperationLock(adapter, bootstrap=True).exclusive(timeout=120):
+    lock_timeout = 120
+    if deadline_at is not None:
+        remaining = deadline_at - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("session-start budget exhausted before runtime lock")
+        lock_timeout = min(lock_timeout, remaining)
+    with OperationLock(adapter, bootstrap=True).exclusive(timeout=lock_timeout):
         complete = runtime.with_suffix(".ready.json")
         expected = dict(key=runtime.name, python=str(python),
                         source_sha256=source_identity(source),
@@ -143,7 +156,8 @@ def _baseline_runtime(source, *, prepare, on_process=None):
         if complete.is_file():
             if json.loads(complete.read_text(encoding="utf-8")) != expected:
                 raise ValueError("completed runtime identity differs; not repaired")
-            return python, readback(python, source, on_process=on_process)
+            return python, readback(
+                python, source, on_process=on_process, deadline_at=deadline_at)
         if not prepare:
             raise RuntimeError("runtime is not prepared; start a new Claude session")
         uv = shutil.which("uv")
@@ -170,8 +184,8 @@ def _baseline_runtime(source, *, prepare, on_process=None):
         _run("locked-runtime-install",
              [uv, "sync", "--project", str(source), "--locked", "--no-editable",
               "--no-dev", "--python", sys.executable],
-             env=env, on_process=on_process, timeout=540.0)
-        scripts = readback(python, source, on_process=on_process)
+             env=env, on_process=on_process, timeout=540.0, deadline_at=deadline_at)
+        scripts = readback(python, source, on_process=on_process, deadline_at=deadline_at)
         atomic_write(complete, expected)
         return python, scripts
 
@@ -182,8 +196,15 @@ def main(argv=None):
     prepare = not (argv[:1] == ["hook"] and argv[1:2] != ["session-start"])
     if not prepare:
         raise RuntimeError("release entry is not prepared; start a new Claude session")
-    python, scripts = ensure_runtime(source, prepare=True)
+    deadline_at = None
+    if argv[:1] == ["hook"] and argv[1:2] == ["session-start"]:
+        existing = os.environ.get("MINDIE_SESSION_START_DEADLINE_MONOTONIC")
+        deadline_at = float(existing) if existing else (
+            time.monotonic() + float(os.environ.get("MINDIE_BOOTSTRAP_TOTAL_SECONDS") or 1200.0))
+    python, scripts = ensure_runtime(source, prepare=True, deadline_at=deadline_at)
     env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
+    if deadline_at is not None:
+        env["MINDIE_SESSION_START_DEADLINE_MONOTONIC"] = str(deadline_at)
     command = [str(python), str(scripts / "mindie_launch.py"),
                "--source", str(source), *argv]
     bounded.exec_or_wait(command, env)

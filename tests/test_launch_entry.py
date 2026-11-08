@@ -211,6 +211,40 @@ def test_helper_failure_keeps_visible_warning_even_if_diagnostic_write_fails(cap
     assert "PRIVATE_SENTINEL" not in output.out
 
 
+def test_pretool_bind_failure_is_denied_not_empty_success(capsys, tmp_path):
+    import mindie_launch
+
+    deny = {
+        "systemMessage": "MindIE PreToolUse bind failed: OSError: disk full",
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": "MindIE PreToolUse bind failed: OSError: disk full",
+        },
+    }
+
+    def failed_bind(*args, **kwargs):
+        receipt = kwargs.get("receipt")
+        if receipt is not None:
+            receipt["returncode"] = 2
+            receipt["cleanup_failed"] = False
+        return json.dumps(deny)
+
+    adapter = tmp_path / "cc.json"
+    adapter.write_text(json.dumps({
+        "base_config": str(adapter),
+        "diagnostics_context": {},
+    }), encoding="utf-8")
+    with patch.object(mindie_launch, "_read_hook_stdin", return_value=b"{}"), \
+            patch.object(mindie_launch, "installed_binding", return_value=nullcontext({
+                "python": sys.executable, "runtime_scripts": str(SCRIPTS),
+                "adapter_config": str(adapter),
+            })), patch.object(mindie_launch.bounded, "run", side_effect=failed_bind) as runner:
+        assert mindie_launch._hook("pretool") == 2
+    assert runner.call_args.kwargs.get("check") is False
+    assert json.loads(capsys.readouterr().out) == deny
+
+
 def test_initialize_reports_cached_installed_distribution_version():
     import mindie_launch
     import product_contract
@@ -267,6 +301,33 @@ def test_optional_maintenance_timeout_keeps_ready_binding_and_warns(tmp_path, ca
         "systemMessage": "MindIE startup maintenance is incomplete.",
     }
     assert Path(binding["adapter_config"]).read_text() == '{"ready":true}'
+
+
+def test_session_start_uses_shared_bootstrap_deadline(capsys, tmp_path):
+    import mindie_launch
+    import time as time_mod
+
+    adapter = tmp_path / "cc.json"
+    adapter.write_text(json.dumps({
+        "base_config": str(adapter),
+        "diagnostics_context": {},
+    }), encoding="utf-8")
+    shared = time_mod.monotonic() + 0.4
+    with patch.dict(os.environ, {
+                mindie_launch.SESSION_START_DEADLINE_ENV: str(shared),
+            }), \
+            patch("harness.require_binding_support", return_value="2.1.299"), \
+            patch.object(mindie_launch, "_read_hook_stdin", return_value=b"{}"), \
+            patch.object(mindie_launch, "installed_binding", return_value=nullcontext({
+                "python": sys.executable, "runtime_scripts": str(SCRIPTS),
+                "adapter_config": str(adapter),
+            })), patch.object(mindie_launch.bounded, "run",
+                              return_value='{"status":"ready"}') as runner:
+        assert mindie_launch.main(["hook", "session-start"]) == 0
+    timeout = runner.call_args.kwargs["timeout"]
+    assert timeout <= 0.4
+    assert timeout < mindie_launch.BOOTSTRAP_TOTAL
+    assert json.loads(capsys.readouterr().out) == {}
 
 
 def test_session_start_forwards_native_fork_payload_to_selected_maintenance(capsys, tmp_path):

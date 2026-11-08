@@ -12,7 +12,9 @@ explicit component CLI tools in Claude Code.
 - Once a remote or knowledge tool call succeeds, a local SQLite bind-accounting
   failure (`finish_bind`) attaches `bind_warning` + `diagnostic_ref` and, for an
   OSError, `bind_errno` and a fixed `bind_path` label. It never flips
-  `isError=True` on the succeeded result.
+  `isError=True` on the succeeded result. `knowledge_sync` `isError` follows
+  the feed `result` only; a later `cleanup_failed` keeps `isError=False` and
+  attaches `cleanup_warning` / `receipt_warning` with `receipt_unconfirmed`.
 - Trusted local caller/`not_sent` failures preserve the shared bounded
   `input_repair` (`missing` fields and action) in `structuredContent` and
   model-visible text. Exception prose, stderr, paths and credentials are never
@@ -591,8 +593,16 @@ def handle(surface, message):
                 from mindie_knowledge.graded.distill import result_view
                 payload, is_error = result_view(payload)
             elif local == "knowledge_sync":
-                is_error = (payload.get("result") != "ok"
-                            or bool(payload.get("cleanup_failed")))
+                is_error = payload.get("result") != "ok"
+                if not is_error and payload.get("cleanup_failed"):
+                    payload = dict(payload)
+                    warning = (
+                        "sync completed but owned-process cleanup failed; "
+                        "inspect the completed feed results before repeating"
+                    )
+                    payload["cleanup_warning"] = warning
+                    payload["receipt_warning"] = warning
+                    payload["receipt_unconfirmed"] = True
             result = dict(
                 content=[dict(type="text", text=canonical(payload))],
                 structuredContent=payload,

@@ -27,6 +27,12 @@ class ManifestTests(unittest.TestCase):
         self.assertTrue(matcher.startswith("^mcp__plugin_mindie-agent_"))
         self.assertEqual(hooks["hooks"]["PreToolUse"][0]["hooks"][0]["timeout"], 20)
         self.assertEqual(hooks["hooks"]["Stop"][0]["hooks"][0]["timeout"], 20)
+        import mindie_launch
+        session_timeout = hooks["hooks"]["SessionStart"][0]["hooks"][0]["timeout"]
+        self.assertGreaterEqual(
+            session_timeout, mindie_launch.BOOTSTRAP_TOTAL + 60,
+            "SessionStart outer timeout must cover shared bootstrap+launch plus cleanup grace",
+        )
         mcp = json.loads((ROOT / ".mcp.json").read_text(encoding="utf-8"))
         self.assertIn("knowledge", mcp["mcpServers"])
         self.assertIn("remote", mcp["mcpServers"])

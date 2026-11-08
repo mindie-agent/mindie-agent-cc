@@ -60,6 +60,28 @@ def test_entry_publication_is_complete_and_same_version_cannot_change_binding(tm
     assert not list(tmp_path.glob(".entry-*"))
 
 
+def test_session_start_exports_shared_deadline_to_launch(monkeypatch):
+    captured = {}
+
+    def fake_ensure(source, *, prepare=True, on_process=None, deadline_at=None):
+        captured["deadline_at"] = deadline_at
+        return Path("/python"), Path("/scripts")
+
+    def fake_exec(command, env):
+        captured["env"] = env
+        captured["command"] = command
+
+    monkeypatch.setattr(bootstrap, "ensure_runtime", fake_ensure)
+    monkeypatch.setattr(bootstrap.bounded, "exec_or_wait", fake_exec)
+    started = time.monotonic()
+    bootstrap.main(["hook", "session-start"])
+    deadline = float(captured["env"]["MINDIE_SESSION_START_DEADLINE_MONOTONIC"])
+    assert captured["deadline_at"] == deadline
+    assert 1190 <= deadline - started <= 1210
+    assert captured["command"][1].endswith("mindie_launch.py")
+    assert captured["command"][-2:] == ["hook", "session-start"]
+
+
 def test_stop_cannot_prepare_runtime_even_if_dependency_environment_exists():
     with patch.object(bootstrap, "ensure_runtime") as prepare:
         with pytest.raises(RuntimeError, match="start a new Claude session"):

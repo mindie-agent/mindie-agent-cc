@@ -87,6 +87,40 @@ class HookTests(unittest.TestCase):
         bind = self.tmp / "state" / "mcp-binds.sqlite3"
         self.assertTrue(bind.is_file())
 
+    def test_pretool_bind_failure_denies_instead_of_empty_success(self):
+        from io import StringIO
+        from unittest.mock import patch
+
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import bridge
+
+        payload = dict(
+            hook_event_name="PreToolUse",
+            session_id=SESSION,
+            prompt_id="p1",
+            cwd=str(self.tmp),
+            transcript_path=str(self.tmp / f"{SESSION}.jsonl"),
+            tool_name="mcp__plugin_mindie-agent_knowledge__knowledge_query",
+            tool_use_id="call_00_bindfail",
+            tool_input={"query": "x"},
+        )
+        stdout = StringIO()
+        stderr = StringIO()
+        with patch.object(bridge, "_read_event", return_value=payload), \
+                patch.object(bridge, "publish_bind", side_effect=OSError(28, "No space left on device")), \
+                patch("sys.stdout", stdout), patch("sys.stderr", stderr):
+            code = bridge.handle_pretool()
+        self.assertEqual(code, 2)
+        result = json.loads(stdout.getvalue().splitlines()[0])
+        self.assertNotEqual(result, {})
+        specific = result["hookSpecificOutput"]
+        self.assertEqual(specific["hookEventName"], "PreToolUse")
+        self.assertEqual(specific["permissionDecision"], "deny")
+        self.assertIn("OSError", specific["permissionDecisionReason"])
+        self.assertIn("No space left on device", specific["permissionDecisionReason"])
+        self.assertIn("OSError", result["systemMessage"])
+        self.assertIn("OSError", stderr.getvalue())
+
     def test_expansion_unconfigured(self):
         env = env_for(extra={"XDG_CONFIG_HOME": str(self.tmp / "cfg")})
         payload = dict(

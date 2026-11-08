@@ -7,7 +7,8 @@ runtime.
 
 [Invariants]
 - `PreToolUse` records a one-shot `claudecode/toolUseId` bind for MindIE MCP
-  tools and leaves non-MindIE tools untouched.
+  tools and leaves non-MindIE tools untouched. A bind write failure denies the
+  tool with the exception type and reason (exit 2); it never prints `{}`.
 - `Stop` never exits 2 and never forces model continuation; default-off sharing
   returns `{}` before touching capture state.
 - Only an explicitly activated session can hand off Stop capture, additionally
@@ -18,8 +19,8 @@ runtime.
   SQLite WAL one-shot bind storage.
 
 [Side-Effect Policy]
-- Writes one-shot tool binds and enqueues redacted transcript captures; reports
-  warnings via `systemMessage` without breaking the host turn.
+- Writes one-shot tool binds and enqueues redacted transcript captures. Stop
+  reports warnings via `systemMessage` without breaking the host turn.
 """
 
 from __future__ import annotations
@@ -100,6 +101,20 @@ def handle_expansion():
         return 0
 
 
+def _pretool_bind_error(exc):
+    detail = f"{type(exc).__name__}: {exc}"[:500]
+    print(f"MindIE PreToolUse bind failed: {detail}", file=sys.stderr)
+    _print({
+        "systemMessage": f"MindIE PreToolUse bind failed: {detail}",
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": f"MindIE PreToolUse bind failed: {detail}",
+        },
+    })
+    return 2
+
+
 def handle_pretool():
     try:
         event = _read_event()
@@ -121,7 +136,7 @@ def handle_pretool():
             transcript_path=event.get("transcript_path"),
         )
     except Exception as exc:
-        print(f"MindIE PreToolUse bind failed: {type(exc).__name__}", file=sys.stderr)
+        return _pretool_bind_error(exc)
     _print({})
     return 0
 

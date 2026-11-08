@@ -77,6 +77,68 @@ def test_sync_preserves_real_failed_feed_row_as_mcp_error(sync_profile, tmp_path
     service.assert_not_called()
 
 
+def _adapter_without_scanner(tmp_path, monkeypatch):
+    config = tmp_path / "cc.json"
+    engine = tmp_path / "cc.engine.json"
+    redactor = tmp_path / "redactor"
+    redactor.write_text("", encoding="utf-8")
+    engine.write_text(json.dumps({
+        "root": str(tmp_path / "domain"),
+        "domain": "vllm-ascend",
+        "admission_path": str(tmp_path / "domain" / "admission.sqlite3"),
+        "capture_mode": "public-transcript",
+        "redactor_executable": str(redactor),
+        "transcript_adapter": str(Path(__file__).resolve().parents[1] / "scripts" / "transcript.py"),
+        "summary_command": [sys.executable, str(Path(__file__).resolve().parents[1] / "scripts" / "organizer.py")],
+        "feeds": [],
+    }))
+    config.write_text(json.dumps({
+        "state_dir": str(tmp_path / "state"),
+        "engine_config": str(engine),
+        "python": sys.executable,
+        "adapter_config": str(config),
+        "base_config": str(config),
+    }))
+    monkeypatch.setenv("MINDIE_CC_CONFIG", str(config))
+    return engine
+
+
+def test_sync_cleanup_failure_does_not_flip_successful_result(tmp_path, monkeypatch):
+    _adapter_without_scanner(tmp_path, monkeypatch)
+    admission.gate().activate(SESSION, project_root=str(tmp_path))
+    payload = {
+        "result": "ok",
+        "results": [{"repository": "fixture/ok", "status": "synced"}],
+        "cleanup_failed": True,
+        "cleanup": [{"message": "reap_process"}],
+    }
+    with patch("maintenance.sync_public_feed", return_value=dict(payload)):
+        result = call_sync({})
+    assert not result["isError"], result
+    body = result["structuredContent"]
+    assert body["result"] == "ok"
+    assert body["cleanup_failed"] is True
+    assert body["receipt_unconfirmed"] is True
+    assert "cleanup_warning" in body
+    assert "receipt_warning" in body
+    assert "repeat" in body["cleanup_warning"]
+
+
+def test_sync_failed_result_stays_error_when_cleanup_also_failed(tmp_path, monkeypatch):
+    _adapter_without_scanner(tmp_path, monkeypatch)
+    admission.gate().activate(SESSION, project_root=str(tmp_path))
+    payload = {
+        "result": "sync_failed",
+        "results": [{"repository": "fixture/unavailable", "status": "unavailable"}],
+        "cleanup_failed": True,
+    }
+    with patch("maintenance.sync_public_feed", return_value=dict(payload)):
+        result = call_sync({})
+    assert result["isError"], result
+    assert result["structuredContent"]["result"] == "sync_failed"
+    assert "receipt_unconfirmed" not in result["structuredContent"]
+
+
 def test_default_domain_activation_does_not_authorize_another_feed(sync_profile, tmp_path):
     _engine_file, engine = sync_profile
     admission.gate().activate(SESSION, project_root=str(tmp_path))

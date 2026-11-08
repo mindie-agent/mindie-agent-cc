@@ -12,8 +12,8 @@ Top-level entrypoint invoked by Claude Code hooks (`SessionStart`,
   references to user-facing hook warnings.
 
 [Timeouts & Locks]
-- Enforces `HOOK_TOTAL = 10.0s`, `HOOK_LOCK_BUDGET = 2.0s`, and
-  `BOOTSTRAP_TOTAL = 540.0s` (`outer_timeout >= sum(inner_budgets) + grace`).
+- Enforces `HOOK_TOTAL = 10.0s`, `HOOK_LOCK_BUDGET = 2.0s`, and shared
+  SessionStart `BOOTSTRAP_TOTAL = 1200.0s` (`hooks.json` 1260s >= 1200s + 60s).
 - Remote MCP children use the native inner wait (Bash/TaskOutput up to 600s)
   plus `REMOTE_GRACE_SECONDS = 60s`; knowledge/entry children stay on their
   own bounded budgets.
@@ -47,6 +47,7 @@ from install_state import (
 HOOK_TOTAL = float(os.environ.get("MINDIE_HOOK_TOTAL_SECONDS") or 10.0)
 HOOK_LOCK_BUDGET = float(os.environ.get("MINDIE_HOOK_LOCK_BUDGET_SECONDS") or 2.0)
 BOOTSTRAP_TOTAL = float(os.environ.get("MINDIE_BOOTSTRAP_TOTAL_SECONDS") or 1200.0)
+SESSION_START_DEADLINE_ENV = "MINDIE_SESSION_START_DEADLINE_MONOTONIC"
 # Knowledge stdout only. A legal maximum page measured 817407 bytes.
 KNOWLEDGE_MAX_OUTPUT = 1024 * 1024
 MAX_RPC_ID = 256
@@ -56,9 +57,8 @@ EOF_JOIN = 3.0
 OUTPUT_BUDGET = 1.0
 CALL_CHILD_BUDGET = 60.0
 ENTRY_CHILD_BUDGET = 180.0
-# Remote child budget: outer >= legal native inner wait + transport/cleanup
-# grace. Claude Bash/TaskOutput can legally wait 600s; a fixed 60s or 120s
-# outer deadline would cut off a native call that is still doing useful work.
+# Remote child budget: outer >= native inner wait + transport/cleanup grace.
+# Claude Bash/TaskOutput can wait 600s; a 60s/120s outer would cut that off.
 REMOTE_GRACE_SECONDS = 60.0
 REMOTE_MIN_BUDGET_SECONDS = 180.0
 REMOTE_MAX_OUTPUT = bounded.REMOTE_MAX_OUTPUT
@@ -102,12 +102,7 @@ def _record_hook(stage, category, op="stop", exception=None):
 
 
 def _sharing_enabled(binding=None) -> bool:
-    """True only when community sharing is explicitly enabled.
-
-    A missing adapter or community file, or an explicit off, is quiet.
-    An existing file that cannot be read or parsed is a configuration
-    failure, not off.
-    """
+    """True only for explicit enabled sharing; unreadable config is not off."""
     from entry import _read_regular_json
 
     path = _config_path()
@@ -294,16 +289,19 @@ def _hook(op: str) -> int:
             if remaining <= 0:
                 raise TimeoutError("hook input deadline exhausted")
             stage = "helper_failed"
+            receipt = {}
             out = bounded.run(
                 [selected["python"], str(script), op], raw, timeout=remaining,
-                env=_child_env(selected), cwd=str(script.parent), check=True,
+                env=_child_env(selected), cwd=str(script.parent),
+                check=op != "pretool", receipt=receipt,
                 allow_service=_hook_can_start_service(op, raw),
             )
         value = json.loads(out.strip())
         if not isinstance(value, dict):
             raise ValueError("hook result must be one object")
         print(json.dumps(value, ensure_ascii=False), flush=True)
-        return 0
+        code = receipt.get("returncode")
+        return int(code) if op == "pretool" and code else 0
     except Exception as exc:
         category = ("timeout" if isinstance(exc, TimeoutError) else
                     "child_failure" if stage == "helper_failed" else "configuration")
@@ -755,7 +753,8 @@ def main(argv=None) -> int:
     kind = argv[0] if argv else ""
     name = argv[1] if len(argv) > 1 else ""
     if kind == "hook" and name == "session-start":
-        deadline = time.monotonic() + BOOTSTRAP_TOTAL
+        raw = os.environ.get(SESSION_START_DEADLINE_ENV)
+        deadline = float(raw) if raw else time.monotonic() + BOOTSTRAP_TOTAL
         event = _read_hook_stdin(deadline)
         if not event:
             _record_hook("input", "missing_identity", op="session-start")
