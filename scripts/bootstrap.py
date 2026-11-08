@@ -33,7 +33,6 @@ import time
 
 import bounded
 from install_state import OperationLock
-from product_contract import native_version, package_files, source_identity
 from install_state import atomic_write
 
 
@@ -46,6 +45,7 @@ def runtime_root():
 
 
 def runtime_key(source):
+    from product_contract import package_files
     source = Path(source).resolve()
     digest = hashlib.sha256()
     for path in sorted(package_files(source)):
@@ -72,6 +72,7 @@ print(json.dumps({'scripts':str(pathlib.Path(spec.origin).parent),
         on_process=on_process, timeout=60.0, deadline_at=deadline_at,
     )
     value = json.loads(output)
+    from product_contract import native_version
     if value["version"] != native_version(source):
         raise ValueError("installed adapter version differs from the native plugin")
     scripts = Path(value["scripts"])
@@ -118,6 +119,7 @@ def _ensure_runtime(source, *, prepare, on_process=None, deadline_at=None):
     from paths import config_path
     config = config_path()
     current = json.loads(config.read_text(encoding="utf-8")) if config.is_file() else {}
+    from product_contract import source_identity
     active = current.get("component_source")
     if active and current["product_validation"]["source_sha256"] == source_identity(source):
         python = Path(current["python"])
@@ -149,6 +151,7 @@ def _baseline_runtime(source, *, prepare, on_process=None, deadline_at=None):
             raise TimeoutError("session-start budget exhausted before runtime lock")
         lock_timeout = min(lock_timeout, remaining)
     with OperationLock(adapter, bootstrap=True).exclusive(timeout=lock_timeout):
+        from product_contract import source_identity
         complete = runtime.with_suffix(".ready.json")
         expected = dict(key=runtime.name, python=str(python),
                         source_sha256=source_identity(source),

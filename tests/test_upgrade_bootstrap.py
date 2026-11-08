@@ -121,6 +121,50 @@ def test_reexec_python313_invokes_uv_python_313(monkeypatch):
     assert seen["env"][bootstrap.SESSION_START_INNER_ENV] == "1"
 
 
+def test_session_start_trampoline_stays_stdlib_only():
+    import ast
+    tree = ast.parse((SCRIPTS / "session_start.py").read_text(encoding="utf-8"))
+    forbidden = {"tomllib", "product_contract", "mindie_launch", "bootstrap"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            assert forbidden.isdisjoint(alias.name.split(".")[0] for alias in node.names)
+        if isinstance(node, ast.ImportFrom) and node.module:
+            assert node.module.split(".")[0] not in forbidden
+
+
+def test_session_start_sets_deadline_before_python313_reexec(monkeypatch):
+    import session_start
+
+    seen = {}
+    monkeypatch.delenv(session_start.DEADLINE_ENV, raising=False)
+    monkeypatch.delenv(session_start.INNER_ENV, raising=False)
+    monkeypatch.setattr(session_start.shutil, "which", lambda name: "/usr/bin/uv")
+
+    def fake_execve(cmd, argv, env):
+        seen["cmd"] = cmd
+        seen["argv"] = list(argv)
+        seen["deadline"] = float(env[session_start.DEADLINE_ENV])
+        seen["inner"] = env.get(session_start.INNER_ENV)
+
+    monkeypatch.setattr(os, "execve", fake_execve)
+    started = time.monotonic()
+    session_start.main(["hook", "session-start"])
+    expected = session_start.BOOTSTRAP_TOTAL + session_start.UV_PYTHON_PROVISION
+    assert expected - 10 <= seen["deadline"] - started <= expected + 10
+    assert seen["argv"][:6] == [
+        "/usr/bin/uv", "--native-tls", "run", "--no-project", "--python", "3.13",
+    ]
+    assert seen["inner"] == "1"
+
+
+def test_bootstrap_module_defers_product_contract_until_after_import():
+    import ast
+    tree = ast.parse((SCRIPTS / "bootstrap.py").read_text(encoding="utf-8"))
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom) and node.module == "product_contract":
+            raise AssertionError("product_contract must not be imported at module load")
+
+
 def test_stop_cannot_prepare_runtime_even_if_dependency_environment_exists():
     with patch.object(bootstrap, "ensure_runtime") as prepare:
         with pytest.raises(RuntimeError, match="start a new Claude session"):
@@ -136,7 +180,7 @@ def test_completed_runtime_corruption_never_invokes_uv_to_repair(tmp_path):
     runtime = runtimes / "fixed"
     with patch.object(bootstrap, "runtime_root", return_value=runtimes), \
             patch.object(bootstrap, "runtime_key", return_value="fixed"), \
-            patch.object(bootstrap, "source_identity", return_value="source"), \
+            patch("product_contract.source_identity", return_value="source"), \
             patch.object(bootstrap, "readback", return_value=tmp_path) as readback, \
             patch.object(bootstrap.shutil, "which", return_value="uv"), \
             patch.object(bootstrap.bounded, "run") as run:
@@ -172,10 +216,10 @@ def test_interrupted_cold_bootstrap_reaps_uv_tree_without_publishing_ready(tmp_p
     runtimes = tmp_path / "runtimes"
     program = (
         f"import sys;from pathlib import Path;sys.path.insert(0,{str(SCRIPTS)!r});"
-        "import bootstrap;"
+        "import bootstrap, product_contract;"
         f"bootstrap.runtime_root=lambda:Path({str(runtimes)!r});"
         "bootstrap.runtime_key=lambda source:'fixed';"
-        "bootstrap.source_identity=lambda source:'source';"
+        "product_contract.source_identity=lambda source:'source';"
         "bootstrap.shutil.which=lambda name:sys.executable;"
         "run=bootstrap._run;"
         f"bootstrap._run=lambda stage,argv,**kw:run(stage,[sys.executable,{str(uv)!r}],**kw);"

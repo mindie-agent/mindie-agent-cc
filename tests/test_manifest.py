@@ -38,8 +38,9 @@ class ManifestTests(unittest.TestCase):
             "SessionStart outer timeout must cover uv python provision, "
             "shared bootstrap+launch, and cleanup grace",
         )
-        self.assertNotIn("--offline", session_hook["command"])
+        self.assertIn("--offline --no-python-downloads", session_hook["command"])
         self.assertNotIn("--python 3.13", session_hook["command"])
+        self.assertIn("session_start.py", session_hook["command"])
         mcp = json.loads((ROOT / ".mcp.json").read_text(encoding="utf-8"))
         self.assertIn("knowledge", mcp["mcpServers"])
         self.assertIn("remote", mcp["mcpServers"])
@@ -78,8 +79,9 @@ class ManifestTests(unittest.TestCase):
                 for hook in row["hooks"]:
                     self.assertIn("CLAUDE_PLUGIN_DATA", hook["command"])
                     self.assertIn(version, hook["command"])
+                    self.assertIn("--offline --no-python-downloads", hook["command"])
                     if name != "SessionStart":
-                        self.assertIn("--offline --no-python-downloads", hook["command"])
+                        self.assertIn("--python 3.13", hook["command"])
 
     def test_runtime_lock_rejects_foreign_or_floating_git_sources(self):
         from product_contract import requirements

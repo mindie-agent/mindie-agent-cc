@@ -10,21 +10,36 @@ setup.
 - Formats `prepare-store` failures with explicit `error_type` and `error` details.
 
 [Timeouts & Locks]
-- Uses `bounded.run` for subprocess queries during setup.
+- Uses `bounded.run` for subprocess queries during setup. Nested workers honor
+  `MINDIE_SESSION_START_DEADLINE_MONOTONIC` when SessionStart set a shared clock.
 
 [Side-Effect Policy]
 - Prepares capture configuration dictionaries and triggers `prepare-store` in
   the shared knowledge core.
 """
 import json
+import os
+import time
 from pathlib import Path
+
+SESSION_START_DEADLINE_ENV = "MINDIE_SESSION_START_DEADLINE_MONOTONIC"
+
+
+def _command_timeout(default):
+    raw = os.environ.get(SESSION_START_DEADLINE_ENV)
+    if not raw:
+        return float(default)
+    remaining = float(raw) - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("session-start budget exhausted")
+    return min(float(default), remaining)
 
 
 def prepare(python, scripts):
     import bounded
     output = bounded.run(
         [str(python), '-m', 'mindie_knowledge.loop.transcript_redaction'],
-        timeout=15.0,
+        timeout=_command_timeout(15.0),
     )
     path = output.strip()
     if not Path(path).is_absolute() or not Path(path).is_file():
@@ -55,7 +70,7 @@ def prepare_store(python, scripts, config):
         output = bounded.run(
             [str(python), str(Path(scripts) / 'capture_config.py'), 'prepare-store'],
             json.dumps(config),
-            timeout=30.0,
+            timeout=_command_timeout(30.0),
         )
     except Exception as exc:
         if hasattr(exc, 'returncode'):
@@ -70,7 +85,7 @@ def prepare_domains(python, adapter, engine, **options):
     import bounded
     output = bounded.run([str(python), '-m', 'mindie_knowledge.loop.domain_catalog'],
                          json.dumps(dict(adapter=adapter, engine=engine, **options)),
-                         timeout=90, max_output=65536)
+                         timeout=_command_timeout(90), max_output=65536)
     return json.loads(output)['domain_configs']
 
 

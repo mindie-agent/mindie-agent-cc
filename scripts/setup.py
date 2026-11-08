@@ -13,6 +13,8 @@ configuration, and records the atomic `installation.json` binding for
 
 [Timeouts & Locks]
 - Serializes cold preparation separately from short profile admission locks.
+- SessionStart `--source` children inherit `MINDIE_MAINTENANCE_GROUP` so nested
+  `prepare_domains` workers die with the setup process group.
 
 [Side-Effect Policy]
 - Writes MindIE-owned adapter, engine, community, and `installation.json` files;
@@ -260,10 +262,13 @@ def prepare_binding_within(source, deadline_at):
     remaining = deadline_at - time.monotonic()
     if remaining <= 0:
         raise TimeoutError("session-start budget exhausted before binding setup")
+    env = dict(os.environ)
+    env["MINDIE_MAINTENANCE_GROUP"] = "1"
+    env["MINDIE_SESSION_START_DEADLINE_MONOTONIC"] = str(deadline_at)
     try:
         payload = bounded.run(
             [sys.executable, str(HERE / "setup.py"), "--source", str(source)],
-            timeout=remaining, cwd=str(HERE), check=False)
+            timeout=remaining, cwd=str(HERE), check=False, env=env)
     except bounded.CommandTimedOut as exc:
         raise TimeoutError("session-start budget exhausted during binding setup") from exc
     return json.loads(payload)
