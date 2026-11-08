@@ -71,6 +71,7 @@ def test_session_start_exports_shared_deadline_to_launch(monkeypatch):
         captured["env"] = env
         captured["command"] = command
 
+    monkeypatch.setenv(bootstrap.SESSION_START_INNER_ENV, "1")
     monkeypatch.setattr(bootstrap, "ensure_runtime", fake_ensure)
     monkeypatch.setattr(bootstrap.bounded, "exec_or_wait", fake_exec)
     started = time.monotonic()
@@ -80,6 +81,44 @@ def test_session_start_exports_shared_deadline_to_launch(monkeypatch):
     assert 1190 <= deadline - started <= 1210
     assert captured["command"][1].endswith("mindie_launch.py")
     assert captured["command"][-2:] == ["hook", "session-start"]
+
+
+def test_session_start_reexecs_python313_inside_shared_deadline(monkeypatch):
+    captured = {}
+
+    def fake_reexec(argv):
+        captured["argv"] = list(argv)
+        captured["deadline"] = float(os.environ["MINDIE_SESSION_START_DEADLINE_MONOTONIC"])
+
+    monkeypatch.delenv(bootstrap.SESSION_START_INNER_ENV, raising=False)
+    monkeypatch.delenv("MINDIE_SESSION_START_DEADLINE_MONOTONIC", raising=False)
+    monkeypatch.setattr(bootstrap, "_reexec_python313", fake_reexec)
+    monkeypatch.setattr(bootstrap, "ensure_runtime",
+                        lambda *a, **k: captured.setdefault("ensured", True))
+    monkeypatch.setattr(bootstrap.bounded, "exec_or_wait",
+                        lambda *a, **k: captured.setdefault("execed", True))
+    started = time.monotonic()
+    bootstrap.main(["hook", "session-start"])
+    assert "ensured" not in captured
+    assert "execed" not in captured
+    import mindie_launch
+    expected = mindie_launch.BOOTSTRAP_TOTAL + mindie_launch.UV_PYTHON_PROVISION
+    assert expected - 10 <= captured["deadline"] - started <= expected + 10
+    assert captured["argv"] == ["hook", "session-start"]
+
+
+def test_reexec_python313_invokes_uv_python_313(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(bootstrap.shutil, "which", lambda name: "/usr/bin/uv")
+    monkeypatch.setattr(os, "execve",
+                        lambda cmd, argv, env: seen.update(cmd=cmd, argv=list(argv), env=env))
+    bootstrap._reexec_python313(["hook", "session-start"])
+    assert seen["cmd"] == "/usr/bin/uv"
+    assert seen["argv"][:6] == [
+        "/usr/bin/uv", "--native-tls", "run", "--no-project", "--python", "3.13",
+    ]
+    assert seen["argv"][-2:] == ["hook", "session-start"]
+    assert seen["env"][bootstrap.SESSION_START_INNER_ENV] == "1"
 
 
 def test_stop_cannot_prepare_runtime_even_if_dependency_environment_exists():

@@ -254,6 +254,21 @@ def prepare_binding(source, config=None, *, root=None, domain="vllm-ascend",
     return result
 
 
+def prepare_binding_within(source, deadline_at):
+    """Run `--source` setup as a child killed when the shared deadline elapses."""
+    import bounded
+    remaining = deadline_at - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("session-start budget exhausted before binding setup")
+    try:
+        payload = bounded.run(
+            [sys.executable, str(HERE / "setup.py"), "--source", str(source)],
+            timeout=remaining, cwd=str(HERE), check=False)
+    except bounded.CommandTimedOut as exc:
+        raise TimeoutError("session-start budget exhausted during binding setup") from exc
+    return json.loads(payload)
+
+
 def activate_binding(candidate_file, *, observation_seconds=30.0):
     """Switch a native-installed candidate only after idle retirement and readiness.
 

@@ -732,8 +732,15 @@ def main(argv=None) -> int:
     if argv[:1] == ["--source"]:
         source = Path(argv[1])
         argv = argv[2:]
-        from setup import prepare_binding, publish_entry
-        prepared = prepare_binding(source)
+        from setup import prepare_binding, prepare_binding_within, publish_entry
+        try:
+            prepared = (
+                prepare_binding(source) if deadline is None
+                else prepare_binding_within(source, deadline)
+            )
+        except TimeoutError as exc:
+            _record_hook("installation", "timeout", op="session-start", exception=exc)
+            return _session_start_incomplete()
         os.environ[CONFIG_ENV] = prepared["config"]
         data = os.environ.get("CLAUDE_PLUGIN_DATA")
         if not data or not Path(data).is_absolute():

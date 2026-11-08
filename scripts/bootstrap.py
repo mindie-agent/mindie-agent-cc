@@ -11,9 +11,9 @@ for `mindie-agent-cc` and invokes `setup.py` to record the installation binding.
 
 [Timeouts & Locks]
 - Acquires `OperationLock` and runs subprocesses through `bounded.run` with
-  the shared SessionStart deadline (`BOOTSTRAP_TOTAL` in `mindie_launch.py`,
-  exported as `MINDIE_SESSION_START_DEADLINE_MONOTONIC`). Outer hook timeout
-  also covers `UV_PYTHON_PROVISION` for the initial `uv --python 3.13` fetch.
+  the shared SessionStart deadline (`BOOTSTRAP_TOTAL` + `UV_PYTHON_PROVISION`
+  in `mindie_launch.py`, exported as `MINDIE_SESSION_START_DEADLINE_MONOTONIC`).
+  SessionStart re-execs `uv --python 3.13` under that clock.
 
 [Side-Effect Policy]
 - Materializes the isolated runtime under `runtime_root()` and writes atomic
@@ -191,6 +191,19 @@ def _baseline_runtime(source, *, prepare, on_process=None, deadline_at=None):
         return python, scripts
 
 
+SESSION_START_INNER_ENV = "MINDIE_SESSION_START_INNER"
+
+
+def _reexec_python313(argv):
+    uv = shutil.which("uv")
+    if uv is None:
+        raise FileNotFoundError("uv is required to prepare the locked MindIE runtime")
+    os.environ[SESSION_START_INNER_ENV] = "1"
+    command = [uv, "--native-tls", "run", "--no-project", "--python", "3.13",
+               "python", str(Path(__file__).resolve()), *argv]
+    os.execve(uv, command, dict(os.environ))
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     source = Path(__file__).resolve().parents[1]
@@ -199,9 +212,20 @@ def main(argv=None):
         raise RuntimeError("release entry is not prepared; start a new Claude session")
     deadline_at = None
     if argv[:1] == ["hook"] and argv[1:2] == ["session-start"]:
-        existing = os.environ.get("MINDIE_SESSION_START_DEADLINE_MONOTONIC")
-        deadline_at = float(existing) if existing else (
-            time.monotonic() + float(os.environ.get("MINDIE_BOOTSTRAP_TOTAL_SECONDS") or 1200.0))
+        from mindie_launch import (
+            BOOTSTRAP_TOTAL, SESSION_START_DEADLINE_ENV, UV_PYTHON_PROVISION,
+        )
+        existing = os.environ.get(SESSION_START_DEADLINE_ENV)
+        inner = os.environ.get(SESSION_START_INNER_ENV) == "1"
+        if existing:
+            deadline_at = float(existing)
+        else:
+            extra = 0.0 if inner else UV_PYTHON_PROVISION
+            deadline_at = time.monotonic() + BOOTSTRAP_TOTAL + extra
+        os.environ[SESSION_START_DEADLINE_ENV] = str(deadline_at)
+        if not inner:
+            _reexec_python313(argv)
+            return
     python, scripts = ensure_runtime(source, prepare=True, deadline_at=deadline_at)
     env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
     if deadline_at is not None:

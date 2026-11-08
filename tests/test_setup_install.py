@@ -537,3 +537,41 @@ def test_sharing_status_enable_and_disable_lifecycle(tmp_path, capsys):
         assert after_disable["reporting_enabled"] is False
         assert after_disable["fork"] == "alice/knowledge-vllm-ascend"
         assert after_disable["needs_onboarding_prompt"] is False
+
+
+def test_prepare_binding_within_uses_remaining_shared_deadline(monkeypatch, tmp_path):
+    import bounded
+    import time as time_mod
+
+    seen = {}
+
+    def fake_run(argv, *a, **kw):
+        seen["timeout"] = kw["timeout"]
+        seen["argv"] = argv
+        return json.dumps({"config": str(tmp_path / "cc.json"), "status": "ready"})
+
+    monkeypatch.setattr(bounded, "run", fake_run)
+    deadline = time_mod.monotonic() + 1.25
+    result = setup.prepare_binding_within(tmp_path, deadline)
+    assert result["status"] == "ready"
+    assert 0.5 < seen["timeout"] <= 1.25
+    assert seen["argv"][-2:] == ["--source", str(tmp_path)]
+
+
+def test_prepare_binding_within_rejects_expired_deadline(tmp_path):
+    import time as time_mod
+
+    with pytest.raises(TimeoutError, match="before binding setup"):
+        setup.prepare_binding_within(tmp_path, time_mod.monotonic() - 1)
+
+
+def test_prepare_binding_within_kills_child_when_deadline_elapses(tmp_path, monkeypatch):
+    import time as time_mod
+
+    hanging = tmp_path / "setup.py"
+    hanging.write_text("import time\ntime.sleep(8)\n", encoding="utf-8")
+    monkeypatch.setattr(setup, "HERE", tmp_path)
+    started = time_mod.monotonic()
+    with pytest.raises(TimeoutError, match="during binding setup"):
+        setup.prepare_binding_within(tmp_path, time_mod.monotonic() + 0.25)
+    assert time_mod.monotonic() - started < 2.5

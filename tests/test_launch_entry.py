@@ -386,9 +386,11 @@ def test_expired_session_start_deadline_skips_source_setup(tmp_path, capsys):
 
     with patch.dict(os.environ, {
                 mindie_launch.SESSION_START_DEADLINE_ENV: str(time_mod.monotonic() - 1),
-            }), patch("setup.prepare_binding") as prepare:
+            }), patch("setup.prepare_binding") as prepare, \
+            patch("setup.prepare_binding_within") as bounded_prepare:
         assert mindie_launch.main(["--source", str(tmp_path), "hook", "session-start"]) == 0
     prepare.assert_not_called()
+    bounded_prepare.assert_not_called()
     assert json.loads(capsys.readouterr().out)["systemMessage"] == (
         "MindIE startup maintenance is incomplete.")
 
@@ -409,7 +411,7 @@ def test_session_start_source_setup_consumes_shared_deadline(tmp_path, capsys):
     data = tmp_path / "plugin-data"
     data.mkdir()
 
-    def slow_prepare(src):
+    def slow_prepare(src, deadline_at):
         time_mod.sleep(0.15)
         return {"config": str(adapter)}
 
@@ -418,7 +420,8 @@ def test_session_start_source_setup_consumes_shared_deadline(tmp_path, capsys):
                 mindie_launch.SESSION_START_DEADLINE_ENV: str(shared),
                 "CLAUDE_PLUGIN_DATA": str(data),
             }), \
-            patch("setup.prepare_binding", side_effect=slow_prepare) as prepare, \
+            patch("setup.prepare_binding_within", side_effect=slow_prepare) as prepare, \
+            patch("setup.prepare_binding") as unbounded, \
             patch("setup.publish_entry"), \
             patch("harness.require_binding_support", return_value="2.1.299"), \
             patch.object(mindie_launch, "_read_hook_stdin", return_value=b"{}"), \
@@ -429,6 +432,7 @@ def test_session_start_source_setup_consumes_shared_deadline(tmp_path, capsys):
                               return_value='{"status":"ready"}') as runner:
         assert mindie_launch.main(["--source", str(source), "hook", "session-start"]) == 0
     prepare.assert_called_once()
+    unbounded.assert_not_called()
     timeout = runner.call_args.kwargs["timeout"]
     assert timeout <= 0.4
     assert timeout < mindie_launch.BOOTSTRAP_TOTAL
@@ -453,12 +457,13 @@ def test_session_start_without_env_counts_source_setup_in_budget(tmp_path, capsy
     data = tmp_path / "plugin-data"
     data.mkdir()
 
-    def slow_prepare(src):
+    def slow_prepare(src, deadline_at):
         time_mod.sleep(0.12)
         return {"config": str(adapter)}
 
     with patch.dict(os.environ, {"CLAUDE_PLUGIN_DATA": str(data)}), \
-            patch("setup.prepare_binding", side_effect=slow_prepare) as prepare, \
+            patch("setup.prepare_binding_within", side_effect=slow_prepare) as prepare, \
+            patch("setup.prepare_binding") as unbounded, \
             patch("setup.publish_entry"), \
             patch("harness.require_binding_support", return_value="2.1.299"), \
             patch.object(mindie_launch, "_read_hook_stdin", return_value=b"{}"), \
@@ -470,9 +475,27 @@ def test_session_start_without_env_counts_source_setup_in_budget(tmp_path, capsy
                          return_value='{"status":"ready"}') as runner:
         assert mindie_launch.main(["--source", str(source), "hook", "session-start"]) == 0
     prepare.assert_called_once()
+    unbounded.assert_not_called()
     timeout = runner.call_args.kwargs["timeout"]
     assert timeout < 0.4
     assert timeout <= 0.32
+
+
+def test_source_setup_timeout_does_not_run_unbounded_prepare(tmp_path, capsys):
+    import mindie_launch
+    import time as time_mod
+
+    with patch.dict(os.environ, {
+                mindie_launch.SESSION_START_DEADLINE_ENV: str(time_mod.monotonic() + 0.4),
+            }), patch("setup.prepare_binding_within", side_effect=TimeoutError(
+                "session-start budget exhausted during binding setup")), \
+            patch("setup.prepare_binding") as unbounded, \
+            patch("setup.publish_entry") as publish:
+        assert mindie_launch.main(["--source", str(tmp_path), "hook", "session-start"]) == 0
+    unbounded.assert_not_called()
+    publish.assert_not_called()
+    assert json.loads(capsys.readouterr().out)["systemMessage"] == (
+        "MindIE startup maintenance is incomplete.")
 
 
 def test_session_start_forwards_native_fork_payload_to_selected_maintenance(capsys, tmp_path):

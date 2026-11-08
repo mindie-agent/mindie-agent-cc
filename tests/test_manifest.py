@@ -39,7 +39,7 @@ class ManifestTests(unittest.TestCase):
             "shared bootstrap+launch, and cleanup grace",
         )
         self.assertNotIn("--offline", session_hook["command"])
-        self.assertIn("--python 3.13", session_hook["command"])
+        self.assertNotIn("--python 3.13", session_hook["command"])
         mcp = json.loads((ROOT / ".mcp.json").read_text(encoding="utf-8"))
         self.assertIn("knowledge", mcp["mcpServers"])
         self.assertIn("remote", mcp["mcpServers"])
