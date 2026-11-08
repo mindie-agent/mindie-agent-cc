@@ -11,8 +11,9 @@ for `mindie-agent-cc` and invokes `setup.py` to record the installation binding.
 
 [Timeouts & Locks]
 - Acquires `OperationLock` and runs subprocesses through `bounded.run` with
-  the shared SessionStart deadline (`BOOTSTRAP_TOTAL = 1200.0s` in
-  `mindie_launch.py`, exported as `MINDIE_SESSION_START_DEADLINE_MONOTONIC`).
+  the shared SessionStart deadline (`BOOTSTRAP_TOTAL` in `mindie_launch.py`,
+  exported as `MINDIE_SESSION_START_DEADLINE_MONOTONIC`). Outer hook timeout
+  also covers `UV_PYTHON_PROVISION` for the initial `uv --python 3.13` fetch.
 
 [Side-Effect Policy]
 - Materializes the isolated runtime under `runtime_root()` and writes atomic

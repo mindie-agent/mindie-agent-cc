@@ -28,11 +28,18 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual(hooks["hooks"]["PreToolUse"][0]["hooks"][0]["timeout"], 20)
         self.assertEqual(hooks["hooks"]["Stop"][0]["hooks"][0]["timeout"], 20)
         import mindie_launch
-        session_timeout = hooks["hooks"]["SessionStart"][0]["hooks"][0]["timeout"]
+        session_hook = hooks["hooks"]["SessionStart"][0]["hooks"][0]
+        session_timeout = session_hook["timeout"]
         self.assertGreaterEqual(
-            session_timeout, mindie_launch.BOOTSTRAP_TOTAL + 60,
-            "SessionStart outer timeout must cover shared bootstrap+launch plus cleanup grace",
+            session_timeout,
+            mindie_launch.BOOTSTRAP_TOTAL
+            + mindie_launch.UV_PYTHON_PROVISION
+            + mindie_launch.SESSION_START_CLEANUP_GRACE,
+            "SessionStart outer timeout must cover uv python provision, "
+            "shared bootstrap+launch, and cleanup grace",
         )
+        self.assertNotIn("--offline", session_hook["command"])
+        self.assertIn("--python 3.13", session_hook["command"])
         mcp = json.loads((ROOT / ".mcp.json").read_text(encoding="utf-8"))
         self.assertIn("knowledge", mcp["mcpServers"])
         self.assertIn("remote", mcp["mcpServers"])
