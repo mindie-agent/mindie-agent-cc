@@ -11,9 +11,10 @@ for `mindie-agent-cc` and invokes `setup.py` to record the installation binding.
 
 [Timeouts & Locks]
 - Acquires `OperationLock` and runs subprocesses through `bounded.run` with
-  the shared SessionStart deadline (`BOOTSTRAP_TOTAL` + `UV_PYTHON_PROVISION`
-  in `mindie_launch.py`, exported as `MINDIE_SESSION_START_DEADLINE_MONOTONIC`).
-  SessionStart re-execs `uv --python 3.13` under that clock.
+  the shared SessionStart deadline (`BOOTSTRAP_TOTAL` + `UV_PYTHON_PROVISION`).
+  `session_start.arm_deadline` publishes wall time across the 3.9→3.13 `execve`,
+  then rebases onto local `MINDIE_SESSION_START_DEADLINE_MONOTONIC` because
+  macOS monotonic clocks are not comparable across those interpreters.
 
 [Side-Effect Policy]
 - Materializes the isolated runtime under `runtime_root()` and writes atomic
@@ -215,17 +216,9 @@ def main(argv=None):
         raise RuntimeError("release entry is not prepared; start a new Claude session")
     deadline_at = None
     if argv[:1] == ["hook"] and argv[1:2] == ["session-start"]:
-        from mindie_launch import (
-            BOOTSTRAP_TOTAL, SESSION_START_DEADLINE_ENV, UV_PYTHON_PROVISION,
-        )
-        existing = os.environ.get(SESSION_START_DEADLINE_ENV)
+        import session_start
         inner = os.environ.get(SESSION_START_INNER_ENV) == "1"
-        if existing:
-            deadline_at = float(existing)
-        else:
-            extra = 0.0 if inner else UV_PYTHON_PROVISION
-            deadline_at = time.monotonic() + BOOTSTRAP_TOTAL + extra
-        os.environ[SESSION_START_DEADLINE_ENV] = str(deadline_at)
+        deadline_at = session_start.arm_deadline(inner)
         if not inner:
             _reexec_python313(argv)
             return

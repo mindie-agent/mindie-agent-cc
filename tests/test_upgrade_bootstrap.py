@@ -72,6 +72,8 @@ def test_session_start_exports_shared_deadline_to_launch(monkeypatch):
         captured["command"] = command
 
     monkeypatch.setenv(bootstrap.SESSION_START_INNER_ENV, "1")
+    monkeypatch.delenv("MINDIE_SESSION_START_DEADLINE_MONOTONIC", raising=False)
+    monkeypatch.delenv("MINDIE_SESSION_START_DEADLINE_UNIX", raising=False)
     monkeypatch.setattr(bootstrap, "ensure_runtime", fake_ensure)
     monkeypatch.setattr(bootstrap.bounded, "exec_or_wait", fake_exec)
     started = time.monotonic()
@@ -84,27 +86,56 @@ def test_session_start_exports_shared_deadline_to_launch(monkeypatch):
 
 
 def test_session_start_reexecs_python313_inside_shared_deadline(monkeypatch):
+    import session_start
+
     captured = {}
 
     def fake_reexec(argv):
         captured["argv"] = list(argv)
-        captured["deadline"] = float(os.environ["MINDIE_SESSION_START_DEADLINE_MONOTONIC"])
+        captured["unix"] = float(os.environ[session_start.DEADLINE_UNIX_ENV])
+        captured["monotonic"] = os.environ.get(session_start.DEADLINE_ENV)
 
     monkeypatch.delenv(bootstrap.SESSION_START_INNER_ENV, raising=False)
-    monkeypatch.delenv("MINDIE_SESSION_START_DEADLINE_MONOTONIC", raising=False)
+    monkeypatch.delenv(session_start.DEADLINE_ENV, raising=False)
+    monkeypatch.delenv(session_start.DEADLINE_UNIX_ENV, raising=False)
     monkeypatch.setattr(bootstrap, "_reexec_python313", fake_reexec)
     monkeypatch.setattr(bootstrap, "ensure_runtime",
                         lambda *a, **k: captured.setdefault("ensured", True))
     monkeypatch.setattr(bootstrap.bounded, "exec_or_wait",
                         lambda *a, **k: captured.setdefault("execed", True))
-    started = time.monotonic()
+    started = time.time()
     bootstrap.main(["hook", "session-start"])
     assert "ensured" not in captured
     assert "execed" not in captured
-    import mindie_launch
-    expected = mindie_launch.BOOTSTRAP_TOTAL + mindie_launch.UV_PYTHON_PROVISION
-    assert expected - 10 <= captured["deadline"] - started <= expected + 10
+    expected = session_start.BOOTSTRAP_TOTAL + session_start.UV_PYTHON_PROVISION
+    assert expected - 10 <= captured["unix"] - started <= expected + 10
+    assert captured["monotonic"] is None
     assert captured["argv"] == ["hook", "session-start"]
+
+
+def test_bootstrap_inner_rebases_expired_foreign_monotonic(monkeypatch):
+    """macOS 3.9 monotonic is already in the past on 3.13; rebase from wall time."""
+    import session_start
+
+    captured = {}
+
+    def fake_ensure(source, *, prepare=True, on_process=None, deadline_at=None):
+        captured["deadline_at"] = deadline_at
+        return Path("/python"), Path("/scripts")
+
+    def fake_exec(command, env):
+        captured["env"] = env
+
+    monkeypatch.setenv(bootstrap.SESSION_START_INNER_ENV, "1")
+    monkeypatch.setenv(session_start.DEADLINE_ENV, str(time.monotonic() - 50))
+    monkeypatch.setenv(session_start.DEADLINE_UNIX_ENV, str(time.time() + 1380))
+    monkeypatch.setattr(bootstrap, "ensure_runtime", fake_ensure)
+    monkeypatch.setattr(bootstrap.bounded, "exec_or_wait", fake_exec)
+    started = time.monotonic()
+    bootstrap.main(["hook", "session-start"])
+    deadline = captured["deadline_at"]
+    assert 1360 <= deadline - started <= 1400
+    assert float(captured["env"]["MINDIE_SESSION_START_DEADLINE_MONOTONIC"]) == deadline
 
 
 def test_reexec_python313_invokes_uv_python_313(monkeypatch):
@@ -137,24 +168,68 @@ def test_session_start_sets_deadline_before_python313_reexec(monkeypatch):
 
     seen = {}
     monkeypatch.delenv(session_start.DEADLINE_ENV, raising=False)
+    monkeypatch.delenv(session_start.DEADLINE_UNIX_ENV, raising=False)
     monkeypatch.delenv(session_start.INNER_ENV, raising=False)
     monkeypatch.setattr(session_start.shutil, "which", lambda name: "/usr/bin/uv")
 
     def fake_execve(cmd, argv, env):
         seen["cmd"] = cmd
         seen["argv"] = list(argv)
-        seen["deadline"] = float(env[session_start.DEADLINE_ENV])
+        seen["unix"] = float(env[session_start.DEADLINE_UNIX_ENV])
+        seen["monotonic"] = env.get(session_start.DEADLINE_ENV)
         seen["inner"] = env.get(session_start.INNER_ENV)
 
     monkeypatch.setattr(os, "execve", fake_execve)
-    started = time.monotonic()
+    started = time.time()
     session_start.main(["hook", "session-start"])
     expected = session_start.BOOTSTRAP_TOTAL + session_start.UV_PYTHON_PROVISION
-    assert expected - 10 <= seen["deadline"] - started <= expected + 10
+    assert expected - 10 <= seen["unix"] - started <= expected + 10
+    assert seen["monotonic"] is None
     assert seen["argv"][:6] == [
         "/usr/bin/uv", "--native-tls", "run", "--no-project", "--python", "3.13",
     ]
     assert seen["inner"] == "1"
+
+
+def test_arm_deadline_inner_ignores_expired_foreign_monotonic(monkeypatch):
+    import session_start
+
+    monkeypatch.setenv(session_start.INNER_ENV, "1")
+    monkeypatch.setenv(session_start.DEADLINE_ENV, str(time.monotonic() - 50))
+    monkeypatch.setenv(session_start.DEADLINE_UNIX_ENV, str(time.time() + 1380))
+    started = time.monotonic()
+    deadline = session_start.arm_deadline(inner=True)
+    assert 1360 <= deadline - started <= 1400
+    assert float(os.environ[session_start.DEADLINE_ENV]) == deadline
+
+
+def test_arm_deadline_inner_charges_time_spent_before_reexec(monkeypatch):
+    import session_start
+
+    budget = session_start.BOOTSTRAP_TOTAL + session_start.UV_PYTHON_PROVISION
+    monkeypatch.setenv(session_start.DEADLINE_UNIX_ENV, str(time.time() + budget - 90))
+    started = time.monotonic()
+    deadline = session_start.arm_deadline(inner=True)
+    assert 1270 <= deadline - started <= 1310
+
+
+def test_session_start_inner_rebases_before_bootstrap(monkeypatch):
+    import session_start
+
+    seen = {}
+
+    def fake_run_path(path, run_name=None):
+        seen["path"] = path
+        seen["deadline"] = float(os.environ[session_start.DEADLINE_ENV])
+
+    monkeypatch.setenv(session_start.INNER_ENV, "1")
+    monkeypatch.setenv(session_start.DEADLINE_ENV, str(time.monotonic() - 50))
+    monkeypatch.setenv(session_start.DEADLINE_UNIX_ENV, str(time.time() + 1380))
+    monkeypatch.setattr(session_start.runpy, "run_path", fake_run_path)
+    started = time.monotonic()
+    session_start.main(["hook", "session-start"])
+    assert seen["path"].endswith("bootstrap.py")
+    assert 1360 <= seen["deadline"] - started <= 1400
 
 
 def test_bootstrap_module_defers_product_contract_until_after_import():
