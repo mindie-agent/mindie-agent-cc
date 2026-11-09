@@ -27,6 +27,20 @@ class ManifestTests(unittest.TestCase):
         self.assertTrue(matcher.startswith("^mcp__plugin_mindie-agent_"))
         self.assertEqual(hooks["hooks"]["PreToolUse"][0]["hooks"][0]["timeout"], 20)
         self.assertEqual(hooks["hooks"]["Stop"][0]["hooks"][0]["timeout"], 20)
+        import mindie_launch
+        session_hook = hooks["hooks"]["SessionStart"][0]["hooks"][0]
+        session_timeout = session_hook["timeout"]
+        self.assertGreaterEqual(
+            session_timeout,
+            mindie_launch.BOOTSTRAP_TOTAL
+            + mindie_launch.UV_PYTHON_PROVISION
+            + mindie_launch.SESSION_START_CLEANUP_GRACE,
+            "SessionStart outer timeout must cover uv python provision, "
+            "shared bootstrap+launch, and cleanup grace",
+        )
+        self.assertIn("--offline --no-python-downloads", session_hook["command"])
+        self.assertNotIn("--python 3.13", session_hook["command"])
+        self.assertIn("session_start.py", session_hook["command"])
         mcp = json.loads((ROOT / ".mcp.json").read_text(encoding="utf-8"))
         self.assertIn("knowledge", mcp["mcpServers"])
         self.assertIn("remote", mcp["mcpServers"])
@@ -65,8 +79,9 @@ class ManifestTests(unittest.TestCase):
                 for hook in row["hooks"]:
                     self.assertIn("CLAUDE_PLUGIN_DATA", hook["command"])
                     self.assertIn(version, hook["command"])
+                    self.assertIn("--offline --no-python-downloads", hook["command"])
                     if name != "SessionStart":
-                        self.assertIn("--offline --no-python-downloads", hook["command"])
+                        self.assertIn("--python 3.13", hook["command"])
 
     def test_runtime_lock_rejects_foreign_or_floating_git_sources(self):
         from product_contract import requirements

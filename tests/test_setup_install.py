@@ -537,3 +537,105 @@ def test_sharing_status_enable_and_disable_lifecycle(tmp_path, capsys):
         assert after_disable["reporting_enabled"] is False
         assert after_disable["fork"] == "alice/knowledge-vllm-ascend"
         assert after_disable["needs_onboarding_prompt"] is False
+
+
+def test_prepare_binding_within_uses_remaining_shared_deadline(monkeypatch, tmp_path):
+    import bounded
+    import time as time_mod
+
+    seen = {}
+
+    def fake_run(argv, *a, **kw):
+        seen["timeout"] = kw["timeout"]
+        seen["argv"] = argv
+        seen["env"] = kw.get("env") or {}
+        return json.dumps({"config": str(tmp_path / "cc.json"), "status": "ready"})
+
+    monkeypatch.setattr(bounded, "run", fake_run)
+    deadline = time_mod.monotonic() + 1.25
+    result = setup.prepare_binding_within(tmp_path, deadline)
+    assert result["status"] == "ready"
+    assert 0.5 < seen["timeout"] <= 1.25
+    assert seen["argv"][-2:] == ["--source", str(tmp_path)]
+    assert seen["env"].get("MINDIE_MAINTENANCE_GROUP") == "1"
+    assert float(seen["env"]["MINDIE_SESSION_START_DEADLINE_MONOTONIC"]) == deadline
+
+
+def test_prepare_binding_within_rejects_expired_deadline(tmp_path):
+    import time as time_mod
+
+    with pytest.raises(TimeoutError, match="before binding setup"):
+        setup.prepare_binding_within(tmp_path, time_mod.monotonic() - 1)
+
+
+def test_prepare_binding_within_kills_child_when_deadline_elapses(tmp_path, monkeypatch):
+    import time as time_mod
+
+    hanging = tmp_path / "setup.py"
+    hanging.write_text("import time\ntime.sleep(8)\n", encoding="utf-8")
+    monkeypatch.setattr(setup, "HERE", tmp_path)
+    started = time_mod.monotonic()
+    with pytest.raises(TimeoutError, match="during binding setup"):
+        setup.prepare_binding_within(tmp_path, time_mod.monotonic() + 0.25)
+    assert time_mod.monotonic() - started < 2.5
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process-group inheritance is POSIX")
+def test_prepare_binding_within_reaps_nested_domain_worker(tmp_path, monkeypatch):
+    import time as time_mod
+    import process_probe
+
+    marker = tmp_path / "worker.pid"
+    hanging = tmp_path / "setup.py"
+    hanging.write_text(
+        "import os, subprocess, sys, time\n"
+        "from pathlib import Path\n"
+        "inherited = os.environ.get('MINDIE_MAINTENANCE_GROUP') == '1' "
+        "and os.getpgrp() == os.getpid()\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], "
+        "start_new_session=not inherited)\n"
+        f"Path({str(marker)!r}).write_text(str(child.pid))\n"
+        "time.sleep(30)\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(setup, "HERE", tmp_path)
+    with pytest.raises(TimeoutError, match="during binding setup"):
+        setup.prepare_binding_within(tmp_path, time_mod.monotonic() + 0.4)
+    pid = int(marker.read_text(encoding="utf-8"))
+    deadline = time_mod.monotonic() + 2.0
+    while time_mod.monotonic() < deadline and process_probe.alive(pid):
+        time_mod.sleep(0.05)
+    assert not process_probe.alive(pid)
+
+
+def test_prepare_domains_caps_timeout_to_shared_deadline(monkeypatch):
+    import bounded
+    import capture_config
+    import time as time_mod
+
+    seen = {}
+
+    def fake_run(argv, *a, **kw):
+        seen["timeout"] = kw["timeout"]
+        return json.dumps({"domain_configs": {"vllm-ascend": {}}})
+
+    monkeypatch.setattr(bounded, "run", fake_run)
+    monkeypatch.setenv("MINDIE_SESSION_START_DEADLINE_MONOTONIC",
+                       str(time_mod.monotonic() + 1.5))
+    result = capture_config.prepare_domains("python", {}, {})
+    assert result == {"vllm-ascend": {}}
+    assert 0.2 < seen["timeout"] <= 1.5
+    assert seen["timeout"] < 90
+
+
+def test_prepare_domains_rejects_expired_shared_deadline(monkeypatch):
+    import bounded
+    import capture_config
+    import time as time_mod
+
+    monkeypatch.setenv("MINDIE_SESSION_START_DEADLINE_MONOTONIC",
+                       str(time_mod.monotonic() - 1))
+    with patch.object(bounded, "run") as runner:
+        with pytest.raises(TimeoutError, match="session-start budget exhausted"):
+            capture_config.prepare_domains("python", {}, {})
+    runner.assert_not_called()

@@ -12,11 +12,9 @@ Top-level entrypoint invoked by Claude Code hooks (`SessionStart`,
   references to user-facing hook warnings.
 
 [Timeouts & Locks]
-- Enforces `HOOK_TOTAL = 10.0s`, `HOOK_LOCK_BUDGET = 2.0s`, and
-  `BOOTSTRAP_TOTAL = 540.0s` (`outer_timeout >= sum(inner_budgets) + grace`).
-- Remote MCP children use the native inner wait (Bash/TaskOutput up to 600s)
-  plus `REMOTE_GRACE_SECONDS = 60s`; knowledge/entry children stay on their
-  own bounded budgets.
+- `HOOK_TOTAL = 10.0s`, `HOOK_LOCK_BUDGET = 2.0s`. SessionStart outer timeout
+  covers `UV_PYTHON_PROVISION` + `BOOTSTRAP_TOTAL` + cleanup grace; the shared
+  deadline is read before `--source` setup. Remote MCP: native wait + 60s grace.
 
 [Side-Effect Policy]
 - Dispatches into `entry.py`, `bridge.py`, `mcp_server.py`, or background
@@ -37,8 +35,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bounded
-
-
 import diagnostic_support
 from install_state import (
     InstallationUnavailable, LockTimeout, binding_snapshot, installed_binding,
@@ -47,6 +43,9 @@ from install_state import (
 HOOK_TOTAL = float(os.environ.get("MINDIE_HOOK_TOTAL_SECONDS") or 10.0)
 HOOK_LOCK_BUDGET = float(os.environ.get("MINDIE_HOOK_LOCK_BUDGET_SECONDS") or 2.0)
 BOOTSTRAP_TOTAL = float(os.environ.get("MINDIE_BOOTSTRAP_TOTAL_SECONDS") or 1200.0)
+UV_PYTHON_PROVISION = 180.0  # SessionStart `uv --python 3.13` may fetch CPython.
+SESSION_START_CLEANUP_GRACE = 60.0
+SESSION_START_DEADLINE_ENV = "MINDIE_SESSION_START_DEADLINE_MONOTONIC"
 # Knowledge stdout only. A legal maximum page measured 817407 bytes.
 KNOWLEDGE_MAX_OUTPUT = 1024 * 1024
 MAX_RPC_ID = 256
@@ -56,9 +55,6 @@ EOF_JOIN = 3.0
 OUTPUT_BUDGET = 1.0
 CALL_CHILD_BUDGET = 60.0
 ENTRY_CHILD_BUDGET = 180.0
-# Remote child budget: outer >= legal native inner wait + transport/cleanup
-# grace. Claude Bash/TaskOutput can legally wait 600s; a fixed 60s or 120s
-# outer deadline would cut off a native call that is still doing useful work.
 REMOTE_GRACE_SECONDS = 60.0
 REMOTE_MIN_BUDGET_SECONDS = 180.0
 REMOTE_MAX_OUTPUT = bounded.REMOTE_MAX_OUTPUT
@@ -102,12 +98,7 @@ def _record_hook(stage, category, op="stop", exception=None):
 
 
 def _sharing_enabled(binding=None) -> bool:
-    """True only when community sharing is explicitly enabled.
-
-    A missing adapter or community file, or an explicit off, is quiet.
-    An existing file that cannot be read or parsed is a configuration
-    failure, not off.
-    """
+    """True only for explicit enabled sharing; unreadable config is not off."""
     from entry import _read_regular_json
 
     path = _config_path()
@@ -182,6 +173,19 @@ def _hook_warning(*, unavailable=False) -> int:
     return 0
 
 
+def _pretool_deny(reason: str, code: int = 2) -> int:
+    text = f"MindIE PreToolUse bind failed: {reason}"
+    print(json.dumps({"systemMessage": text, "hookSpecificOutput": {
+        "hookEventName": "PreToolUse", "permissionDecision": "deny",
+        "permissionDecisionReason": text}}, ensure_ascii=False), flush=True)
+    return int(code) or 2
+
+
+def _session_start_incomplete() -> int:
+    print(json.dumps({"systemMessage": "MindIE startup maintenance is incomplete."}))
+    return 0
+
+
 def _expansion_error(text: str) -> int:
     payload = {
         "additionalContext": text,
@@ -195,13 +199,7 @@ def _expansion_error(text: str) -> int:
 
 
 def _read_hook_stdin(deadline):
-    """Deadline-bounded raw fd read; never buffered I/O (shutdown can hang).
-
-    Stops at EOF, the deadline, or the first complete JSON
-    value so a held-open pipe cannot consume the helper's remaining time.
-    Windows native select is sockets-only; a daemon os.read thread is the
-    portable bound (code-only on Windows; not natively verified).
-    """
+    """Deadline-bounded raw fd read; never buffered I/O (shutdown can hang)."""
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         return b""
@@ -223,8 +221,6 @@ def _read_hook_stdin(deadline):
                     return
                 with lock:
                     buf.extend(chunk)
-                    # Native Stop is one object. Avoid reparsing a growing
-                    # final answer after every chunk (quadratic work).
                     if not chunk.rstrip().endswith((b'}', b']')):
                         continue
                     try:
@@ -279,6 +275,7 @@ def _hook(op: str) -> int:
         return _fail_open()
     raw = _read_hook_stdin(deadline)
     stage = "installation"
+    receipt = {}
     try:
         admission = (
             nullcontext(binding_snapshot()) if op == "stop"
@@ -296,10 +293,20 @@ def _hook(op: str) -> int:
             stage = "helper_failed"
             out = bounded.run(
                 [selected["python"], str(script), op], raw, timeout=remaining,
-                env=_child_env(selected), cwd=str(script.parent), check=True,
+                env=_child_env(selected), cwd=str(script.parent),
+                check=op != "pretool", receipt=receipt,
                 allow_service=_hook_can_start_service(op, raw),
             )
-        value = json.loads(out.strip())
+        code = int(receipt.get("returncode") or 0) if op == "pretool" else 0
+        try:
+            value = json.loads(out.strip()) if (out or "").strip() else None
+        except ValueError:
+            value = None
+        if op == "pretool" and code:
+            if isinstance(value, dict) and value:
+                print(json.dumps(value, ensure_ascii=False), flush=True)
+                return code
+            return _pretool_deny("helper exited without a JSON receipt", code)
         if not isinstance(value, dict):
             raise ValueError("hook result must be one object")
         print(json.dumps(value, ensure_ascii=False), flush=True)
@@ -310,6 +317,9 @@ def _hook(op: str) -> int:
         _record_hook(stage, category, op, exc)
         if isinstance(exc, LockTimeout):
             return _hook_warning(unavailable=True)
+        if op == "pretool":
+            return _pretool_deny(f"{type(exc).__name__}: {exc}",
+                                 int(receipt.get("returncode") or 0) or 2)
         if op == "expansion":
             return _expansion_error("MindIE entry failed; inspect reporting-status.")
         return _hook_warning()
@@ -320,15 +330,9 @@ def _local_answer(message: dict):
     ident = message.get("id")
     if method == "initialize":
         from product_contract import installed_version
-        return dict(
-            jsonrpc="2.0",
-            id=ident,
-            result=dict(
-                protocolVersion="2025-11-25",
-                capabilities={"tools": {}},
-                serverInfo={"name": "mindie-cc-front", "version": installed_version()},
-            ),
-        )
+        return dict(jsonrpc="2.0", id=ident, result=dict(
+            protocolVersion="2025-11-25", capabilities={"tools": {}},
+            serverInfo={"name": "mindie-cc-front", "version": installed_version()}))
     if method == "ping":
         return dict(jsonrpc="2.0", id=ident, result={})
     return None
@@ -361,14 +365,8 @@ def _validated_remote_ref(message):
 
 
 def _front_reject(ident, text: str):
-    return dict(
-        jsonrpc="2.0",
-        id=ident,
-        result=dict(
-            content=[dict(type="text", text=text[:500])],
-            isError=True,
-        ),
-    )
+    return dict(jsonrpc="2.0", id=ident,
+                result=dict(content=[dict(type="text", text=text[:500])], isError=True))
 
 
 def _stage_error(ident, message, stage: str, surface: str):
@@ -392,15 +390,9 @@ def _stage_error(ident, message, stage: str, surface: str):
                 f"Remote submission unconfirmed ({stage}). "
                 "Inspect local remote-dev job records before a deliberate repeat."
             )
-    return dict(
-        jsonrpc="2.0",
-        id=ident,
-        result=dict(
-            content=[dict(type="text", text=text[:500])],
-            isError=True,
-            structuredContent=structured,
-        ),
-    )
+    return dict(jsonrpc="2.0", id=ident, result=dict(
+        content=[dict(type="text", text=text[:500])], isError=True,
+        structuredContent=structured))
 
 
 def remote_inner_wait_seconds(name, arguments):
@@ -420,10 +412,7 @@ def remote_inner_wait_seconds(name, arguments):
 
 def remote_budget(name, arguments=None, *, native_wait_ms=None,
                   grace=REMOTE_GRACE_SECONDS, minimum=REMOTE_MIN_BUDGET_SECONDS):
-    """Outer child budget: native wait + SSH/framing/drain/cleanup grace.
-
-    Pure and injectable so the arithmetic is proven without a 600s sleep.
-    """
+    """Outer child budget: native wait + SSH/framing/drain/cleanup grace."""
     if isinstance(grace, bool) or not isinstance(grace, (int, float)) \
             or not math.isfinite(grace) or grace <= 0:
         raise ValueError("remote grace must be a positive finite number")
@@ -444,19 +433,14 @@ def _dispatch_budget(surface, message):
     name = _local_tool_name(message)
     arguments = (message.get("params") or {}).get("arguments") or {}
     if surface == "remote":
-        # Control calls still permit an SSH round-trip; they are not local.
         return remote_budget(name, arguments)
     if surface == "components" and message.get("method") == "tools/call":
         from component_tools import MAX_TIMEOUT_MS
         milliseconds = arguments.get("timeout_ms", 120000)
         if type(milliseconds) is not int or not 1 <= milliseconds <= MAX_TIMEOUT_MS:
-            # The bound helper consumes identity and rejects invalid inputs.
             milliseconds = 120000
-        # Claim/finish can each wait 5s; Windows cleanup waits 2 + 2 + 2s.
-        # Keep additional room for process startup, diagnostics and output.
         return milliseconds / 1000 + 30.0
     if surface == "knowledge" and name == "knowledge_sync":
-        # Sync 120s + domain/claim/finish 15s + cleanup 6s + publication grace.
         return 150.0
     if name == "mindie_entry":
         return ENTRY_CHILD_BUDGET
@@ -476,8 +460,6 @@ def _dispatch(surface: str, raw: bytes, ident, cancel=None, *, binding=None, dea
                          "knowledge_query", "knowledge_explain", "knowledge_feedback",
                          "knowledge_distill"})
     try:
-        # All operations, including cancellation/status tools, take a shared
-        # OS lock. Activation never interrupts a helper admitted here.
         with installed_binding(binding) as current:
             selected = _runtime(current)
             script = Path(selected["scripts"]) / "mcp_server.py"
@@ -715,8 +697,7 @@ def _mcp(surface: str) -> int:
             thread = threading.Thread(
                 target=execute,
                 args=(raw, message, ident, cancel, slot),
-                name=f"mindie-mcp-{ident}",
-                daemon=True,  # EOF does not join a blocked transport writer forever.
+                name=f"mindie-mcp-{ident}", daemon=True,
             )
             thread.start()
             workers.append(thread)
@@ -738,11 +719,28 @@ def _mcp(surface: str) -> int:
 
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    rest = argv[2:] if argv[:1] == ["--source"] else argv
+    if rest[:1] == ["--config"] and len(rest) > 1:
+        rest = rest[2:]
+    deadline = None
+    if rest[:2] == ["hook", "session-start"]:
+        raw = os.environ.get(SESSION_START_DEADLINE_ENV)
+        deadline = float(raw) if raw else time.monotonic() + BOOTSTRAP_TOTAL
+        if deadline - time.monotonic() <= 0:
+            _record_hook("installation", "timeout", op="session-start")
+            return _session_start_incomplete()
     if argv[:1] == ["--source"]:
         source = Path(argv[1])
         argv = argv[2:]
-        from setup import prepare_binding, publish_entry
-        prepared = prepare_binding(source)
+        from setup import prepare_binding, prepare_binding_within, publish_entry
+        try:
+            prepared = (
+                prepare_binding(source) if deadline is None
+                else prepare_binding_within(source, deadline)
+            )
+        except TimeoutError as exc:
+            _record_hook("installation", "timeout", op="session-start", exception=exc)
+            return _session_start_incomplete()
         os.environ[CONFIG_ENV] = prepared["config"]
         data = os.environ.get("CLAUDE_PLUGIN_DATA")
         if not data or not Path(data).is_absolute():
@@ -755,11 +753,13 @@ def main(argv=None) -> int:
     kind = argv[0] if argv else ""
     name = argv[1] if len(argv) > 1 else ""
     if kind == "hook" and name == "session-start":
-        deadline = time.monotonic() + BOOTSTRAP_TOTAL
         event = _read_hook_stdin(deadline)
         if not event:
             _record_hook("input", "missing_identity", op="session-start")
             return _hook_warning()
+        if deadline - time.monotonic() <= 0:
+            _record_hook("installation", "timeout", op="session-start")
+            return _session_start_incomplete()
         try:
             with installed_binding(timeout=max(0.0, deadline - time.monotonic())) as binding:
                 from harness import require_binding_support
@@ -779,8 +779,7 @@ def main(argv=None) -> int:
             _record_hook("maintenance", category, op="session-start", exception=exc)
             result = {"status": "incomplete", "error_type": type(exc).__name__}
         if result["status"] != "ready":
-            print(json.dumps({"systemMessage": "MindIE startup maintenance is incomplete."}))
-            return 0
+            return _session_start_incomplete()
         return _fail_open()
     if kind == "hook" and name in {"expansion", "pretool", "stop"}:
         return _hook(name)
