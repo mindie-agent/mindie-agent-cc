@@ -53,3 +53,13 @@ jobs:
           PYTHONUTF8: '0'
           MINDIE_TEST_KNOWLEDGE_CHECKOUT: ${{ github.workspace }}/.ci/knowledge
         run: uv run --locked --no-editable --group test python -m pytest -q -m "not live_npu"
+
+  release-ready:
+    name: release-ready
+    needs: [component]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: python -c 'import json,os; assert all(job["result"] == "success" for job in json.loads(os.environ["RESULTS"]).values()), "required CI failed or was skipped"'
