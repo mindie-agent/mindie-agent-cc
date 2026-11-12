@@ -31,6 +31,8 @@ print(json.dumps({'jsonrpc':'2.0','id':message['id'],'result':{'content':[{'type
 class FrontControlTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
+        self.notifications = []
+        self.response_buffer = b""
         self.root = Path(self.tmp.name)
         generation = self.root / "generation"
         (generation / "scripts").mkdir(parents=True)
@@ -85,8 +87,19 @@ class FrontControlTests(unittest.TestCase):
         selector = selectors.DefaultSelector()
         selector.register(self.proc.stdout, selectors.EVENT_READ)
         try:
-            self.assertTrue(selector.select(3), "MCP response was not delivered")
-            return json.loads(self.proc.stdout.readline())
+            deadline = time.monotonic() + 3
+            while True:
+                while b"\n" not in self.response_buffer:
+                    self.assertTrue(selector.select(max(.001, deadline - time.monotonic())),
+                                    "MCP response was not delivered")
+                    data = os.read(self.proc.stdout.fileno(), 8192)
+                    self.assertTrue(data, "MCP response stream closed")
+                    self.response_buffer += data
+                line, _, self.response_buffer = self.response_buffer.partition(b"\n")
+                message = json.loads(line)
+                if "id" in message:
+                    return message
+                self.notifications.append(message)
         finally:
             selector.close()
 
@@ -179,6 +192,8 @@ class FrontControlTests(unittest.TestCase):
                    "params": {"name": "remote_job_status",
                               "arguments": {"job_id": "original-job"}}})
         response = self.read_response()
+        self.assertEqual(self.notifications, [
+            {"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}])
         self.assertEqual(response["result"]["structuredContent"], {
             "helper": str(scripts / "mcp_server.py"), "adapter": str(fixed),
         })
