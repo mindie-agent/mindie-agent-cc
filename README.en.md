@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/mindie-agent/mindie-agent-cc/releases"><img src="https://img.shields.io/badge/release-v0.1.18-0F766E.svg" alt="Release v0.1.18"></a>
+  <a href="https://github.com/mindie-agent/mindie-agent-cc/releases"><img src="https://img.shields.io/badge/release-v0.1.19-0F766E.svg" alt="Release v0.1.19"></a>
   <a href="harness-compatibility.json"><img src="https://img.shields.io/badge/Claude_Code-%3E%3D2.1.269_%3C3.0.0-D97757.svg" alt="Claude Code >=2.1.269 <3.0.0"></a>
   <a href="pyproject.toml"><img src="https://img.shields.io/badge/python-3.13-3776AB.svg" alt="Python 3.13"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-0F766E.svg" alt="License: MIT"></a>
@@ -27,7 +27,7 @@
 
 ---
 
-**MindIE Agent for Claude Code** (`mindie-agent-cc`) is the native Claude Code plugin for [MindIE Agent](https://github.com/mindie-agent/mindie-agent), supporting the **Ascend NPU AI Infra design, development, and testing lifecycle**. Release `v0.1.18` (paired with `mindie-agent 0.1.12`) delivers three core capabilities: **local and community knowledge base retrieval with privacy redaction** (focused on `vLLM-Ascend` feature development and `AscendC` / `Triton` kernel engineering), **remote SSH / Docker development and NPU inspection**, and **unified fault diagnostics with sanitized reporting**; additional Ascend software domains are tracked on the project roadmap.
+**MindIE Agent for Claude Code** (`mindie-agent-cc`) is the native Claude Code plugin for [MindIE Agent](https://github.com/mindie-agent/mindie-agent), supporting the **Ascend NPU AI Infra design, development, and testing lifecycle**. Release `v0.1.19` (paired with `mindie-agent 0.1.12`) delivers three core capabilities: **local and community knowledge base retrieval with privacy redaction** (focused on `vLLM-Ascend` feature development and `AscendC` / `Triton` kernel engineering), **remote SSH / Docker development and NPU inspection**, and **unified fault diagnostics with sanitized reporting**; additional Ascend software domains are tracked on the project roadmap.
 
 Built on the [MindIE Agent Engineering Design Principles](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.en.md), **domain knowledge and the Skill system are invoked manually on demand via `/mindie-agent`** so they never pollute unrelated tasks, while **`remote-dev` remote NPU development and testing tools trigger automatically by default** in everyday conversation—surfacing every failure or uncertain external state transparently without silent fallbacks.
 
@@ -112,7 +112,7 @@ If you are an AI Agent asked by the user to install this plugin, run the followi
    claude --version
    ```
    - **Hard Gate (Never skip or silently ignore, and never mutate global or system-wide host Git config)**: If `gh` is missing, assist the user in installing it first (macOS: `brew install gh`; Windows: `winget install --id GitHub.cli`; Ubuntu / WSL: `sudo apt update && sudo apt install -y gh`). Reuse a working account. Otherwise follow [GitHub Sign-In](skills/mindie-agent/references/github-authentication.md): browser login on ordinary networks, or token login on enterprise networks / blocked browser authorization. Use an existing token in the hidden `gh` prompt (or a supplied private file), or guide token creation. Verify transport strictly with process-scoped `GIT_CONFIG_COUNT` (and `UV_SYSTEM_CERTS=true UV_NATIVE_TLS=true` on enterprise TLS networks) without mutating global host Git config.
-   - Verify `claude --version` satisfies the compatible range supported by release `v0.1.18`: `>= 2.1.269 < 3.0.0` (declared in [`harness-compatibility.json`](harness-compatibility.json)).
+   - Verify `claude --version` satisfies the compatible range supported by release `v0.1.19`: `>= 2.1.269 < 3.0.0` (declared in [`harness-compatibility.json`](harness-compatibility.json)).
    - On **Linux or Windows WSL**, if the background knowledge service will be used, also run `systemctl --user show --property=Version` to verify `systemd >= 254` is reachable (inside WSL, use Linux-native `claude`, `git`, `uv`, and `gh`).
 
 2. **Optional project support and contribution setup**:
@@ -120,7 +120,7 @@ If you are an AI Agent asked by the user to install this plugin, run the followi
 
 3. **Add the marketplace, install the plugin, and initialize the locked runtime**:
    ```sh
-   claude plugin marketplace add "https://github.com/mindie-agent/mindie-agent-cc.git#v0.1.18"
+   claude plugin marketplace add "https://github.com/mindie-agent/mindie-agent-cc.git#v0.1.19"
    claude plugin install mindie-agent@mindie-agent-cc --scope user
    UV_SYSTEM_CERTS=true UV_NATIVE_TLS=true claude --init-only
    ```
