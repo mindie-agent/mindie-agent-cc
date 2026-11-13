@@ -23,6 +23,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import sys
 import threading
 import time
@@ -66,13 +67,23 @@ def _typed_update_error(exc):
     return exc
 
 
+def _effective_stage(default_stage, exc):
+    raw = getattr(exc, "mindie_stage", None)
+    if isinstance(raw, str) and raw:
+        normalized = re.sub(r"[^a-z0-9_]+", "_", raw.lower()).strip("_")
+        if normalized:
+            return normalized[:64]
+    return default_stage
+
+
 def _record_update_failure(stage, exc):
     import diagnostic_support
 
     typed = _typed_update_error(exc)
+    resolved_stage = _effective_stage(stage, typed)
     code = getattr(typed, "returncode", None)
     return diagnostic_support.failure(
-        "release.update", stage, "update", exception=typed,
+        "release.update", resolved_stage, "update", exception=typed,
         exit_code=code if type(code) is int else None,
     )
 
@@ -507,7 +518,7 @@ def _activate(binding, prepared, env, state):
         output = run(
             [prepared["python"], str(Path(prepared["runtime_scripts"]) / "setup.py"),
              "--activate", prepared["config"]],
-            timeout=120.0, env=env, allow_service=True, receipt=process,
+            timeout=120.0, env=env, allow_service=True, receipt=process, transport=True,
         )
         activated = json.loads(output)
         if not isinstance(activated, dict) or activated.get("status") not in {
@@ -523,6 +534,8 @@ def _activate(binding, prepared, env, state):
         if activated["status"] in {"activated", "current"}:
             state["installation_complete"] = True
     except BaseException as original:
+        if not getattr(original, "mindie_stage", None):
+            original.mindie_stage = "runtime_activation"
         state["activation_process"] = process
         if process.get("started") is False:
             state["activation_effect"] = "not_started"
@@ -579,7 +592,12 @@ def check(binding, state=None):
         )
         if result["candidate"] is None:
             from component_update import check as component_check
-            state["components"] = component_check(binding, native_installed["installPath"])
+            try:
+                state["components"] = component_check(binding, native_installed["installPath"])
+            except BaseException as exc:
+                if not getattr(exc, "mindie_stage", None):
+                    exc.mindie_stage = "component_update"
+                raise
             state.update(result, last_successful_check=time.time(), harness_version=version)
             state.pop("last_failed_check", None)
             return state
@@ -617,9 +635,11 @@ def check(binding, state=None):
             output = run(
                 [str(python), str(scripts / "setup.py"), "--source", str(installed),
                  "--config", binding["base_config"]],
-                timeout=360.0, env=env, receipt=process,
+                timeout=360.0, env=env, receipt=process, transport=True,
             )
         except BaseException as original:
+            if not getattr(original, "mindie_stage", None):
+                original.mindie_stage = "binding_prepare"
             try:
                 observer("binding-prepare", process)
             except Exception as recording:
@@ -627,7 +647,9 @@ def check(binding, state=None):
             raise
         observer("binding-prepare", process)
         if state["preparation_effect"] != "completed":
-            raise RuntimeError("binding preparation cleanup is not confirmed")
+            cleanup_err = RuntimeError("binding preparation cleanup is not confirmed")
+            cleanup_err.mindie_stage = "binding_prepare"
+            raise cleanup_err
         prepared = json.loads(output)
         prepared.update(python=str(python), runtime_scripts=str(scripts))
         state["prepared"] = prepared
