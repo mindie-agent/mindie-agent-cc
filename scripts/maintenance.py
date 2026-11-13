@@ -10,8 +10,9 @@ and diagnostic retention pruning in an owned maintenance worker.
 - Runs independently of plugin release updates.
 
 [Timeouts & Locks]
-- Feed work has 20 seconds, reporter activation 90 seconds, and retention
-  5 seconds; the launcher reserves 15 seconds for drains and result publication.
+- Feed work has 20 seconds, reporter activation 90 seconds, and maintenance
+  15 seconds plus 5 seconds for startup and SQLite settlement; the launcher
+  reserves 15 seconds for drains and result publication.
 
 [Side-Effect Policy]
 - Refreshes local knowledge feed snapshots and prunes expired diagnostics.
@@ -26,7 +27,7 @@ from bounded import run
 # Optional session maintenance cannot consume the runtime installation budget.
 # The outer launcher also reserves both owned-process drains and result I/O.
 FEED_BUDGET = 20.0
-REPORTING_BUDGET = 5.0
+REPORTING_BUDGET = 20.0
 ACTIVATION_BUDGET = 90.0
 TOTAL_BUDGET = FEED_BUDGET + ACTIVATION_BUDGET + REPORTING_BUDGET + 15.0
 
@@ -173,6 +174,7 @@ def session_start(event=None):
     try:
         raw = run(
             [sys.executable, "-m", "mindie_diagnostics.cli", "reporting", "maintain",
+             "--budget-seconds", str(REPORTING_BUDGET - 5),
              "--config", str(reporting_config_path())],
             check=False, receipt=process, timeout=REPORTING_BUDGET,
         )
