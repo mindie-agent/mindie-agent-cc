@@ -87,3 +87,78 @@ def test_custom_only_plugin_upgrade_does_not_claim_component_inventory(tmp_path,
                                         plugin_upgrade=True) is None
     discover.assert_not_called()
     build.assert_not_called()
+
+
+def test_retired_component_inventory_and_transport_vs_integrity_catalog_errors(tmp_path, monkeypatch):
+    import urllib.error
+    import mindie_knowledge.component_runtime as component_runtime
+    from mindie_knowledge.release_http import ReleaseResponseTooLarge
+    from mindie_knowledge.releases_io import ReleaseFetchError
+
+    config = tmp_path / "cc.json"
+    config.write_text(json.dumps({
+        "component_source": str(ROOT),
+        "component_commands": {"mindie-bench": [sys.executable, "-m", "mindie_bench"]},
+    }), encoding="utf-8")
+    monkeypatch.setenv("MINDIE_CC_CONFIG", str(config))
+    baseline = identity(ROOT)
+
+    def fake_discover(python, base_pins, **kwargs):
+        assert "mindie-bench" not in kwargs["required_components"]
+        inv = component_runtime.read_inventory(python)
+        assert "mindie-bench" not in inv
+        return {"changed": False, "runtime": {k: {"revision": v} for k, v in base_pins.items()}}
+
+    with patch.object(component_runtime, "read_inventory",
+                      return_value={"mindie-bench": {"revision": "deadbeef" * 5}}), \
+            patch.object(component_runtime, "discover", side_effect=fake_discover), \
+            patch.object(component_runtime, "build",
+                         return_value={"python": sys.executable, "source": str(ROOT), "components": {}}) as build, \
+            patch.object(bootstrap, "readback", return_value=SCRIPTS):
+        result = component_update.prepare(ROOT, sys.executable, tmp_path,
+                                          current_source=baseline["source_sha256"])
+    assert result is not None
+    build.assert_called_once()
+
+    # Transport ReleaseFetchError and URLError classify as CatalogError; source-integrity stays reportable.
+    net = component_update.typed_catalog_error(ReleaseFetchError("release_http_error", status=429))
+    assert isinstance(net, component_update.CatalogError)
+    assert net.category == "rate_limited"
+    integrity = component_update.typed_catalog_error(ReleaseFetchError("release_source_blob_mismatch"))
+    assert isinstance(integrity, ReleaseFetchError)
+    assert getattr(integrity, "category", None) is None
+    url_err = component_update.typed_catalog_error(urllib.error.URLError("offline"))
+    assert isinstance(url_err, component_update.CatalogError)
+    assert url_err.category == "temporary_network"
+    oversize = ReleaseResponseTooLarge("https://example.invalid/catalog.json", 20_000_000)
+    assert component_update.typed_catalog_error(oversize) is oversize
+    assert getattr(oversize, "category", None) is None
+
+    # Stdlib-only (`-S`) outer bootstrap interpreter must reconstruct child CatalogError without mindie_knowledge.
+    stdlib_probe = (
+        f"import json, sys; sys.path.insert(0, {str(SCRIPTS)!r})\n"
+        "import component_update\n"
+        "err = RuntimeError('command failed (1)')\n"
+        "err.returncode = 1; err.mindie_stage = 'component-floor'\n"
+        "err.mindie_output = json.dumps({'error': {'type': 'CatalogError', 'code': 'release_http_error', 'status': 429}})\n"
+        "typed = component_update.typed_catalog_error(err)\n"
+        "assert isinstance(typed, component_update.CatalogError)\n"
+        "assert typed.category == 'rate_limited' and typed.mindie_stage == 'component-floor' and typed.returncode == 1\n"
+        "plain = RuntimeError('command failed (1)'); plain.mindie_stage = 'component-floor'\n"
+        "assert component_update.typed_catalog_error(plain) is plain\n"
+    )
+    stdlib_res = subprocess.run(
+        [sys.executable, "-I", "-B", "-S", "-c", stdlib_probe],
+        capture_output=True, text=True, timeout=5,
+    )
+    assert stdlib_res.returncode == 0, stdlib_res.stderr
+
+    with patch.object(bootstrap.bounded, "run", return_value="{}") as run_mock, \
+            patch.object(bootstrap, "readback", return_value=SCRIPTS), \
+            patch.object(bootstrap, "OperationLock"):
+        # Verify locked-runtime-install passes transport=True when preparing a fresh runtime.
+        unready = tmp_path / "fresh-plugin"
+        shutil.copytree(ROOT, unready, ignore=shutil.ignore_patterns(".git", ".venv", "__pycache__"))
+        monkeypatch.setenv("MINDIE_DATA_HOME", str(tmp_path / "data"))
+        bootstrap._baseline_runtime(unready, prepare=True)
+    assert run_mock.call_args.kwargs["transport"] is True

@@ -128,10 +128,16 @@ def _ensure_runtime(source, *, prepare, on_process=None, deadline_at=None):
     python, scripts = _baseline_runtime(
         source, prepare=prepare, on_process=on_process, deadline_at=deadline_at)
     if active or current.get("component_commands"):
-        output = _run("component-floor", [str(python), "-I", "-B", str(scripts / "component_update.py"),
-                      str(source), str(python), str(Path(current["state_dir"]) / "component-runtimes"),
-                      current["python"]], on_process=on_process, timeout=830,
-                      deadline_at=deadline_at)
+        from component_update import typed_catalog_error
+        try:
+            output = _run("component-floor", [str(python), "-I", "-B", str(scripts / "component_update.py"),
+                          str(source), str(python), str(Path(current["state_dir"]) / "component-runtimes"),
+                          current["python"]], on_process=on_process, timeout=830,
+                          deadline_at=deadline_at, transport=True)
+        except TimeoutError:
+            raise
+        except Exception as exc:
+            raise typed_catalog_error(exc) from None
         effective = json.loads(output)
         if effective:
             return Path(effective["python"]), Path(effective["scripts"])
@@ -189,7 +195,8 @@ def _baseline_runtime(source, *, prepare, on_process=None, deadline_at=None):
         _run("locked-runtime-install",
              [uv, "sync", "--project", str(source), "--locked", "--no-editable",
               "--no-dev", "--python", sys.executable],
-             env=env, on_process=on_process, timeout=540.0, deadline_at=deadline_at)
+             env=env, on_process=on_process, timeout=540.0, deadline_at=deadline_at,
+             transport=True)
         scripts = readback(python, source, on_process=on_process, deadline_at=deadline_at)
         atomic_write(complete, expected)
         return python, scripts

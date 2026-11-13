@@ -195,3 +195,35 @@ def test_native_writer_unclassified_failure_stays_untyped(tmp_path):
             update._mutation(saved, state, "claude", ["update"], "plugin")
     assert getattr(caught.value, "category", None) is None
     assert caught.value.returncode == 1
+
+
+def test_post_install_stage_and_transport_classification_prevent_false_internal_report(tmp_path):
+    error = RuntimeError("command failed (1)")
+    error.returncode = 1
+    error.category = "temporary_network"
+    error.mindie_stage = "locked-runtime-install"
+    receipt, event = _record_check_failure(tmp_path, error)
+    assert receipt["status"] == "failed"
+    assert event["attributes"]["stage"] == "locked_runtime_install"
+    assert event["attributes"]["category"] == "connectivity"
+    assert event["attributes"]["error_code"] == "update_transport_unavailable"
+    assert event["attributes"]["exit_code"] == 1
+    assert event["reportable"] is False
+
+
+def test_binding_prepare_and_activation_enable_transport_and_tag_stage(tmp_path):
+    saved = binding(tmp_path)
+    state = dict(
+        prepared=dict(
+            python=sys.executable,
+            runtime_scripts=str(SCRIPTS),
+            config=str(tmp_path / "prepared.json"),
+        ),
+        activation_effect="not_started",
+    )
+    with patch.object(update, "_record"), \
+            patch.object(update, "run", side_effect=RuntimeError("boom")) as run_mock:
+        with pytest.raises(RuntimeError) as caught:
+            update._activate(saved, state["prepared"], {}, state)
+    assert run_mock.call_args.kwargs["transport"] is True
+    assert caught.value.mindie_stage == "runtime_activation"
