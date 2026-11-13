@@ -130,6 +130,25 @@ def test_retired_component_inventory_and_transport_vs_integrity_catalog_errors(t
     assert isinstance(url_err, component_update.CatalogError)
     assert url_err.category == "temporary_network"
 
+    # Stdlib-only (`-S`) outer bootstrap interpreter must reconstruct child CatalogError without mindie_knowledge.
+    stdlib_probe = (
+        f"import json, sys; sys.path.insert(0, {str(SCRIPTS)!r})\n"
+        "import component_update\n"
+        "err = RuntimeError('command failed (1)')\n"
+        "err.returncode = 1; err.mindie_stage = 'component-floor'\n"
+        "err.mindie_output = json.dumps({'error': {'type': 'CatalogError', 'code': 'release_http_error', 'status': 429}})\n"
+        "typed = component_update.typed_catalog_error(err)\n"
+        "assert isinstance(typed, component_update.CatalogError)\n"
+        "assert typed.category == 'rate_limited' and typed.mindie_stage == 'component-floor' and typed.returncode == 1\n"
+        "plain = RuntimeError('command failed (1)'); plain.mindie_stage = 'component-floor'\n"
+        "assert component_update.typed_catalog_error(plain) is plain\n"
+    )
+    stdlib_res = subprocess.run(
+        [sys.executable, "-I", "-B", "-S", "-c", stdlib_probe],
+        capture_output=True, text=True, timeout=5,
+    )
+    assert stdlib_res.returncode == 0, stdlib_res.stderr
+
     with patch.object(bootstrap.bounded, "run", return_value="{}") as run_mock, \
             patch.object(bootstrap, "readback", return_value=SCRIPTS), \
             patch.object(bootstrap, "OperationLock"):

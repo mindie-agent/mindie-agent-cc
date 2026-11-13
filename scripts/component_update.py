@@ -74,10 +74,10 @@ def _error_payload(raw):
 
 
 def typed_catalog_error(exc):
-    """Rebuild typed transport catalog facts while keeping source-integrity faults reportable."""
-    from mindie_knowledge.release_http import ReleaseResponseTooLarge
-    from mindie_knowledge.releases_io import ReleaseFetchError
+    """Rebuild typed transport catalog facts while keeping source-integrity faults reportable.
 
+    Must work in stdlib-only bootstrap interpreters where ``mindie_knowledge`` is absent.
+    """
     payload = _error_payload(getattr(exc, "mindie_output", None))
     if payload is not None:
         kind = payload.get("type")
@@ -90,6 +90,10 @@ def typed_catalog_error(exc):
         elif kind in _TIMEOUT:
             error = TimeoutError("component catalog probe timed out")
         elif kind == "ReleaseFetchError" and code not in _TRANSPORT_FETCH_CODES and status != 429:
+            try:
+                from mindie_knowledge.releases_io import ReleaseFetchError
+            except ImportError:
+                return exc
             error = ReleaseFetchError(code or "invalid_release_json", status=status)
         else:
             error = _catalog_error(
@@ -98,6 +102,11 @@ def typed_catalog_error(exc):
                 status=status,
             )
         return _copy_process_attrs(exc, error)
+    try:
+        from mindie_knowledge.release_http import ReleaseResponseTooLarge
+        from mindie_knowledge.releases_io import ReleaseFetchError
+    except ImportError:
+        return exc
     if isinstance(exc, ReleaseFetchError):
         if exc.code in _TRANSPORT_FETCH_CODES or exc.status == 429:
             return _catalog_error(
