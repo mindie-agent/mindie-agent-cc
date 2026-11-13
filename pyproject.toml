@@ -4,13 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mindie-agent-cc"
-version = "0.1.19"
+version = "0.1.20"
 description = "Native Claude Code adapter for MindIE Agent"
 requires-python = ">=3.11,<3.15"
 dependencies = [
-  "mindie-knowledge @ git+https://github.com/mindie-agent/knowledge@3c478a19b5542b38520c7f98b87a07f37e305021",
+  "mindie-knowledge @ git+https://github.com/mindie-agent/knowledge@1d0e413a2852007b46275a123fa1cce7be7b90d0",
   "remote-dev @ git+https://github.com/mindie-agent/remote-dev@6e9882e0fa495bf2feeef29ec86492498d364531",
-  "mindie-diagnostics @ git+https://github.com/mindie-agent/diagnostics@f338788cecc56f7aff1dccab1d53426c9e28fe7f",
+  "mindie-diagnostics @ git+https://github.com/mindie-agent/diagnostics@37ed7f04a47eae8097cc286335186c3fcd9584b3",
   "mindie-debugger @ git+https://github.com/mindie-agent/debugger@e9406b2b178335190d5cb59dff4d6985894497ba",
   "mindie-profiler @ git+https://github.com/mindie-agent/profiler@79d97e75bff7351b0472b93c03b072c1cf47f5e7",
   "mindie-sim @ git+https://github.com/mindie-agent/sim@6f1d5a871a7b1ef20ff7a8cab33aaf4637fb3f66",
@@ -42,7 +42,7 @@ scripts = "mindie_cc"
 [tool.uv]
 # The reviewed plugin selection also replaces older transitive component pins.
 override-dependencies = [
-  "mindie-diagnostics @ git+https://github.com/mindie-agent/diagnostics@f338788cecc56f7aff1dccab1d53426c9e28fe7f",
+  "mindie-diagnostics @ git+https://github.com/mindie-agent/diagnostics@37ed7f04a47eae8097cc286335186c3fcd9584b3",
   "mindie-sim @ git+https://github.com/mindie-agent/sim@6f1d5a871a7b1ef20ff7a8cab33aaf4637fb3f66",
   "remote-dev @ git+https://github.com/mindie-agent/remote-dev@6e9882e0fa495bf2feeef29ec86492498d364531",
 ]

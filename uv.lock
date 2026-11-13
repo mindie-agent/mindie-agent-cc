@@ -14,7 +14,7 @@ resolution-markers = [
 
 [manifest]
 overrides = [
-    { name = "mindie-diagnostics", git = "https://github.com/mindie-agent/diagnostics?rev=f338788cecc56f7aff1dccab1d53426c9e28fe7f" },
+    { name = "mindie-diagnostics", git = "https://github.com/mindie-agent/diagnostics?rev=37ed7f04a47eae8097cc286335186c3fcd9584b3" },
     { name = "mindie-sim", git = "https://github.com/mindie-agent/sim?rev=6f1d5a871a7b1ef20ff7a8cab33aaf4637fb3f66" },
     { name = "remote-dev", git = "https://github.com/mindie-agent/remote-dev?rev=6e9882e0fa495bf2feeef29ec86492498d364531" },
 ]
@@ -1864,7 +1864,7 @@ wheels = [
 
 [[package]]
 name = "mindie-agent-cc"
-version = "0.1.19"
+version = "0.1.20"
 source = { editable = "." }
 dependencies = [
     { name = "mindie-coordinator" },
@@ -1886,8 +1886,8 @@ test = [
 requires-dist = [
     { name = "mindie-coordinator", git = "https://github.com/mindie-agent/coordinator?rev=db9b0c6432001d6049056eabd37422d0bfb9f75a" },
     { name = "mindie-debugger", git = "https://github.com/mindie-agent/debugger?rev=e9406b2b178335190d5cb59dff4d6985894497ba" },
-    { name = "mindie-diagnostics", git = "https://github.com/mindie-agent/diagnostics?rev=f338788cecc56f7aff1dccab1d53426c9e28fe7f" },
-    { name = "mindie-knowledge", git = "https://github.com/mindie-agent/knowledge?rev=3c478a19b5542b38520c7f98b87a07f37e305021" },
+    { name = "mindie-diagnostics", git = "https://github.com/mindie-agent/diagnostics?rev=37ed7f04a47eae8097cc286335186c3fcd9584b3" },
+    { name = "mindie-knowledge", git = "https://github.com/mindie-agent/knowledge?rev=1d0e413a2852007b46275a123fa1cce7be7b90d0" },
     { name = "mindie-profiler", git = "https://github.com/mindie-agent/profiler?rev=79d97e75bff7351b0472b93c03b072c1cf47f5e7" },
     { name = "mindie-sim", git = "https://github.com/mindie-agent/sim?rev=6f1d5a871a7b1ef20ff7a8cab33aaf4637fb3f66" },
     { name = "remote-dev", git = "https://github.com/mindie-agent/remote-dev?rev=6e9882e0fa495bf2feeef29ec86492498d364531" },
@@ -1916,13 +1916,13 @@ source = { git = "https://github.com/mindie-agent/debugger?rev=e9406b2b178335190
 
 [[package]]
 name = "mindie-diagnostics"
-version = "0.5.7"
-source = { git = "https://github.com/mindie-agent/diagnostics?rev=f338788cecc56f7aff1dccab1d53426c9e28fe7f#f338788cecc56f7aff1dccab1d53426c9e28fe7f" }
+version = "0.5.10"
+source = { git = "https://github.com/mindie-agent/diagnostics?rev=37ed7f04a47eae8097cc286335186c3fcd9584b3#37ed7f04a47eae8097cc286335186c3fcd9584b3" }
 
 [[package]]
 name = "mindie-knowledge"
-version = "0.13.13"
-source = { git = "https://github.com/mindie-agent/knowledge?rev=3c478a19b5542b38520c7f98b87a07f37e305021#3c478a19b5542b38520c7f98b87a07f37e305021" }
+version = "0.13.15"
+source = { git = "https://github.com/mindie-agent/knowledge?rev=1d0e413a2852007b46275a123fa1cce7be7b90d0#1d0e413a2852007b46275a123fa1cce7be7b90d0" }
 dependencies = [
     { name = "langmem" },
     { name = "mindie-diagnostics" },

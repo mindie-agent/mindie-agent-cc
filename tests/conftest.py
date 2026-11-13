@@ -43,6 +43,8 @@ def _isolated_host_environment(tmp_path, request, monkeypatch):
         "MINDIE_DIAGNOSTICS_ROOT": tmp_path / "mindie-diagnostics",
         "MINDIE_DIAGNOSTICS_CONFIG": tmp_path / "mindie-diagnostics" / "diagnostics.json",
         "MINDIE_REMOTE_STATE_DIR": tmp_path / "mindie-remote-state",
+        "MINDIE_CONFIG_HOME": tmp_path / "mindie-config",
+        "MINDIE_DATA_HOME": tmp_path / "mindie-data",
     }
     for name, location in locations.items():
         location = Path(location)
