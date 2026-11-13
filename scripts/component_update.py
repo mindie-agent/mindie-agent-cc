@@ -103,7 +103,6 @@ def typed_catalog_error(exc):
             )
         return _copy_process_attrs(exc, error)
     try:
-        from mindie_knowledge.release_http import ReleaseResponseTooLarge
         from mindie_knowledge.releases_io import ReleaseFetchError
     except ImportError:
         return exc
@@ -123,7 +122,7 @@ def typed_catalog_error(exc):
             status=exc.code,
             source=exc,
         )
-    if isinstance(exc, (urllib.error.URLError, ConnectionError, ReleaseResponseTooLarge)):
+    if isinstance(exc, (urllib.error.URLError, ConnectionError)):
         return _catalog_error("release_transport_unavailable", source=exc)
     return exc
 

@@ -92,6 +92,7 @@ def test_custom_only_plugin_upgrade_does_not_claim_component_inventory(tmp_path,
 def test_retired_component_inventory_and_transport_vs_integrity_catalog_errors(tmp_path, monkeypatch):
     import urllib.error
     import mindie_knowledge.component_runtime as component_runtime
+    from mindie_knowledge.release_http import ReleaseResponseTooLarge
     from mindie_knowledge.releases_io import ReleaseFetchError
 
     config = tmp_path / "cc.json"
@@ -129,6 +130,9 @@ def test_retired_component_inventory_and_transport_vs_integrity_catalog_errors(t
     url_err = component_update.typed_catalog_error(urllib.error.URLError("offline"))
     assert isinstance(url_err, component_update.CatalogError)
     assert url_err.category == "temporary_network"
+    oversize = ReleaseResponseTooLarge("https://example.invalid/catalog.json", 20_000_000)
+    assert component_update.typed_catalog_error(oversize) is oversize
+    assert getattr(oversize, "category", None) is None
 
     # Stdlib-only (`-S`) outer bootstrap interpreter must reconstruct child CatalogError without mindie_knowledge.
     stdlib_probe = (
