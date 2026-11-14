@@ -120,7 +120,8 @@ def claude_bin():
     explicit = os.environ.get("MINDIE_CC_BIN")
     if explicit:
         return explicit
-    found = shutil.which("claude")
+    from paths import which_host_binary
+    found = which_host_binary("claude", which_fn=shutil.which)
     if found:
         return found
     raise NativeStartError("claude binary is not on PATH; the summary worker cannot run")

@@ -85,7 +85,8 @@ def require_call_id(value) -> str:
 
 
 def parse_hook(raw: bytes) -> dict:
-    event = json.loads(raw)
+    text = raw.decode("utf-8-sig") if isinstance(raw, (bytes, bytearray)) else str(raw).lstrip("\ufeff")
+    event = json.loads(text)
     if not isinstance(event, dict):
         raise ValueError("hook payload must be one JSON object")
     return event

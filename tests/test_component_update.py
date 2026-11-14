@@ -162,3 +162,54 @@ def test_retired_component_inventory_and_transport_vs_integrity_catalog_errors(t
         monkeypatch.setenv("MINDIE_DATA_HOME", str(tmp_path / "data"))
         bootstrap._baseline_runtime(unready, prepare=True)
     assert run_mock.call_args.kwargs["transport"] is True
+
+
+def test_ssl_and_http_stream_transport_errors_stay_non_reportable_while_local_bugs_report(tmp_path, monkeypatch):
+    import http.client
+    import socket
+    import ssl
+    import release_update
+    from mindie_diagnostics.ingestion import ingest
+    from mindie_diagnostics.integration import configure_reporting
+    from mindie_diagnostics.outbox import Outbox
+
+    cert_err = ssl.SSLCertVerificationError(1, "self-signed certificate in chain")
+    rebuilt_cert = component_update.typed_catalog_error(cert_err)
+    assert isinstance(rebuilt_cert, component_update.CatalogError)
+    assert rebuilt_cert.code == "release_certificate_error"
+    assert rebuilt_cert.category == "certificate"
+
+    for transient in (
+        ssl.SSLError("TLS EOF mid-stream"),
+        http.client.IncompleteRead(b"part", 64),
+        http.client.RemoteDisconnected("Remote end closed connection"),
+        http.client.BadStatusLine("garbage"),
+        socket.gaierror(-2, "Name or service not known"),
+    ):
+        rebuilt = component_update.typed_catalog_error(transient)
+        assert isinstance(rebuilt, component_update.CatalogError)
+        assert rebuilt.code == "release_transport_unavailable"
+        assert rebuilt.category == "temporary_network"
+
+    for local_bug in (
+        http.client.InvalidURL("nonnumeric port"),
+        http.client.ImproperConnectionState("cannot send request"),
+        http.client.CannotSendRequest("cannot send request"),
+        http.client.NotConnected(),
+        json.JSONDecodeError("Expecting value", "{bad", 1),
+    ):
+        assert component_update.typed_catalog_error(local_bug) is local_bug
+        assert release_update._typed_update_error(local_bug) is local_bug
+        assert getattr(local_bug, "category", None) is None
+
+    timeout_err = TimeoutError("catalog probe timed out")
+    assert component_update.typed_catalog_error(timeout_err) is timeout_err
+
+    logs = tmp_path / "diag-logs"
+    policy = tmp_path / "diagnostics.json"
+    monkeypatch.setenv("MINDIE_DIAGNOSTICS_ROOT", str(logs))
+    monkeypatch.setenv("MINDIE_DIAGNOSTICS_CONFIG", str(policy))
+    configure_reporting(True, config=policy, roots=[str(logs)])
+    release_update._record_update_failure("native_update", ssl.SSLError("TLS drop"))
+    release_update._record_update_failure("native_update", http.client.IncompleteRead(b"x", 10))
+    assert ingest(logs, Outbox(tmp_path / "queue.db"), config=policy)["enqueued"] == 0

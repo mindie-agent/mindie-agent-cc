@@ -22,15 +22,15 @@ import bounded
 SCRIPT = """
 import json, sys
 from mindie_knowledge.loop.settings import CommunityWriteContext
-request = json.load(sys.stdin)
+request = json.loads(sys.stdin.buffer.read().decode('utf-8-sig'))
 try:
     with CommunityWriteContext(request['path']) as context:
         result = context.configure(request['path'], request['settings'])
 except Exception as exc:
-    print(json.dumps(dict(status='failed', error_type=type(exc).__name__,
-                          error=str(exc)[:240])))
+    sys.stdout.buffer.write((json.dumps(dict(status='failed', error_type=type(exc).__name__,
+                          error=str(exc)[:240])) + '\\n').encode('utf-8'))
     raise SystemExit(1)
-print(json.dumps(result.raw))
+sys.stdout.buffer.write((json.dumps(result.raw) + '\\n').encode('utf-8'))
 """
 
 def configure(path, settings, python=None):

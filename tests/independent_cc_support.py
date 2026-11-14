@@ -32,6 +32,9 @@ LANE_STATE = Path(_LANE_STATE_ROOT.name)
 
 _ENV_KEYS = (
     "HOME",
+    "USERPROFILE",
+    "APPDATA",
+    "LOCALAPPDATA",
     "XDG_CONFIG_HOME",
     "XDG_STATE_HOME",
     "XDG_DATA_HOME",
@@ -51,6 +54,8 @@ def _service_pids(root: Path) -> list[int]:
     if os.name == "nt":
         command = (
             "$ErrorActionPreference='Stop'; "
+            "$OutputEncoding=[Text.UTF8Encoding]::new($false); "
+            "try { [Console]::OutputEncoding=$OutputEncoding } catch {}; "
             "Get-CimInstance Win32_Process -Filter \"Name LIKE 'python%'\" | "
             "Where-Object { $_.CommandLine -and "
             "$_.CommandLine.Contains($env:MINDIE_TEST_SERVICE_ROOT) -and "
@@ -58,9 +63,11 @@ def _service_pids(root: Path) -> list[int]:
             "ForEach-Object { $_.ProcessId }"
         )
         listing = subprocess.run(
-            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
-            capture_output=True, text=True, timeout=30, check=True,
+            ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=30, check=True,
             stdin=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             env=dict(os.environ, MINDIE_TEST_SERVICE_ROOT=needle),
         )
         return [int(line) for line in listing.stdout.splitlines()
@@ -207,6 +214,12 @@ class LaneCase(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp(prefix="case-", dir=LANE_STATE))
         self._saved_env = {key: os.environ.get(key) for key in _ENV_KEYS}
         os.environ["HOME"] = str(self.tmp / "home")
+        if os.name == "nt":
+            os.environ["USERPROFILE"] = str(self.tmp / "home")
+            os.environ["APPDATA"] = str(self.tmp / "home" / "AppData" / "Roaming")
+            os.environ["LOCALAPPDATA"] = str(self.tmp / "home" / "AppData" / "Local")
+            Path(os.environ["APPDATA"]).mkdir(parents=True, exist_ok=True)
+            Path(os.environ["LOCALAPPDATA"]).mkdir(parents=True, exist_ok=True)
         os.environ["XDG_CONFIG_HOME"] = str(self.tmp / "xdg")
         os.environ["XDG_STATE_HOME"] = str(self.tmp / "xdg-state")
         os.environ["XDG_DATA_HOME"] = str(self.tmp / "xdg-data")

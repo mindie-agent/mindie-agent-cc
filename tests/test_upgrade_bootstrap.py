@@ -141,8 +141,8 @@ def test_bootstrap_inner_rebases_expired_foreign_monotonic(monkeypatch):
 def test_reexec_python313_invokes_uv_python_313(monkeypatch):
     seen = {}
     monkeypatch.setattr(bootstrap.shutil, "which", lambda name: "/usr/bin/uv")
-    monkeypatch.setattr(os, "execve",
-                        lambda cmd, argv, env: seen.update(cmd=cmd, argv=list(argv), env=env))
+    monkeypatch.setattr(bootstrap.bounded, "exec_or_wait",
+                        lambda argv, env: seen.update(cmd=argv[0], argv=list(argv), env=env))
     bootstrap._reexec_python313(["hook", "session-start"])
     assert seen["cmd"] == "/usr/bin/uv"
     assert seen["argv"][:6] == [
@@ -172,14 +172,14 @@ def test_session_start_sets_deadline_before_python313_reexec(monkeypatch):
     monkeypatch.delenv(session_start.INNER_ENV, raising=False)
     monkeypatch.setattr(session_start.shutil, "which", lambda name: "/usr/bin/uv")
 
-    def fake_execve(cmd, argv, env):
-        seen["cmd"] = cmd
+    def fake_exec(argv, env):
+        seen["cmd"] = argv[0]
         seen["argv"] = list(argv)
         seen["unix"] = float(env[session_start.DEADLINE_UNIX_ENV])
         seen["monotonic"] = env.get(session_start.DEADLINE_ENV)
         seen["inner"] = env.get(session_start.INNER_ENV)
 
-    monkeypatch.setattr(os, "execve", fake_execve)
+    monkeypatch.setattr(session_start.bounded, "exec_or_wait", fake_exec)
     started = time.time()
     session_start.main(["hook", "session-start"])
     expected = session_start.BOOTSTRAP_TOTAL + session_start.UV_PYTHON_PROVISION
@@ -247,7 +247,10 @@ def test_stop_cannot_prepare_runtime_even_if_dependency_environment_exists():
     prepare.assert_not_called()
 
 
-def test_completed_runtime_corruption_never_invokes_uv_to_repair(tmp_path):
+def test_completed_runtime_corruption_never_invokes_uv_to_repair(tmp_path, monkeypatch):
+    for key in list(os.environ):
+        if key.startswith("GIT_CONFIG_"):
+            monkeypatch.delenv(key, raising=False)
     source = tmp_path / "source"
     source.mkdir()
     (source / "uv.lock").write_text("version=1\n")
@@ -372,3 +375,100 @@ bootstrap.ensure_runtime(Path({str(source)!r}))
                 process.kill()
                 process.wait(timeout=3)
             process.stderr.close()
+
+
+def test_windows_reexec_python313_uses_wait_windows_entry_not_execve(monkeypatch):
+    import paths
+    import session_start
+
+    calls = []
+    monkeypatch.setattr(bootstrap.bounded, "POSIX", False)
+    monkeypatch.setattr(paths, "is_windows_host_binary", lambda _cand: False)
+    monkeypatch.setattr(
+        bootstrap.bounded,
+        "wait_windows_entry",
+        lambda cmd, env, **kw: calls.append(("win", list(cmd), dict(env))),
+    )
+    monkeypatch.setattr(
+        os,
+        "execve",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("os.execve must not run on Windows")),
+    )
+    monkeypatch.setattr(bootstrap.shutil, "which", lambda name: r"C:\Users\dev\.local\bin\uv.exe")
+    monkeypatch.setattr(session_start.shutil, "which", lambda name: r"C:\Users\dev\.local\bin\uv.exe")
+    bootstrap._reexec_python313(["hook", "session-start"])
+    session_start._reexec_python313(["hook", "session-start"])
+    assert len(calls) == 2
+    assert calls[0][1][0] == r"C:\Users\dev\.local\bin\uv.exe"
+    assert calls[1][1][0] == r"C:\Users\dev\.local\bin\uv.exe"
+
+
+def test_wsl_which_host_binary_rejects_drvfs_and_pe_shims(tmp_path, monkeypatch):
+    import struct
+    import paths
+
+    if os.name != "posix":
+        pytest.skip("POSIX/WSL PATH shadowing check")
+
+    win_dir = tmp_path / "win_npm"
+    lin_dir = tmp_path / "linux_bin"
+    win_dir.mkdir()
+    lin_dir.mkdir()
+    pe_shim = win_dir / "claude"
+    header = bytearray(128)
+    header[:2] = b"MZ"
+    struct.pack_into("<I", header, 0x3C, 64)
+    header[64:68] = b"PE\x00\x00"
+    pe_shim.write_bytes(bytes(header))
+    pe_shim.chmod(0o755)
+    lin_bin = lin_dir / "claude"
+    lin_bin.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    lin_bin.chmod(0o755)
+
+    monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu-24.04")
+    fake_path = os.pathsep.join(["/mnt/c/Users/dev/bin", str(win_dir), str(lin_dir)])
+    assert paths.is_windows_host_binary("/mnt/c/Users/dev/bin/claude")
+    assert paths.is_windows_host_binary(str(pe_shim))
+    assert not paths.is_windows_host_binary(str(lin_bin))
+    assert paths.which_host_binary("claude", path=fake_path) == str(lin_bin)
+
+    drvfs_venv = tmp_path / "drvfs_venv"
+    drvfs_venv.mkdir()
+    linux_console = drvfs_venv / "mindie-profiler"
+    linux_console.write_text(
+        "#!/mnt/c/proj/.venv/bin/python3\n"
+        "import re, sys\n"
+        'sys.argv[0] = re.sub(r"(-script\\.pyw|\\.exe)?$", "", sys.argv[0])\n'
+        'if sys.argv[0].endswith(".exe"):\n'
+        "    sys.argv[0] = sys.argv[0][:-4]\n",
+        encoding="utf-8",
+    )
+    linux_console.chmod(0o755)
+    posix_basedir = drvfs_venv / "claude-wrapper"
+    posix_basedir.write_text('#!/bin/sh\nbasedir=$(dirname "$0")\nexec "$basedir/linux-claude" "$@"\n', encoding="utf-8")
+    posix_basedir.chmod(0o755)
+    npm_shim = drvfs_venv / "claude-npm"
+    npm_shim.write_text('#!/bin/sh\nbasedir=$(cygpath -w "$0")\nexec "$basedir/node.exe"\n', encoding="utf-8")
+    npm_shim.chmod(0o755)
+    assert paths._is_wsl_linux_executable(linux_console) is True
+    assert paths._is_wsl_linux_executable(posix_basedir) is True
+    assert paths._is_wsl_linux_executable(npm_shim) is False
+
+
+def test_utf8_bom_config_hook_and_windowsapps_stub_filtering(tmp_path, monkeypatch):
+    import types
+    import identity
+    import paths
+
+    bom_cfg = tmp_path / "cc.json"
+    bom_cfg.write_bytes(b'\xef\xbb\xbf{"base_config":"/abs/cc.json","claude_config_dir":"/abs/claude"}\n')
+    monkeypatch.setenv("MINDIE_CC_CONFIG", str(bom_cfg))
+    assert paths.load_adapter_config()["claude_config_dir"] == "/abs/claude"
+
+    event = identity.parse_hook('\ufeff{"session_id":"ses_中文_1","hook_event_name":"Stop"}'.encode("utf-8"))
+    assert event["session_id"] == "ses_中文_1"
+
+    fake_nt = types.SimpleNamespace(name="nt", environ=os.environ, path=os.path, fspath=os.fspath, stat=os.stat)
+    monkeypatch.setattr(paths, "os", fake_nt)
+    assert paths._is_windowsapps_stub(r"C:\Users\dev\AppData\Local\Microsoft\WindowsApps\python.exe") is True
+    assert paths._is_windowsapps_stub(r"C:\Users\dev\AppData\Local\Microsoft\WindowsApps\bash.exe") is True
