@@ -18,11 +18,6 @@ jobs:
     timeout-minutes: 20
     env:
       GIT_TERMINAL_PROMPT: '0'
-      GIT_CONFIG_COUNT: '2'
-      GIT_CONFIG_KEY_0: core.longpaths
-      GIT_CONFIG_VALUE_0: 'true'
-      GIT_CONFIG_KEY_1: core.autocrlf
-      GIT_CONFIG_VALUE_1: 'false'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -34,6 +29,11 @@ jobs:
       - name: Install the complete locked runtime and test tools
         env:
           GIT_TERMINAL_PROMPT: '0'
+          GIT_CONFIG_COUNT: '2'
+          GIT_CONFIG_KEY_0: core.longpaths
+          GIT_CONFIG_VALUE_0: 'true'
+          GIT_CONFIG_KEY_1: core.autocrlf
+          GIT_CONFIG_VALUE_1: 'false'
         run: uv sync --locked --no-editable --group test
       - name: Read the locked knowledge commit
         id: pins

@@ -194,7 +194,9 @@ def test_ssl_and_http_stream_transport_errors_stay_non_reportable_while_local_bu
     for local_bug in (
         http.client.InvalidURL("nonnumeric port"),
         http.client.ImproperConnectionState("cannot send request"),
+        http.client.CannotSendRequest("cannot send request"),
         http.client.NotConnected(),
+        json.JSONDecodeError("Expecting value", "{bad", 1),
     ):
         assert component_update.typed_catalog_error(local_bug) is local_bug
         assert release_update._typed_update_error(local_bug) is local_bug

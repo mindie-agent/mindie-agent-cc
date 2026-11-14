@@ -247,7 +247,10 @@ def test_stop_cannot_prepare_runtime_even_if_dependency_environment_exists():
     prepare.assert_not_called()
 
 
-def test_completed_runtime_corruption_never_invokes_uv_to_repair(tmp_path):
+def test_completed_runtime_corruption_never_invokes_uv_to_repair(tmp_path, monkeypatch):
+    for key in list(os.environ):
+        if key.startswith("GIT_CONFIG_"):
+            monkeypatch.delenv(key, raising=False)
     source = tmp_path / "source"
     source.mkdir()
     (source / "uv.lock").write_text("version=1\n")
@@ -428,3 +431,33 @@ def test_wsl_which_host_binary_rejects_drvfs_and_pe_shims(tmp_path, monkeypatch)
     assert paths.is_windows_host_binary(str(pe_shim))
     assert not paths.is_windows_host_binary(str(lin_bin))
     assert paths.which_host_binary("claude", path=fake_path) == str(lin_bin)
+
+    drvfs_venv = tmp_path / "drvfs_venv"
+    drvfs_venv.mkdir()
+    linux_console = drvfs_venv / "mindie-profiler"
+    linux_console.write_text("#!/mnt/c/proj/.venv/bin/python\nimport sys\n", encoding="utf-8")
+    linux_console.chmod(0o755)
+    npm_shim = drvfs_venv / "claude-npm"
+    npm_shim.write_text('#!/bin/sh\nbasedir=$(cygpath -w "$0")\nexec "$basedir/node.exe"\n', encoding="utf-8")
+    npm_shim.chmod(0o755)
+    assert paths._is_wsl_linux_executable(linux_console) is True
+    assert paths._is_wsl_linux_executable(npm_shim) is False
+
+
+def test_utf8_bom_config_hook_and_windowsapps_stub_filtering(tmp_path, monkeypatch):
+    import types
+    import identity
+    import paths
+
+    bom_cfg = tmp_path / "cc.json"
+    bom_cfg.write_bytes(b'\xef\xbb\xbf{"base_config":"/abs/cc.json","claude_config_dir":"/abs/claude"}\n')
+    monkeypatch.setenv("MINDIE_CC_CONFIG", str(bom_cfg))
+    assert paths.load_adapter_config()["claude_config_dir"] == "/abs/claude"
+
+    event = identity.parse_hook('\ufeff{"session_id":"ses_中文_1","hook_event_name":"Stop"}'.encode("utf-8"))
+    assert event["session_id"] == "ses_中文_1"
+
+    fake_nt = types.SimpleNamespace(name="nt", environ=os.environ, path=os.path, fspath=os.fspath, stat=os.stat)
+    monkeypatch.setattr(paths, "os", fake_nt)
+    assert paths._is_windowsapps_stub(r"C:\Users\dev\AppData\Local\Microsoft\WindowsApps\python.exe") is True
+    assert paths._is_windowsapps_stub(r"C:\Users\dev\AppData\Local\Microsoft\WindowsApps\bash.exe") is True

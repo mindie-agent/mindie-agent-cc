@@ -189,8 +189,6 @@ def typed_catalog_error(exc):
             retry_after=kind[1] if kind else None,
             source=exc,
         )
-    if isinstance(exc, json.JSONDecodeError):
-        return _catalog_error("release_catalog_invalid", source=exc)
     if (kind := classify_transport_exception(exc)) is not None:
         category, retry_after = kind
         return _catalog_error(
@@ -330,7 +328,7 @@ def main():
     except (CatalogError, ReleaseFetchError, ReleaseResponseTooLarge,
             urllib.error.HTTPError, urllib.error.URLError, ssl.SSLError,
             ConnectionError, http.client.HTTPException, socket.gaierror,
-            socket.herror, json.JSONDecodeError, FileNotFoundError, TimeoutError) as exc:
+            socket.herror, FileNotFoundError, TimeoutError) as exc:
         emit_catalog_error(exc)
 
 
