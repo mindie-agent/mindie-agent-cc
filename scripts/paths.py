@@ -21,12 +21,113 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import shutil
+import stat
+import struct
 
 PLUGIN_ID = "mindie-agent"
 MARKETPLACE = "mindie-agent-cc"
 PLUGIN_QUALIFIED = f"{PLUGIN_ID}@{MARKETPLACE}"
 CONFIG_ENV = "MINDIE_CC_CONFIG"
+_WIN_SUFFIXES = frozenset({".exe", ".cmd", ".bat", ".ps1", ".com"})
+_WSL_DRVFS_RE = re.compile(r"^/mnt/[a-zA-Z](?:/|$)")
+_REAL_WHICH = shutil.which
+
+
+def in_wsl() -> bool:
+    """Return True when POSIX Python is running inside a WSL2 Linux environment."""
+    if os.name != "posix":
+        return False
+    if os.environ.get("WSL_DISTRO_NAME") or os.environ.get("WSL_INTEROP"):
+        return True
+    try:
+        return Path("/proc/sys/fs/binfmt_misc/WSLInterop").exists()
+    except TimeoutError:
+        raise
+    except OSError:
+        return False
+
+
+def _has_pe_header(path: Path) -> bool:
+    fd = -1
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_size < 64:
+            return False
+        head = os.read(fd, 64)
+        if len(head) < 64 or head[:2] != b"MZ":
+            return False
+        pe_off = struct.unpack_from("<I", head, 0x3C)[0]
+        if pe_off < 64 or pe_off + 4 > info.st_size or pe_off > 16 * 1024 * 1024:
+            return False
+        os.lseek(fd, pe_off, os.SEEK_SET)
+        return os.read(fd, 4) == b"PE\x00\x00"
+    except TimeoutError:
+        raise
+    except OSError:
+        return False
+    finally:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+_WINAPPS_STUB_NAMES = frozenset({"python", "python.exe", "python3", "python3.exe", "bash", "bash.exe"})
+
+
+def _is_windowsapps_stub(candidate) -> bool:
+    if not candidate or os.name != "nt":
+        return False
+    norm = os.fspath(candidate).replace("/", "\\").lower()
+    if "\\microsoft\\windowsapps\\" not in norm:
+        return False
+    if norm.rsplit("\\", 1)[-1] in _WINAPPS_STUB_NAMES:
+        return True
+    try:
+        return os.stat(candidate).st_size == 0
+    except TimeoutError:
+        raise
+    except OSError:
+        return True
+
+
+def is_windows_host_binary(candidate) -> bool:
+    """Reject Windows PE/.exe/DrvFS shims when discovering POSIX/WSL host CLIs."""
+    if not candidate or os.name != "posix":
+        return False
+    raw = os.fspath(candidate)
+    if Path(raw).suffix.lower() in _WIN_SUFFIXES:
+        return True
+    norm = os.path.normpath(raw)
+    if in_wsl() and _WSL_DRVFS_RE.match(norm):
+        return True
+    return _has_pe_header(Path(raw))
+
+
+def which_host_binary(name: str, *, path: str | None = None, which_fn=None) -> str | None:
+    """Resolve a host CLI without WSL2 `/mnt/<drive>` shims or WindowsApps alias stubs."""
+    lookup = which_fn or shutil.which
+    found = lookup(name) if path is None else lookup(name, path=path)
+    if found is None:
+        return None
+    rejected = _is_windowsapps_stub if os.name == "nt" else (is_windows_host_binary if os.name == "posix" else None)
+    if rejected is None or not rejected(found):
+        return found
+    search = os.environ.get("PATH", "") if path is None else path
+    wsl = os.name == "posix" and in_wsl()
+    for entry in search.split(os.pathsep):
+        if not entry:
+            continue
+        if wsl and _WSL_DRVFS_RE.match(os.path.normpath(entry)):
+            continue
+        cand = _REAL_WHICH(name, path=entry)
+        if cand and not rejected(cand):
+            return cand
+    return None
 NATIVE_PROVIDER_ENV = (
     "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
     "ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL",
@@ -59,7 +160,11 @@ def service_launch_context(adapter_file: Path, adapter: dict) -> dict:
         "MINDIE_DIAGNOSTICS_ROOT": str(default_root().expanduser().absolute()),
     }
     explicit = os.environ.get("MINDIE_CC_BIN")
-    native = shutil.which(explicit or "claude")
+    native = (
+        shutil.which(explicit)
+        if explicit and os.path.dirname(explicit)
+        else which_host_binary(explicit or "claude", which_fn=shutil.which)
+    )
     if explicit and native is None:
         requested = Path(explicit).expanduser()
         if not requested.is_absolute():
@@ -91,7 +196,7 @@ def load_adapter_config() -> dict:
             "MindIE Claude Code adapter configuration is missing. "
             "Start a new Claude session with the native MindIE plugin enabled."
         )
-    data = json.loads(path.read_text(encoding="utf-8"))
+    data = json.loads(path.read_text(encoding="utf-8-sig"))
     if not isinstance(data, dict):
         raise ValueError("adapter configuration must be one JSON object")
     return data
@@ -133,7 +238,7 @@ def engine_config_path(config=None) -> Path:
 
 def load_engine_config(config=None) -> dict:
     path = engine_config_path(config)
-    data = json.loads(path.read_text(encoding="utf-8"))
+    data = json.loads(path.read_text(encoding="utf-8-sig"))
     if not isinstance(data, dict) or not {"root", "domain"} <= set(data):
         raise ValueError("engine configuration requires root and domain")
     if "session_activation" in data:

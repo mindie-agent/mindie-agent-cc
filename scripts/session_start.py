@@ -27,6 +27,10 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import bounded
+from paths import which_host_binary
+
 DEADLINE_ENV = "MINDIE_SESSION_START_DEADLINE_MONOTONIC"
 DEADLINE_UNIX_ENV = "MINDIE_SESSION_START_DEADLINE_UNIX"
 INNER_ENV = "MINDIE_SESSION_START_INNER"
@@ -57,13 +61,13 @@ def arm_deadline(inner=None):
 
 
 def _reexec_python313(argv):
-    uv = shutil.which("uv")
+    uv = which_host_binary("uv", which_fn=shutil.which)
     if uv is None:
         raise FileNotFoundError("uv is required to prepare the locked MindIE runtime")
     os.environ[INNER_ENV] = "1"
     command = [uv, "--native-tls", "run", "--no-project", "--python", "3.13",
                "python", str(Path(__file__).resolve()), *argv]
-    os.execve(uv, command, dict(os.environ))
+    bounded.exec_or_wait(command, dict(os.environ))
 
 
 def main(argv=None):

@@ -110,7 +110,7 @@ def _read_regular_json(path):
     if len(blob) > _META_LIMIT:
         return "unavailable", None
     try:
-        value = json.loads(blob.decode("utf-8"))
+        value = json.loads(blob.decode("utf-8-sig"))
     except (UnicodeError, json.JSONDecodeError, ValueError):
         return "unavailable", None
     if not isinstance(value, dict):

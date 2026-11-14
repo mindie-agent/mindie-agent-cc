@@ -95,7 +95,7 @@ if __name__ == "__main__":
         try:
             from mindie_knowledge.loop.store import Store
             from mindie_knowledge.git_layout import validate_config_feed_layout
-            config = json.load(sys.stdin)
+            config = json.loads(sys.stdin.buffer.read().decode("utf-8-sig"))
             validate_config_feed_layout(config)
             store = Store(config['root'], config['domain'])
             store.close()

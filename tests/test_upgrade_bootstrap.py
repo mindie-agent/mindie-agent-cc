@@ -141,8 +141,8 @@ def test_bootstrap_inner_rebases_expired_foreign_monotonic(monkeypatch):
 def test_reexec_python313_invokes_uv_python_313(monkeypatch):
     seen = {}
     monkeypatch.setattr(bootstrap.shutil, "which", lambda name: "/usr/bin/uv")
-    monkeypatch.setattr(os, "execve",
-                        lambda cmd, argv, env: seen.update(cmd=cmd, argv=list(argv), env=env))
+    monkeypatch.setattr(bootstrap.bounded, "exec_or_wait",
+                        lambda argv, env: seen.update(cmd=argv[0], argv=list(argv), env=env))
     bootstrap._reexec_python313(["hook", "session-start"])
     assert seen["cmd"] == "/usr/bin/uv"
     assert seen["argv"][:6] == [
@@ -172,14 +172,14 @@ def test_session_start_sets_deadline_before_python313_reexec(monkeypatch):
     monkeypatch.delenv(session_start.INNER_ENV, raising=False)
     monkeypatch.setattr(session_start.shutil, "which", lambda name: "/usr/bin/uv")
 
-    def fake_execve(cmd, argv, env):
-        seen["cmd"] = cmd
+    def fake_exec(argv, env):
+        seen["cmd"] = argv[0]
         seen["argv"] = list(argv)
         seen["unix"] = float(env[session_start.DEADLINE_UNIX_ENV])
         seen["monotonic"] = env.get(session_start.DEADLINE_ENV)
         seen["inner"] = env.get(session_start.INNER_ENV)
 
-    monkeypatch.setattr(os, "execve", fake_execve)
+    monkeypatch.setattr(session_start.bounded, "exec_or_wait", fake_exec)
     started = time.time()
     session_start.main(["hook", "session-start"])
     expected = session_start.BOOTSTRAP_TOTAL + session_start.UV_PYTHON_PROVISION
@@ -372,3 +372,59 @@ bootstrap.ensure_runtime(Path({str(source)!r}))
                 process.kill()
                 process.wait(timeout=3)
             process.stderr.close()
+
+
+def test_windows_reexec_python313_uses_wait_windows_entry_not_execve(monkeypatch):
+    import paths
+    import session_start
+
+    calls = []
+    monkeypatch.setattr(bootstrap.bounded, "POSIX", False)
+    monkeypatch.setattr(paths, "is_windows_host_binary", lambda _cand: False)
+    monkeypatch.setattr(
+        bootstrap.bounded,
+        "wait_windows_entry",
+        lambda cmd, env, **kw: calls.append(("win", list(cmd), dict(env))),
+    )
+    monkeypatch.setattr(
+        os,
+        "execve",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("os.execve must not run on Windows")),
+    )
+    monkeypatch.setattr(bootstrap.shutil, "which", lambda name: r"C:\Users\dev\.local\bin\uv.exe")
+    monkeypatch.setattr(session_start.shutil, "which", lambda name: r"C:\Users\dev\.local\bin\uv.exe")
+    bootstrap._reexec_python313(["hook", "session-start"])
+    session_start._reexec_python313(["hook", "session-start"])
+    assert len(calls) == 2
+    assert calls[0][1][0] == r"C:\Users\dev\.local\bin\uv.exe"
+    assert calls[1][1][0] == r"C:\Users\dev\.local\bin\uv.exe"
+
+
+def test_wsl_which_host_binary_rejects_drvfs_and_pe_shims(tmp_path, monkeypatch):
+    import struct
+    import paths
+
+    if os.name != "posix":
+        pytest.skip("POSIX/WSL PATH shadowing check")
+
+    win_dir = tmp_path / "win_npm"
+    lin_dir = tmp_path / "linux_bin"
+    win_dir.mkdir()
+    lin_dir.mkdir()
+    pe_shim = win_dir / "claude"
+    header = bytearray(128)
+    header[:2] = b"MZ"
+    struct.pack_into("<I", header, 0x3C, 64)
+    header[64:68] = b"PE\x00\x00"
+    pe_shim.write_bytes(bytes(header))
+    pe_shim.chmod(0o755)
+    lin_bin = lin_dir / "claude"
+    lin_bin.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    lin_bin.chmod(0o755)
+
+    monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu-24.04")
+    fake_path = os.pathsep.join(["/mnt/c/Users/dev/bin", str(win_dir), str(lin_dir)])
+    assert paths.is_windows_host_binary("/mnt/c/Users/dev/bin/claude")
+    assert paths.is_windows_host_binary(str(pe_shim))
+    assert not paths.is_windows_host_binary(str(lin_bin))
+    assert paths.which_host_binary("claude", path=fake_path) == str(lin_bin)

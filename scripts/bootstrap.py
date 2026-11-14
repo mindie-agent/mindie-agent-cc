@@ -171,7 +171,8 @@ def _baseline_runtime(source, *, prepare, on_process=None, deadline_at=None):
                 python, source, on_process=on_process, deadline_at=deadline_at)
         if not prepare:
             raise RuntimeError("runtime is not prepared; start a new Claude session")
-        uv = shutil.which("uv")
+        from paths import which_host_binary
+        uv = which_host_binary("uv", which_fn=shutil.which)
         if uv is None:
             raise FileNotFoundError("uv is required to prepare the locked MindIE runtime")
         env = dict(os.environ, UV_PROJECT_ENVIRONMENT=str(runtime), UV_NO_PROGRESS="1",
@@ -206,13 +207,14 @@ SESSION_START_INNER_ENV = "MINDIE_SESSION_START_INNER"
 
 
 def _reexec_python313(argv):
-    uv = shutil.which("uv")
+    from paths import which_host_binary
+    uv = which_host_binary("uv", which_fn=shutil.which)
     if uv is None:
         raise FileNotFoundError("uv is required to prepare the locked MindIE runtime")
     os.environ[SESSION_START_INNER_ENV] = "1"
     command = [uv, "--native-tls", "run", "--no-project", "--python", "3.13",
                "python", str(Path(__file__).resolve()), *argv]
-    os.execve(uv, command, dict(os.environ))
+    bounded.exec_or_wait(command, dict(os.environ))
 
 
 def main(argv=None):

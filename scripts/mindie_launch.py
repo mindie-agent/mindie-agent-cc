@@ -224,8 +224,8 @@ def _read_hook_stdin(deadline):
                     if not chunk.rstrip().endswith((b'}', b']')):
                         continue
                     try:
-                        json.loads(bytes(buf))
-                    except ValueError:
+                        json.loads(bytes(buf).removeprefix(b"\xef\xbb\xbf").decode("utf-8"))
+                    except (UnicodeDecodeError, ValueError):
                         continue
                     return
         finally:
@@ -237,7 +237,7 @@ def _read_hook_stdin(deadline):
     if not finished.is_set():
         return b""
     with lock:
-        return bytes(buf)
+        return bytes(buf).removeprefix(b"\xef\xbb\xbf")
 
 
 def _hook_can_start_service(op, raw):
@@ -246,7 +246,8 @@ def _hook_can_start_service(op, raw):
     if op != "expansion":
         return False
     try:
-        event = json.loads(raw)
+        text = raw.decode("utf-8-sig") if isinstance(raw, (bytes, bytearray)) else str(raw).lstrip("\ufeff")
+        event = json.loads(text)
     except (ValueError, UnicodeDecodeError):
         return False
     return (

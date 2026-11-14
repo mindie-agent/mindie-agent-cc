@@ -9,9 +9,12 @@ no knowledge activation, feed maintenance, model or consent changes.
 from __future__ import annotations
 import argparse
 from contextlib import contextmanager
+import http.client
 import json
 from pathlib import Path
 import re
+import socket
+import ssl
 import sys
 import urllib.error
 
@@ -22,6 +25,12 @@ from product_contract import identity, package_files
 
 RETIRED_COMPONENTS = frozenset({"mindie-bench"})
 _TRANSPORT_FETCH_CODES = frozenset({"release_http_error", "release_transport_unavailable"})
+_LOCAL_HTTP_BUGS = (
+    http.client.InvalidURL,
+    http.client.ImproperConnectionState,
+    http.client.NotConnected,
+    http.client.UnimplementedFileMode,
+)
 _CODE = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
 _HOST = frozenset({"FileNotFoundError", "CalledProcessError"})
 _HOST_CODES = frozenset({"invalid_harness_version", "invalid_installed_version"})
@@ -40,12 +49,57 @@ def _copy_process_attrs(source, target):
     return target
 
 
-def _catalog_error(code, *, category="temporary_network", status=None, source=None):
+def _finite_delay(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if number != number or number in (float("inf"), float("-inf")) or number < 0:
+        return None
+    return number
+
+
+def _is_cert_verification_error(exc) -> bool:
+    if isinstance(exc, ssl.SSLCertVerificationError):
+        return True
+    return isinstance(exc, ssl.SSLError) and getattr(exc, "reason", None) == "CERTIFICATE_VERIFY_FAILED"
+
+
+def classify_transport_exception(exc):
+    """Classify typed stdlib HTTP/TLS/socket transport errors without free-text parsing."""
+    if exc is None or isinstance(exc, TimeoutError):
+        return None
+    if isinstance(exc, urllib.error.HTTPError):
+        headers = getattr(exc, "headers", None)
+        raw_retry = headers.get("Retry-After") if headers is not None and hasattr(headers, "get") else None
+        retry_after = _finite_delay(raw_retry) if raw_retry is not None else None
+        return ("rate_limited" if exc.code == 429 else "temporary_network", retry_after)
+    if _is_cert_verification_error(exc):
+        return ("certificate", None)
+    if isinstance(exc, urllib.error.URLError):
+        reason = getattr(exc, "reason", None)
+        if _is_cert_verification_error(reason) or _is_cert_verification_error(getattr(exc, "__cause__", None)):
+            return ("certificate", None)
+        return ("temporary_network", None)
+    if isinstance(exc, ssl.SSLError):
+        if _is_cert_verification_error(getattr(exc, "__cause__", None)):
+            return ("certificate", None)
+        return ("temporary_network", None)
+    if isinstance(exc, _LOCAL_HTTP_BUGS):
+        return None
+    if isinstance(exc, (ConnectionError, http.client.HTTPException, socket.gaierror, socket.herror)):
+        return ("temporary_network", None)
+    return None
+
+
+def _catalog_error(code, *, category="temporary_network", status=None, retry_after=None, source=None):
     error = CatalogError(code)
     error.code = code
     error.category = category
     if type(status) is int and 100 <= status <= 599:
         error.status = status
+    if retry_after is not None:
+        error.retry_after = retry_after
     return _copy_process_attrs(source, error) if source is not None else error
 
 
@@ -89,6 +143,8 @@ def typed_catalog_error(exc):
             error = FileNotFoundError("component helper is unavailable for catalog selection")
         elif kind in _TIMEOUT:
             error = TimeoutError("component catalog probe timed out")
+        elif kind == "ReleaseResponseTooLarge":
+            return exc
         elif kind == "ReleaseFetchError" and code not in _TRANSPORT_FETCH_CODES and status != 429:
             try:
                 from mindie_knowledge.releases_io import ReleaseFetchError
@@ -96,15 +152,24 @@ def typed_catalog_error(exc):
                 return exc
             error = ReleaseFetchError(code or "invalid_release_json", status=status)
         else:
+            category = (
+                "certificate" if code == "release_certificate_error"
+                else "rate_limited" if status == 429
+                else "temporary_network"
+            )
             error = _catalog_error(
                 code or "release_transport_unavailable",
-                category="rate_limited" if status == 429 else "temporary_network",
+                category=category,
                 status=status,
             )
         return _copy_process_attrs(exc, error)
     try:
+        from mindie_knowledge.release_http import ReleaseResponseTooLarge
         from mindie_knowledge.releases_io import ReleaseFetchError
     except ImportError:
+        ReleaseResponseTooLarge = ()
+        ReleaseFetchError = ()
+    if isinstance(exc, ReleaseResponseTooLarge):
         return exc
     if isinstance(exc, ReleaseFetchError):
         if exc.code in _TRANSPORT_FETCH_CODES or exc.status == 429:
@@ -116,14 +181,24 @@ def typed_catalog_error(exc):
             )
         return exc
     if isinstance(exc, urllib.error.HTTPError):
+        kind = classify_transport_exception(exc)
         return _catalog_error(
             "release_http_error",
-            category="rate_limited" if exc.code == 429 else "temporary_network",
+            category=kind[0] if kind else ("rate_limited" if exc.code == 429 else "temporary_network"),
             status=exc.code,
+            retry_after=kind[1] if kind else None,
             source=exc,
         )
-    if isinstance(exc, (urllib.error.URLError, ConnectionError)):
-        return _catalog_error("release_transport_unavailable", source=exc)
+    if isinstance(exc, json.JSONDecodeError):
+        return _catalog_error("release_catalog_invalid", source=exc)
+    if (kind := classify_transport_exception(exc)) is not None:
+        category, retry_after = kind
+        return _catalog_error(
+            "release_certificate_error" if category == "certificate" else "release_transport_unavailable",
+            category=category,
+            retry_after=retry_after,
+            source=exc,
+        )
     return exc
 
 
@@ -250,9 +325,12 @@ def main():
     try:
         print(json.dumps(prepare(args.source, args.python, args.root,
                                  current_python=args.current_python, plugin_upgrade=True), sort_keys=True))
+    except _LOCAL_HTTP_BUGS:
+        raise
     except (CatalogError, ReleaseFetchError, ReleaseResponseTooLarge,
-            urllib.error.HTTPError, urllib.error.URLError, ConnectionError,
-            FileNotFoundError, TimeoutError) as exc:
+            urllib.error.HTTPError, urllib.error.URLError, ssl.SSLError,
+            ConnectionError, http.client.HTTPException, socket.gaierror,
+            socket.herror, json.JSONDecodeError, FileNotFoundError, TimeoutError) as exc:
         emit_catalog_error(exc)
 
 

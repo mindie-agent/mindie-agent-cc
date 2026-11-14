@@ -54,11 +54,24 @@ def _typed_update_error(exc):
     That import must not replace the original failure or skip its receipt.
     Source-integrity codes stay unlabeled so they remain reportable.
     """
+    if getattr(exc, "category", None) is not None:
+        return exc
+    try:
+        from component_update import classify_transport_exception
+    except ImportError:
+        classify_transport_exception = None
+    if classify_transport_exception is not None:
+        kind = classify_transport_exception(exc)
+        if kind is not None:
+            exc.category, retry_after = kind
+            if retry_after is not None and getattr(exc, "retry_after", None) is None:
+                exc.retry_after = retry_after
+            return exc
     try:
         from mindie_knowledge.releases_io import ReleaseFetchError
     except ImportError:
         return exc
-    if not isinstance(exc, ReleaseFetchError) or getattr(exc, "category", None) is not None:
+    if not isinstance(exc, ReleaseFetchError):
         return exc
     if getattr(exc, "code", None) in _TRANSPORT_FETCH_CODES:
         return exc

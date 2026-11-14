@@ -43,7 +43,7 @@ from install_state import (
     OperationLock, atomic_write, read_binding,
 )
 from maintenance import sync_public_feed
-from paths import config_path as default_config_path, service_launch_context
+from paths import config_path as default_config_path, service_launch_context, which_host_binary
 from product_contract import identity, official_feeds, publication_feed
 
 def community_settings(args, parser):
@@ -414,7 +414,8 @@ _NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,255}\Z")
 
 def resolve_github_identity(repository, *, account=None, fork=None):
     """Best-effort GitHub login and fork resolution via `gh` when not explicitly passed."""
-    if fork or not shutil.which("gh"):
+    gh = None if fork else which_host_binary("gh", which_fn=shutil.which)
+    if fork or not gh:
         return account, fork
     import bounded
 
@@ -422,7 +423,7 @@ def resolve_github_identity(repository, *, account=None, fork=None):
     try:
         if not account:
             login = bounded.run(
-                ["gh", "api", "--hostname", "github.com", "user", "--jq", ".login"],
+                [gh, "api", "--hostname", "github.com", "user", "--jq", ".login"],
                 timeout=5.0,
             ).strip()
             if login and "/" not in login and _NAME_RE.fullmatch(login):
@@ -430,24 +431,13 @@ def resolve_github_identity(repository, *, account=None, fork=None):
         if account and not fork:
             try:
                 found = bounded.run(
-                    [
-                        "gh",
-                        "api",
-                        "--hostname",
-                        "github.com",
-                        f"repos/{account}/{repo_name}",
-                        "--jq",
-                        ".full_name",
-                    ],
+                    [gh, "api", "--hostname", "github.com", f"repos/{account}/{repo_name}", "--jq", ".full_name"],
                     timeout=5.0,
                 ).strip()
                 if _REPOSITORY_RE.fullmatch(found):
                     fork = found
             except Exception:
-                bounded.run(
-                    ["gh", "repo", "fork", repository, "--clone=false"],
-                    timeout=10.0,
-                )
+                bounded.run([gh, "repo", "fork", repository, "--clone=false"], timeout=10.0)
                 fork = f"{account}/{repo_name}"
     except Exception:
         pass
