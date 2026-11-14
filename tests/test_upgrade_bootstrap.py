@@ -435,12 +435,23 @@ def test_wsl_which_host_binary_rejects_drvfs_and_pe_shims(tmp_path, monkeypatch)
     drvfs_venv = tmp_path / "drvfs_venv"
     drvfs_venv.mkdir()
     linux_console = drvfs_venv / "mindie-profiler"
-    linux_console.write_text("#!/mnt/c/proj/.venv/bin/python\nimport sys\n", encoding="utf-8")
+    linux_console.write_text(
+        "#!/mnt/c/proj/.venv/bin/python3\n"
+        "import re, sys\n"
+        'sys.argv[0] = re.sub(r"(-script\\.pyw|\\.exe)?$", "", sys.argv[0])\n'
+        'if sys.argv[0].endswith(".exe"):\n'
+        "    sys.argv[0] = sys.argv[0][:-4]\n",
+        encoding="utf-8",
+    )
     linux_console.chmod(0o755)
+    posix_basedir = drvfs_venv / "claude-wrapper"
+    posix_basedir.write_text('#!/bin/sh\nbasedir=$(dirname "$0")\nexec "$basedir/linux-claude" "$@"\n', encoding="utf-8")
+    posix_basedir.chmod(0o755)
     npm_shim = drvfs_venv / "claude-npm"
     npm_shim.write_text('#!/bin/sh\nbasedir=$(cygpath -w "$0")\nexec "$basedir/node.exe"\n', encoding="utf-8")
     npm_shim.chmod(0o755)
     assert paths._is_wsl_linux_executable(linux_console) is True
+    assert paths._is_wsl_linux_executable(posix_basedir) is True
     assert paths._is_wsl_linux_executable(npm_shim) is False
 
 
