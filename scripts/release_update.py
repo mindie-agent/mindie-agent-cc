@@ -92,8 +92,28 @@ def _forget_process_streams(process):
     return process.pop("stdout", None), process.pop("stderr", None)
 
 
-def _native_writer_error(process, streams):
-    error = RuntimeError("native installation did not complete cleanly; inspect its receipt")
+def _reasoned_runtime_error(
+    message: str,
+    reason_code: str,
+    *,
+    substage: str | None = None,
+    mindie_stage: str | None = None,
+) -> RuntimeError:
+    error = RuntimeError(message)
+    error.reason_code = reason_code
+    if substage is not None:
+        error.substage = substage
+    if mindie_stage is not None:
+        error.mindie_stage = mindie_stage
+    return error
+
+
+def _native_writer_error(process, streams, *, stage=None):
+    error = _reasoned_runtime_error(
+        "native installation did not complete cleanly; inspect its receipt",
+        f"native_{stage}_mutation_failed" if stage in {"catalog", "plugin"} else "native_mutation_failed",
+        substage=stage if isinstance(stage, str) else None,
+    )
     code = process.get("returncode")
     if type(code) is int:
         error.returncode = code
@@ -375,7 +395,7 @@ def _mutation(binding, state, native, args, stage):
     _record(binding, state)
     if (process.get("returncode") != 0 or process.get("completed") is not True
             or process.get("cleanup_failed") is not False):
-        raise _native_writer_error(process, streams)
+        raise _native_writer_error(process, streams, stage=stage)
     return output
 
 
@@ -409,7 +429,7 @@ def install_selected(binding, native, candidate, state):
         process = state.get("process", {})
         if (process.get("completed") is not True
                 or process.get("cleanup_failed") is not False):
-            raise RuntimeError("previous native writer is not confirmed settled; not replayed")
+            raise _reasoned_runtime_error("previous native writer is not confirmed settled; not replayed", "native_writer_unsettled", substage=stage if isinstance(stage, str) else None)
     row = installed_plugin(native)
     verified = state.get("native_effect") == "verified" and row.get("version") == candidate["metadata"]["version"]
     if not unresolved and not verified:
@@ -424,7 +444,7 @@ def install_selected(binding, native, candidate, state):
     version = candidate["metadata"]["version"]
     if row.get("version") != version:
         if unresolved and stage == "plugin":
-            raise RuntimeError("previous native installation remains unconfirmed; not replayed")
+            raise _reasoned_runtime_error("previous native installation remains unconfirmed; not replayed", "native_plugin_unconfirmed", substage="plugin")
         _mutation(binding, state, native,
                   ["update", PLUGIN_QUALIFIED, "--scope", "user", "--json", "-y"], "plugin")
         row = installed_plugin(native)
@@ -505,7 +525,7 @@ def _observe_activation(binding, state):
 
 def _activate(binding, prepared, env, state):
     if state.get("activation_effect") == "unknown" and not _activation_settled(state):
-        raise RuntimeError("previous activation writer is not confirmed settled")
+        raise _reasoned_runtime_error("previous activation writer is not confirmed settled", "activation_writer_unsettled", substage="activation")
     state.update(activation_effect="unknown", activation_process={},
                  last_activation_attempt=time.time())
     try:
@@ -528,7 +548,7 @@ def _activate(binding, prepared, env, state):
         state["activation"] = activated
         state["activation_process"] = process
         if not _activation_settled(state):
-            raise RuntimeError("activation command cleanup is not confirmed")
+            raise _reasoned_runtime_error("activation command cleanup is not confirmed", "activation_cleanup_unconfirmed", substage="activation")
         state.update(activation_effect=activated["status"], status=activated["status"],
                      stage="activation", last_activation_attempt=time.time())
         if activated["status"] in {"activated", "current"}:
@@ -562,7 +582,7 @@ def check(binding, state=None):
     if pending and state.get("preparation_effect") == "unknown":
         process = state.get("preparation_process", {})
         if process.get("cleanup_failed") is True:
-            raise RuntimeError("previous preparation writer is not confirmed settled")
+            raise _reasoned_runtime_error("previous preparation writer is not confirmed settled", "preparation_writer_unsettled", substage="preparation")
     if pending and "prepared" in state and state.get("activation_effect") not in {
         "not_started", "deferred", "unknown", "incomplete", "activated", "current",
     }:
@@ -647,9 +667,7 @@ def check(binding, state=None):
             raise
         observer("binding-prepare", process)
         if state["preparation_effect"] != "completed":
-            cleanup_err = RuntimeError("binding preparation cleanup is not confirmed")
-            cleanup_err.mindie_stage = "binding_prepare"
-            raise cleanup_err
+            raise _reasoned_runtime_error("binding preparation cleanup is not confirmed", "binding_prepare_cleanup_unconfirmed", substage="binding_prepare", mindie_stage="binding_prepare")
         prepared = json.loads(output)
         prepared.update(python=str(python), runtime_scripts=str(scripts))
         state["prepared"] = prepared
