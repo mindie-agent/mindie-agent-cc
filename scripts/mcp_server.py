@@ -6,9 +6,12 @@ Serves stdio JSON-RPC MCP requests for MindIE knowledge, `remote_dev`, and
 explicit component CLI tools in Claude Code.
 
 [Invariants]
-- Session identity is never taken from model-supplied tool arguments; `PreToolUse`
-  binds `claudecode/toolUseId` and this server consumes it at most once via
-  `claim_bind` / `finish_bind`. Only the successful claimant finalizes its receipt.
+- Session identity is never taken from model-supplied tool arguments. On the
+  `knowledge` surface, `PreToolUse` binds `claudecode/toolUseId` and `claim_bind`
+  is strictly required. On deterministic surfaces (`remote` and `components`),
+  `claim_bind` is opportunistic (supplying native session/cwd and rejecting
+  duplicate `call_id` replay when bound, while falling back to
+  `_CONNECTION_SESSION_ID` for subagents, automations, or direct MCP calls).
 - Once a remote or knowledge tool call succeeds, a local SQLite bind-accounting
   failure (`finish_bind`) attaches `bind_warning` + `diagnostic_ref` and, for an
   OSError, `bind_errno` and a fixed `bind_path` label. It never flips
@@ -35,6 +38,7 @@ import os
 import re
 import sqlite3
 import sys
+import uuid
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -43,6 +47,7 @@ if str(HERE) not in sys.path:
 
 from identity import (
     KNOWLEDGE_TOOLS,
+    MissingBind,
     bind_storage_facts,
     canonical_native_name,
     claim_bind,
@@ -66,6 +71,7 @@ REMOTE_ERROR_CATEGORIES = frozenset({
     "worker_capacity",
 })
 JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{2,95}$")
+_CONNECTION_SESSION_ID = os.environ.get("MINDIE_MCP_CONNECTION_ID") or f"cc-mcp-{os.getpid()}-{uuid.uuid4().hex[:12]}"
 
 def canonical(value):
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
@@ -569,11 +575,24 @@ def handle(surface, message):
             or any(isinstance(key, str) and key.startswith("_") for key in args)
         ):
             raise ValueError("knowledge tool arguments must not include native session identity")
-        call_id = meta_tool_use_id(params)
         native_name = canonical_native_name(surface, name)
-        bound = claim_bind(call_id, native_name, args)
-        claimed = True
-        session = bound["session"]
+        if surface == "knowledge":
+            call_id = meta_tool_use_id(params)
+            bound = claim_bind(call_id, native_name, args)
+            claimed = True
+            session = bound["session"]
+        else:
+            bound = {}
+            call_id = meta_tool_use_id(params) if (params.get("_meta") or {}).get("claudecode/toolUseId") is not None else None
+            if call_id is not None:
+                try:
+                    bound = claim_bind(call_id, native_name, args)
+                    claimed = True
+                    session = bound["session"]
+                except MissingBind:
+                    session = _CONNECTION_SESSION_ID
+            else:
+                session = _CONNECTION_SESSION_ID
         local = name.rsplit("__", 1)[-1] if isinstance(name, str) else name
         if surface == "knowledge" and local == "mindie_status":
             from entry import status_facts

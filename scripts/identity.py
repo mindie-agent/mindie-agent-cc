@@ -409,6 +409,10 @@ def publish_bind(
         db.close()
 
 
+class MissingBind(ValueError):
+    """Raised only when no PreToolUse bind row or store exists for `tool_use_id`."""
+
+
 def claim_bind(tool_use_id: str, tool_name: str, arguments, *, config=None) -> dict:
     """MCP: consume a matching PreToolUse bind. Persist the attempt first."""
     tool_use_id = require_call_id(tool_use_id)
@@ -419,7 +423,7 @@ def claim_bind(tool_use_id: str, tool_name: str, arguments, *, config=None) -> d
     now = time.time()
     path = bind_db_path(config)
     if not path.is_file():
-        raise ValueError(
+        raise MissingBind(
             "no native PreToolUse bind exists for this toolUseId; "
             "the host did not authorize this call"
         )
@@ -435,7 +439,7 @@ def claim_bind(tool_use_id: str, tool_name: str, arguments, *, config=None) -> d
                 (tool_use_id,),
             ).fetchone()
             if row is None:
-                raise ValueError("toolUseId was not bound by a native PreToolUse hook")
+                raise MissingBind("toolUseId was not bound by a native PreToolUse hook")
             session, tool, bound_local, stored_args, status, created, cwd, transcript = row
             if status == "ambiguous":
                 raise ValueError("toolUseId is bound to contradictory native calls")

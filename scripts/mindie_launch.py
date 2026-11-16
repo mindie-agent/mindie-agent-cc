@@ -144,9 +144,13 @@ def _dispatch_failure(current, stage, category, exc, started):
     return DispatchFailure(diagnostic, stage)
 
 
+_CONNECTION_ID = os.environ.get("MINDIE_MCP_CONNECTION_ID") or f"cc-mcp-{os.getpid()}-{os.urandom(6).hex()}"
+
+
 def _child_env(current: dict) -> dict:
     env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
     env["PYTHONIOENCODING"] = "utf-8"
+    env["MINDIE_MCP_CONNECTION_ID"] = _CONNECTION_ID
     env[CONFIG_ENV] = current["adapter_config"]
     adapter = json.loads(Path(current["adapter_config"]).read_text(encoding="utf-8"))
     env.update(adapter.get("diagnostics_context", {}))
