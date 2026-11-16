@@ -213,3 +213,21 @@ def test_ssl_and_http_stream_transport_errors_stay_non_reportable_while_local_bu
     release_update._record_update_failure("native_update", ssl.SSLError("TLS drop"))
     release_update._record_update_failure("native_update", http.client.IncompleteRead(b"x", 10))
     assert ingest(logs, Outbox(tmp_path / "queue.db"), config=policy)["enqueued"] == 0
+
+
+def test_release_json_provenance_crosses_component_child(capsys):
+    from mindie_knowledge.releases_io import _json, _remote_json, ReleaseFetchError
+    for parse, expected in ((_remote_json, "temporary_network"), (_json, None)):
+        try:
+            parse(b'{"PRIVATE":')
+        except ReleaseFetchError as error:
+            typed = component_update.typed_catalog_error(error)
+            with pytest.raises(SystemExit):
+                component_update.emit_catalog_error(typed)
+        raw = capsys.readouterr().out
+        assert "PRIVATE" not in raw
+        child = RuntimeError("component child failed")
+        child.mindie_output = raw
+        rebuilt = component_update.typed_catalog_error(child)
+        assert getattr(rebuilt, "category", None) == expected
+        assert rebuilt.code == "invalid_release_json"
