@@ -192,6 +192,28 @@ def _chain_inner_diagnostic(exc):
     return None
 
 
+def _legacy_resolver_transport(exception, category):
+    """Map `resolver` onto transport facts for diagnostics before 0.5.15.
+
+    Those releases know DNS *types* but not the updater's `resolver` category,
+    so an otherwise non-reportable Git DNS miss would become an internal fault.
+    The caller's exception keeps its typed category after the record returns.
+    """
+    if category != "update" or getattr(exception, "category", None) != "resolver":
+        return None
+    try:
+        from mindie_diagnostics.fallback import update_failure_policy
+
+        probe = RuntimeError("resolver category support probe")
+        probe.category = "resolver"
+        if update_failure_policy(probe)[0] == "connectivity":
+            return None
+    except Exception:  # noqa: BLE001 - an unreadable policy keeps the caller's category
+        return None
+    exception.category = "temporary_network"
+    return "resolver"
+
+
 def failure(operation, stage, category, *, exception=None, revision=None,
             elapsed_ms=None, exit_code=None, reportable=True, incident_id=None,
             reason_code=None, substage=None):
@@ -205,6 +227,7 @@ def failure(operation, stage, category, *, exception=None, revision=None,
     explicit = _hex(revision, 40)
     eff_reason = reason_code if reason_code is not None else getattr(exception, "reason_code", None)
     eff_substage = substage if substage is not None else getattr(exception, "substage", None)
+    restore = _legacy_resolver_transport(exception, category)
     try:
         child_build = _project_build(getattr(exception, "mindie_failure_build", None))
         build = child_build or build_metadata()
@@ -231,6 +254,9 @@ def failure(operation, stage, category, *, exception=None, revision=None,
     except Exception:
         _warn()
         result = {"logging_failed": True}
+    finally:
+        if restore is not None:
+            exception.category = restore
     if exception is not None:
         proj = _ref(result)
         if proj is not None:

@@ -6,7 +6,13 @@ Prepares and validates the locked Python virtual environment (`uv sync --locked`
 for `mindie-agent-cc` and invokes `setup.py` to record the installation binding.
 
 [Invariants]
-- Runtime directory is keyed by `native_version` and `source_identity` digest.
+- Runtime directory is keyed by `native_version` and `source_identity` digest;
+  Windows new builds use a 24-character key while an existing 64-character
+  directory and its `.ready.json` remain readable.
+- A plugin upgrade that inherits an installed component floor asks the existing
+  interpreter for the merged runtime first, so one `.venv` is built instead of
+  a baseline plus a merged copy. A baseline is built only when no component
+  override is required or no existing interpreter is usable.
 - Never alters Claude Code's own marketplace selection or unrelated plugins.
 
 [Timeouts & Locks]
@@ -18,7 +24,8 @@ for `mindie-agent-cc` and invokes `setup.py` to record the installation binding.
 
 [Side-Effect Policy]
 - Materializes the isolated runtime under `runtime_root()` and writes atomic
-  installation state via `setup.py`.
+  installation state via `setup.py`. `uv sync` uses a same-volume
+  `runtime.parent/.uv-cache` when the platform default cache crosses a device.
 """
 
 from __future__ import annotations
@@ -45,6 +52,9 @@ def runtime_root():
     return base / "mindie-agent" / "runtimes" / "cc"
 
 
+WINDOWS_RUNTIME_KEY_LENGTH = 24
+
+
 def runtime_key(source):
     from product_contract import package_files
     source = Path(source).resolve()
@@ -54,6 +64,72 @@ def runtime_key(source):
         digest.update(path.read_bytes() + b"\0")
     digest.update(f"{sys.implementation.cache_tag}:{sysconfig.get_platform()}".encode())
     return digest.hexdigest()
+
+
+def runtime_key_names(key, *, windows=None):
+    """New Windows key first, legacy 64-character directory second."""
+    windows = os.name == "nt" if windows is None else bool(windows)
+    if windows and len(key) > WINDOWS_RUNTIME_KEY_LENGTH:
+        return (key[:WINDOWS_RUNTIME_KEY_LENGTH], key)
+    return (key,)
+
+
+def _uv_default_cache(env):
+    xdg = env.get("XDG_CACHE_HOME")
+    if isinstance(xdg, str) and xdg.strip():
+        return Path(xdg) / "uv"
+    if os.name == "nt":
+        base = env.get("LOCALAPPDATA") or os.environ.get("LOCALAPPDATA")
+        if base:
+            return Path(base) / "uv" / "cache"
+        return Path.home() / "AppData" / "Local" / "uv" / "cache"
+    home = Path.home()
+    if sys.platform == "darwin":
+        legacy = home / ".cache" / "uv"
+        try:
+            if legacy.exists() or legacy.is_symlink():
+                return legacy
+        except TimeoutError:
+            raise
+        except OSError:
+            pass
+        return home / "Library" / "Caches" / "uv"
+    return home / ".cache" / "uv"
+
+
+def _device(path):
+    probe = Path(path)
+    while True:
+        try:
+            return os.stat(probe).st_dev
+        except FileNotFoundError:
+            if probe.parent == probe:
+                return None
+            probe = probe.parent
+        except TimeoutError:
+            raise
+        except OSError:
+            return None
+
+
+def same_volume_uv_cache(runtime, env):
+    """Place uv's cache on the runtime device when the default crosses it.
+
+    Cross-device caches turn ``clonefile``/hardlinks into a full copy of every
+    generation. An explicit non-empty ``UV_CACHE_DIR`` always wins.
+    """
+    explicit = env.get("UV_CACHE_DIR")
+    if isinstance(explicit, str) and explicit.strip():
+        return env
+    runtime = Path(runtime)
+    target = _device(runtime)
+    if target is None or _device(_uv_default_cache(env)) == target:
+        return env
+    chosen = runtime.parent / ".uv-cache"
+    if _device(chosen) != target:
+        return env
+    env["UV_CACHE_DIR"] = str(chosen)
+    return env
 
 
 def readback(python, source, *, on_process=None, deadline_at=None):
@@ -116,40 +192,111 @@ def ensure_runtime(source, *, prepare=True, on_process=None, deadline_at=None):
             source, prepare=prepare, on_process=on_process, deadline_at=deadline_at)
 
 
+def _usable_python(value):
+    if not isinstance(value, str) or not os.path.isabs(value):
+        return None
+    path = Path(value)
+    return path if path.is_file() else None
+
+
+def _component_override(source, python, current, *, active_python, on_process=None,
+                        deadline_at=None):
+    """Build the merged runtime from an already-installed interpreter.
+
+    The child owns discovery, build, verification and its own bounded cleanup;
+    a transport catalog failure keeps its existing typed classification.
+    """
+    state_dir = current.get("state_dir")
+    if not isinstance(state_dir, str) or not os.path.isabs(state_dir):
+        return None
+    from component_update import typed_catalog_error
+    try:
+        output = _run(
+            "component-floor",
+            [str(python), "-I", "-B", str(Path(source) / "scripts" / "component_update.py"),
+             str(source), str(python), str(Path(state_dir) / "component-runtimes"),
+             str(active_python)],
+            on_process=on_process, timeout=830, deadline_at=deadline_at,
+            transport=True)
+    except TimeoutError:
+        raise
+    except Exception as exc:
+        raise typed_catalog_error(exc) from None
+    effective = json.loads(output)
+    return effective if effective else None
+
+
 def _ensure_runtime(source, *, prepare, on_process=None, deadline_at=None):
     from paths import config_path
     config = config_path()
     current = json.loads(config.read_text(encoding="utf-8")) if config.is_file() else {}
     from product_contract import source_identity
     active = current.get("component_source")
-    if active and current["product_validation"]["source_sha256"] == source_identity(source):
+    validation = current.get("product_validation")
+    if (active and isinstance(validation, dict)
+            and validation.get("source_sha256") == source_identity(source)):
         python = Path(current["python"])
         return python, readback(python, source, on_process=on_process, deadline_at=deadline_at)
+    components = bool(active or current.get("component_commands"))
+    current_python = _usable_python(current.get("python"))
+    if components and current_python is not None:
+        effective = _component_override(
+            source, current_python, current, active_python=current_python,
+            on_process=on_process, deadline_at=deadline_at)
+        if effective:
+            return Path(effective["python"]), Path(effective["scripts"])
+        return _baseline_runtime(
+            source, prepare=prepare, on_process=on_process, deadline_at=deadline_at)
     python, scripts = _baseline_runtime(
         source, prepare=prepare, on_process=on_process, deadline_at=deadline_at)
-    if active or current.get("component_commands"):
-        from component_update import typed_catalog_error
-        try:
-            output = _run("component-floor", [str(python), "-I", "-B", str(scripts / "component_update.py"),
-                          str(source), str(python), str(Path(current["state_dir"]) / "component-runtimes"),
-                          current["python"]], on_process=on_process, timeout=830,
-                          deadline_at=deadline_at, transport=True)
-        except TimeoutError:
-            raise
-        except Exception as exc:
-            raise typed_catalog_error(exc) from None
-        effective = json.loads(output)
+    if components:
+        effective = _component_override(
+            source, python, current, active_python=python,
+            on_process=on_process, deadline_at=deadline_at)
         if effective:
             return Path(effective["python"]), Path(effective["scripts"])
     return python, scripts
+
+
+def _runtime_candidates(source, source_sha256, lock_sha256):
+    """Every acceptable runtime spelling, newest first, with its ready file."""
+    candidates = []
+    for name in runtime_key_names(runtime_key(source)):
+        runtime = runtime_root() / name
+        python = runtime / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+        expected = dict(key=name, python=str(python),
+                        source_sha256=source_sha256, lock_sha256=lock_sha256,
+                        abi=sys.implementation.cache_tag,
+                        platform=sysconfig.get_platform())
+        candidates.append((runtime, python, expected,
+                           runtime.with_suffix(".ready.json")))
+    return candidates
+
+
+def _completed_runtime(candidates):
+    """Return the first completed candidate, refusing a mismatched identity."""
+    mismatch = None
+    for runtime, python, expected, complete in candidates:
+        if not complete.is_file():
+            continue
+        if json.loads(complete.read_text(encoding="utf-8")) == expected:
+            return runtime, python, expected, complete
+        mismatch = mismatch or complete
+    if mismatch is not None:
+        raise ValueError("completed runtime identity differs; not repaired")
+    return None
 
 
 def _baseline_runtime(source, *, prepare, on_process=None, deadline_at=None):
     source = Path(source).resolve()
     if not (source / "uv.lock").is_file():
         raise ValueError("the native plugin does not contain its complete uv.lock")
-    runtime = runtime_root() / runtime_key(source)
-    python = runtime / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    lock_sha256 = hashlib.sha256((source / "uv.lock").read_bytes()).hexdigest()
+    from product_contract import source_identity
+    source_sha256 = source_identity(source)
+    candidates = _runtime_candidates(source, source_sha256, lock_sha256)
+    completed = _completed_runtime(candidates)
+    runtime, python, expected, complete = completed or candidates[0]
     adapter = {"state_dir": str(runtime.parent)}
     lock_timeout = 120
     if deadline_at is not None:
@@ -158,17 +305,12 @@ def _baseline_runtime(source, *, prepare, on_process=None, deadline_at=None):
             raise TimeoutError("session-start budget exhausted before runtime lock")
         lock_timeout = min(lock_timeout, remaining)
     with OperationLock(adapter, bootstrap=True).exclusive(timeout=lock_timeout):
-        from product_contract import source_identity
-        complete = runtime.with_suffix(".ready.json")
-        expected = dict(key=runtime.name, python=str(python),
-                        source_sha256=source_identity(source),
-                        lock_sha256=hashlib.sha256((source / "uv.lock").read_bytes()).hexdigest(),
-                        abi=sys.implementation.cache_tag, platform=sysconfig.get_platform())
-        if complete.is_file():
-            if json.loads(complete.read_text(encoding="utf-8")) != expected:
-                raise ValueError("completed runtime identity differs; not repaired")
+        completed = _completed_runtime(candidates)
+        if completed is not None:
+            runtime, python, expected, complete = completed
             return python, readback(
                 python, source, on_process=on_process, deadline_at=deadline_at)
+        runtime, python, expected, complete = candidates[0]
         if not prepare:
             raise RuntimeError("runtime is not prepared; start a new Claude session")
         from paths import which_host_binary
@@ -177,6 +319,7 @@ def _baseline_runtime(source, *, prepare, on_process=None, deadline_at=None):
             raise FileNotFoundError("uv is required to prepare the locked MindIE runtime")
         env = dict(os.environ, UV_PROJECT_ENVIRONMENT=str(runtime), UV_NO_PROGRESS="1",
                    GIT_TERMINAL_PROMPT="0", GCM_INTERACTIVE="never")
+        env = same_volume_uv_cache(runtime, env)
         if "UV_SYSTEM_CERTS" not in env and "UV_NATIVE_TLS" not in env:
             env["UV_SYSTEM_CERTS"] = "true"
             env["UV_NATIVE_TLS"] = "true"

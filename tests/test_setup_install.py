@@ -639,3 +639,19 @@ def test_prepare_domains_rejects_expired_shared_deadline(monkeypatch):
         with pytest.raises(TimeoutError, match="session-start budget exhausted"):
             capture_config.prepare_domains("python", {}, {})
     runner.assert_not_called()
+
+
+def test_new_runtime_reuses_the_selected_validated_publication(preparing):
+    """A pure component/runtime switch must not re-fetch the immutable contract."""
+    install(preparing)
+    captured = {}
+
+    def capture(source, *, verified_publication=None):
+        captured["value"] = verified_publication
+        return dict(preparing["validation"])
+
+    with patch.object(setup, "validate_candidate", side_effect=capture), \
+            patch("bootstrap.runtime_key", return_value="release-b"):
+        install(preparing)
+
+    assert captured["value"] == preparing["validation"]

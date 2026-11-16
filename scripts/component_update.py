@@ -11,6 +11,7 @@ import argparse
 from contextlib import contextmanager
 import http.client
 import json
+import os
 from pathlib import Path
 import re
 import socket
@@ -22,6 +23,7 @@ import urllib.error
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from product_contract import identity, package_files
+from storage_lifecycle import pre_build_reclaim
 
 RETIRED_COMPONENTS = frozenset({"mindie-bench"})
 _TRANSPORT_FETCH_CODES = frozenset({"release_http_error", "release_transport_unavailable"})
@@ -289,6 +291,11 @@ def prepare(source, python, root, *, current_python=None, force=False, current_s
     pins = {name: row["revision"] for name, row in selected.get("runtime", {}).items()}
     if (current_python is not None or not changed) and pins == baseline["runtime"] and not needs_binding:
         return None
+    binding = dict(adapter, python=str(python))
+    if adapter.get("state_dir") and adapter.get("base_config"):
+        # Reclaim superseded adapter/component generations before uv sync needs
+        # the space. Bounded and non-fatal: a busy tree stays for the next tick.
+        pre_build_reclaim(binding, budget_seconds=1.5)
     artifact = build(source, root, baseline, selected["runtime"], python=python,
                      adapter_distribution="mindie-agent-cc",
                      files=[str(path.relative_to(source)) for path in package_files(source)])
@@ -297,7 +304,10 @@ def prepare(source, python, root, *, current_python=None, force=False, current_s
 
 
 def check(binding, source, *, force=False):
+    import setup_diagnostics
     from bounded import run
+
+    env = dict(os.environ, MINDIE_SETUP_ERROR_ENVELOPE="1")
     try:
         artifact = prepare(source, binding["python"], Path(binding["state_dir"]) / "component-runtimes", force=force,
                            current_source=binding["product_validation"]["source_sha256"])
@@ -305,16 +315,22 @@ def check(binding, source, *, force=False):
             return dict(status="up_to_date")
         output = run([artifact["python"], str(Path(artifact["scripts"]) / "setup.py"),
                       "--source", artifact["source"], "--config", binding["base_config"]],
-                     timeout=360, transport=True)
+                     timeout=360, transport=True, env=env)
         prepared = json.loads(output)
+        if not isinstance(prepared, dict):
+            raise ValueError("component preparation returned an invalid result")
+        if prepared.get("status") == "deferred":
+            return dict(status="deferred", stage=prepared.get("stage", "lock_busy"))
         result = run([artifact["python"], str(Path(artifact["scripts"]) / "setup.py"),
                       "--activate", prepared["config"]],
-                     timeout=40, transport=True)
+                     timeout=40, transport=True, env=env)
         return dict(json.loads(result), runtime=artifact["components"])
     except BaseException as exc:
+        if isinstance(exc, Exception):
+            exc = setup_diagnostics.child_error(exc)
         if not getattr(exc, "mindie_stage", None):
             exc.mindie_stage = "component_update"
-        raise
+        raise exc
 
 
 def main():

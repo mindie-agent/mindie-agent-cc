@@ -45,6 +45,13 @@ from install_state import (
 from maintenance import sync_public_feed
 from paths import config_path as default_config_path, service_launch_context, which_host_binary
 from product_contract import identity, official_feeds, publication_feed
+from setup_diagnostics import (
+    consent_snapshot, emit_deferred, emit_failure, enabled as envelope_enabled,
+)
+from storage_lifecycle import (
+    attach_cleanup, cleanup_fields, post_switch, refresh_release_entry,
+    render_entry, silent_tick,
+)
 
 def community_settings(args, parser):
     selected = any(
@@ -118,9 +125,10 @@ def candidate_identity(source):
     return identity(source, components=component_manifest())
 
 
-def validate_candidate(source):
+def validate_candidate(source, *, verified_publication=None):
     from candidate_validate import validate
-    return validate(source, candidate_identity(source))
+    return validate(source, candidate_identity(source),
+                    verified_publication=verified_publication)
 
 
 def prepare_binding(source, config=None, *, root=None, domain="vllm-ascend",
@@ -181,7 +189,10 @@ def prepare_binding(source, config=None, *, root=None, domain="vllm-ascend",
             engine = _read(value["engine_config"])
             require_engine_support(engine, source=source)
         else:
-            validation = validate_candidate(source)
+            validation = validate_candidate(
+                source,
+                verified_publication=(selected.get("product_validation")
+                                      if isinstance(selected, dict) else None))
             if selected is None:
                 engine = dict(root=str(domain_root), domain=domain,
                               admission_path=str(domain_root / "admission.sqlite3"))
@@ -245,6 +256,14 @@ def prepare_binding(source, config=None, *, root=None, domain="vllm-ascend",
         status = "ready" if current == value else "prepared"
     os.environ["MINDIE_CC_CONFIG"] = str(adapter_file)
     result = dict(config=str(adapter_file), base_config=str(config), status=status)
+    if selected is None:
+        # First binding: reclaim generations left by earlier plugin versions
+        # before they accumulate another full runtime copy. Bounded and silent.
+        attach_cleanup(result, silent_tick(value, budget_seconds=1.2))
+    elif status == "ready":
+        # Self-heal a jump script left behind by a crash between the canonical
+        # publish and post-switch refresh. A byte-identical entry is a no-op.
+        refresh_release_entry(value, previous_python=selected.get("python"))
     if community is not None:
         from consent import record_choice
         from diagnostic_support import activate_reporting
@@ -356,8 +375,10 @@ def activate_binding(candidate_file, *, observation_seconds=30.0):
                                     service="ready", retirement=retirement,
                                     domain_restoration=restore_changed(domains, timeout=remaining()),
                                     error_type=type(exc).__name__, switched=False)
+                    cleanup = post_switch(candidate, previous_python=previous.get("python"))
                     return dict(status="activated", switched=True,
-                                seconds=time.monotonic() - started, retirement=retirement)
+                                seconds=time.monotonic() - started, retirement=retirement,
+                                **cleanup_fields(cleanup))
                 if state not in {"absent", "starting"}:
                     return dict(status="incomplete", stage="new_owner", service=state,
                                 retirement=retirement)
@@ -395,16 +416,7 @@ def publish_entry(path, adapter_file):
     diagnostics = dict(adapter.get("diagnostics_context", {}))
     diagnostics.setdefault("MINDIE_DIAGNOSTICS_CONFIG",
                            str(Path(adapter["base_config"]).parent / "diagnostics.json"))
-    value = (
-        "import os, sys\n"
-        f"os.environ['MINDIE_CC_CONFIG'] = {str(adapter_file)!r}\n"
-        f"os.environ.update({diagnostics!r})\n"
-        "os.environ.pop('PYTHONPATH', None)\n"
-        f"sys.path.insert(0, {str(HERE)!r})\n"
-        "from bounded import exec_or_wait\n"
-        f"exec_or_wait([{sys.executable!r}, '-I', "
-        f"{str(HERE / 'mindie_launch.py')!r}, *sys.argv[1:]], dict(os.environ))\n"
-    )
+    value = render_entry(adapter_file, sys.executable, HERE, diagnostics)
     _publish_bytes(Path(path), value.encode("utf-8"))
 
 
@@ -444,34 +456,6 @@ def resolve_github_identity(repository, *, account=None, fork=None):
     return account, fork
 
 
-def _read_consent_json(path):
-    try:
-        raw = Path(path).read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return dict(state="missing", choice=None, choice_revision=None)
-    except TimeoutError:
-        raise
-    except OSError:
-        return dict(state="unreadable", choice=None, choice_revision=None)
-    try:
-        data = json.loads(raw)
-    except ValueError:
-        return dict(state="corrupt", choice=None, choice_revision=None)
-    if not isinstance(data, dict) or data.get("schema") != "mindie-consent/1":
-        return dict(state="corrupt", choice=None, choice_revision=None)
-    choice = data.get("choice")
-    if choice is not None and choice not in {"contribute", "read-only", "later", "disabled"}:
-        return dict(state="corrupt", choice=None, choice_revision=None)
-    rev = data.get("choice_revision")
-    if rev is not None and (
-        not isinstance(rev, str)
-        or len(rev) != 32
-        or any(c not in "0123456789abcdef" for c in rev)
-    ):
-        return dict(state="corrupt", choice=None, choice_revision=None)
-    return dict(state="ok", choice=choice, choice_revision=rev)
-
-
 def sharing_status(config=None):
     """Read-only fast path for `setup.py sharing --status`."""
     config = Path(config or default_config_path()).expanduser().resolve()
@@ -480,7 +464,7 @@ def sharing_status(config=None):
 
         saved = consent.load(config)
     except ModuleNotFoundError:
-        saved = _read_consent_json(config.parent / "mindie-consent.json")
+        saved = consent_snapshot(config.parent / "mindie-consent.json")
     consent_state = saved.get("state") or "missing"
     consent_choice = saved.get("choice") if consent_state == "ok" else None
     choice_revision = saved.get("choice_revision") if consent_state == "ok" else None
@@ -756,18 +740,29 @@ def main(argv=None):
     parser.add_argument("--community-fork")
     parser.add_argument("--community-visibility", choices=["public"])
     args = parser.parse_args(argv)
-    if args.activate:
-        if args.source:
-            parser.error("--activate does not accept --source")
-        print(json.dumps(activate_binding(args.activate)))
+    try:
+        if args.activate:
+            if args.source:
+                parser.error("--activate does not accept --source")
+            print(json.dumps(activate_binding(args.activate)))
+            return
+        if not args.source:
+            parser.error("--source is required for preparation")
+        result = prepare_binding(
+            args.source, args.config, root=args.root, domain=args.domain,
+            no_public_feed=args.no_public_feed, claude_config_dir=args.claude_config_dir,
+            community=community_settings(args, parser),
+        )
+    except LockTimeout:
+        if not envelope_enabled():
+            raise
+        emit_deferred("lock_busy")
         return
-    if not args.source:
-        parser.error("--source is required for preparation")
-    result = prepare_binding(
-        args.source, args.config, root=args.root, domain=args.domain,
-        no_public_feed=args.no_public_feed, claude_config_dir=args.claude_config_dir,
-        community=community_settings(args, parser),
-    )
+    except Exception as exc:
+        if not envelope_enabled():
+            raise
+        emit_failure(exc, source_root=HERE)
+        raise SystemExit(1)
     print(json.dumps(result, default=str))
     if result["status"] == "degraded":
         raise SystemExit(1)

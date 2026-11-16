@@ -45,12 +45,25 @@ def _isolated_host_environment(tmp_path, request, monkeypatch):
         "MINDIE_REMOTE_STATE_DIR": tmp_path / "mindie-remote-state",
         "MINDIE_CONFIG_HOME": tmp_path / "mindie-config",
         "MINDIE_DATA_HOME": tmp_path / "mindie-data",
+        "CLAUDE_PLUGIN_DATA": tmp_path / "plugin-data",
+        "UV_CACHE_DIR": tmp_path / "uv-cache",
+        "TMPDIR": tmp_path / "tmp",
+        "TEMP": tmp_path / "tmp",
+        "TMP": tmp_path / "tmp",
     }
     for name, location in locations.items():
         location = Path(location)
+        if name == "CLAUDE_PLUGIN_DATA":
+            # The host creates this directory; tests that exercise first
+            # publication must be able to mkdir it themselves.
+            monkeypatch.setenv(name, str(location))
+            continue
         if name in {"MINDIE_CC_CONFIG", "MINDIE_DIAGNOSTICS_CONFIG"}:
             location.parent.mkdir(parents=True, exist_ok=True)
         else:
             location.mkdir(parents=True, exist_ok=True)
         monkeypatch.setenv(name, str(location))
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "tempdir", None)
     yield

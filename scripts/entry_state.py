@@ -69,6 +69,24 @@ def set_choice(choice: str) -> str:
     return consent.record_choice(choice)
 
 
+def maintain_session_state():
+    """Expired bind rows and dead remote session roots, bounded and silent.
+
+    Slash commands are the only frequent native entry point, so they carry the
+    low-frequency maintenance opportunity. The storage marker owns the actual
+    interval; an unavailable cleanup returns facts and never changes the prompt
+    response.
+    """
+    try:
+        from storage_lifecycle import maintenance_tick
+
+        return maintenance_tick(budget_seconds=1.0)
+    except TimeoutError:
+        return {"status": "partial", "warnings": ["budget exhausted"]}
+    except Exception as exc:  # noqa: BLE001 - explicit prompt path stays responsive
+        return {"status": "deferred", "warnings": [type(exc).__name__]}
+
+
 def consume_prompt(prompt_id: str) -> bool:
     """True once per native prompt_id (unconfigured path)."""
     if not isinstance(prompt_id, str) or not prompt_id or len(prompt_id) > 256:
@@ -83,6 +101,7 @@ def consume_prompt(prompt_id: str) -> bool:
     seen.append(prompt_id)
     data["consumed"] = seen[-256:]
     _store(path, data)
+    maintain_session_state()
     return True
 
 

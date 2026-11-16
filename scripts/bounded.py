@@ -228,12 +228,17 @@ _HOOK_PHRASES = (
     "requires native trust",
     "changed hooks require",
 )
-_CONNECT_PHRASES = (
+_DNS_PHRASES = (
     "could not resolve host",
     "temporary failure in name resolution",
     "name or service not known",
     "nodename nor servname",
     "temporary failure resolving",
+    "getaddrinfo failed",
+    "name resolution",
+    "dns error",
+)
+_CONNECT_PHRASES = (
     "network is unreachable",
     "connection timed out",
     "connection reset by peer",
@@ -303,6 +308,8 @@ def classify_transport_text(text):
         return ("permission", None)
     if _has_phrase(lower, _HOOK_PHRASES):
         return ("hook_trust", None)
+    if _has_phrase(lower, _DNS_PHRASES):
+        return ("resolver", None)
     # A demonstrated transport failure wins over pip's generic final summary.
     if (codes & {500, 502, 503, 504}) or _has_phrase(lower, _CONNECT_PHRASES):
         return ("temporary_network", retry_after)
