@@ -235,6 +235,52 @@ def test_completed_component_survives_bind_accounting_timeout(component_config, 
     assert len(calls) == 1 and calls[0][1] is True
 
 
+def test_deterministic_surfaces_execute_without_pretool_bind_while_knowledge_stays_gated(component_config, tmp_path):
+    zero_meta = mcp_server.handle("components", {
+        "id": 91, "method": "tools/call",
+        "params": {"name": "diagnostics_status", "arguments": {}},
+    })["result"]
+    assert not zero_meta["isError"], zero_meta
+    assert zero_meta["structuredContent"]["result"]["status"] == "not_configured"
+    subagent_call = mcp_server.handle("components", {
+        "id": 92, "method": "tools/call",
+        "params": {
+            "name": "profiler",
+            "arguments": {"argv": ["inventory", "--root", str(CAPTURE)], "cwd": str(tmp_path)},
+            "_meta": {"claudecode/toolUseId": "toolu_subagent_unbound"},
+        },
+    })["result"]
+    assert not subagent_call["isError"], subagent_call
+    assert subagent_call["structuredContent"]["result"]["rank_count"] == 1
+    gated_knowledge = mcp_server.handle("knowledge", {
+        "id": 93, "method": "tools/call",
+        "params": {"name": "knowledge_query", "arguments": {"query": "npu"}},
+    })["result"]
+    assert gated_knowledge["isError"]
+    native = identity.canonical_native_name("components", "diagnostics_status")
+    identity.publish_bind(SESSION, "toolu_tampered", native, {"config": "/tmp/a.json"})
+    tampered = mcp_server.handle("components", {
+        "id": 94, "method": "tools/call",
+        "params": {
+            "name": "diagnostics_status",
+            "arguments": {"config": "/tmp/b.json"},
+            "_meta": {"claudecode/toolUseId": "toolu_tampered"},
+        },
+    })["result"]
+    assert tampered["isError"]
+    identity.publish_bind(SESSION, "toolu_ambiguous", native, {})
+    identity.publish_bind("11111111-1111-1111-1111-111111111111", "toolu_ambiguous", native, {})
+    ambiguous = mcp_server.handle("components", {
+        "id": 95, "method": "tools/call",
+        "params": {
+            "name": "diagnostics_status",
+            "arguments": {},
+            "_meta": {"claudecode/toolUseId": "toolu_ambiguous"},
+        },
+    })["result"]
+    assert ambiguous["isError"]
+
+
 def test_component_dispatch_budget_covers_requested_wait_and_cleanup():
     tools = mcp_server.handle("components", {"id": 1, "method": "tools/list"})["result"]["tools"]
     maximum = max(tool["inputSchema"]["properties"]["timeout_ms"]["maximum"] for tool in tools)

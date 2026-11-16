@@ -1,16 +1,13 @@
 ---
 name: init
-description: Bind MindIE Agent for this Claude Code task (alias of the mindie-agent entry), or show first-use choices.
+description: Compatibility alias of /mindie-agent to enable knowledge for the current Claude Code session.
 disable-model-invocation: true
 ---
 
-This command is an alias of `/mindie-agent`. Present the MindIE status from the `UserPromptExpansion` hook context.
+This command is a compatibility alias of the unified `/mindie-agent` entry. Present the MindIE status from the `UserPromptExpansion` hook context.
 
-Invoking the entry binds the current session. If contribution configuration is incomplete, reuse already-approved values and ask only for the missing destination and scope:
-`/mindie-agent contribute --repository owner/repo --account USER --project-root /absolute/path --visibility public`.
+Invoking `/mindie-agent` enables knowledge and background capture for the current session (deterministic `remote-dev` and `components` tools are already available without it). Reuse saved choices (`contribute`, `disabled`, `read-only`, `later`); if contribution configuration is incomplete and the user asked to enable sharing, ask only for the missing destination and scope. When the hook returns `reporting.run_outside_hook=true`, run `reporting.command_line` outside the hook with a `90s` timeout. Keep local config state, background reporter health, and external GitHub Issue/PR creation distinct.
 
-Community contribution governs both scoped knowledge PRs and sanitized product fault Issues in `mindie-consent.json`. When the hook returns `reporting.run_outside_hook=true`, execute `reporting.command_line` immediately outside the hook in the same setup flow (with a 90-second timeout). Reuse valid saved choices (`contribute`, `disabled`, `read-only`, `later`); if a legacy knowledge-only `contribute` returns `needs_choice`, resolve it once through `/mindie-agent`. Keep local config state, background reporter status (`running` / `degraded`), and external GitHub Issue/PR creation distinct.
-
-For GitHub authentication setup or troubleshooting, follow [GitHub Sign-In](../mindie-agent/references/github-authentication.md). During initial installation or first-use setup, present [用户须知](../mindie-agent/references/user-notice.md) and follow [Workspace Setup](../mindie-agent/references/workspace-setup.md).
+For GitHub sign-in or first-use workspace setup, see [GitHub Sign-In](../mindie-agent/references/github-authentication.md), [用户须知](../mindie-agent/references/user-notice.md), and [Workspace Setup](../mindie-agent/references/workspace-setup.md).
 
 $ARGUMENTS

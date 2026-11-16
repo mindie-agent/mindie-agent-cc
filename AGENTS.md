@@ -58,10 +58,10 @@ Claude Code MCP Client (stdio JSON-RPC)
    - `SessionStart` (`maintenance.py`) runs diagnostic maintenance (`reporting-maintain` and `activate-consent`) and runs `sync_public_feed` only when `gate().knowledge_lease(session)` is active (`feed={"result": "inactive"}` otherwise).
    - MCP `mindie_status` (`entry.status_facts(session)`) and tool discovery never activate a lease, start the knowledge service, or emit onboarding prompts.
    - If lease activation succeeds in `entry.py` but background service connection fails, `entry.py` returns `status="degraded"` (never revoking the active lease).
-2. **One-Shot Native Tool Binding & Manual-Entry Gate (`PreToolUse` → `mcp_server.py`)**:
-   - Claude Code MCP `tools/call` does not carry trusted session metadata in model arguments.
-   - `bridge.py` (`PreToolUse`) binds `params._meta['claudecode/toolUseId']` to `(session_id, tool_name, input_sha256)` in `native-tool-binds.sqlite3`; `mcp_server.py` claims and consumes that bind once.
-   - Deterministic `remote-dev` and `components` tools and factual `mindie_status` work with the consumed `PreToolUse` bind alone, whereas all `knowledge_*` MCP tools (`knowledge_query`, `knowledge_explain`, `knowledge_feedback`, `knowledge_distill`, `knowledge_sync`) additionally require an active manual-entry lease (`admission.knowledge_lease(session)` / target-domain `knowledge_lease`). Sync uses the existing feed CLI without starting the knowledge service.
+2. **Opportunistic Native Tool Binding on Deterministic Surfaces vs. Strict `/mindie-agent` Knowledge Gate**:
+   - Claude Code MCP `tools/call` never trusts session metadata in model arguments.
+   - `bridge.py` (`PreToolUse`) binds `params._meta['claudecode/toolUseId']` to `(session_id, tool_name, input_sha256)` in `mcp-binds.sqlite3`; `mcp_server.py` consumes that bind once when present and rejects duplicate `call_id` replays.
+   - Deterministic `remote-dev` and `components` tools execute over standard MCP `tools/call` even when `_meta` or a `PreToolUse` bind is absent (e.g., Claude Code subagents, automations, or direct MCP callers), falling back to a connection-scoped session ID. In contrast, the `knowledge` surface strictly requires a `PreToolUse` bind, and all `knowledge_*` MCP tools (`knowledge_query`, `knowledge_explain`, `knowledge_feedback`, `knowledge_distill`, `knowledge_sync`) additionally require an active manual-entry lease (`admission.knowledge_lease(session)` / target-domain `knowledge_lease`).
    - **Receipt Honesty Invariant**: Once a remote or knowledge tool call succeeds, if local `finish_bind` raises an `OSError`/`sqlite3.Error`, `mcp_server.py` attaches `bind_warning` + `diagnostic_ref` to `structuredContent` and **never** flips `isError=True` on the succeeded result.
 3. **Turn-End Capture (`Stop`)**:
    - `bridge.py` (`Stop`) never exits 2 and never forces model continuation.
@@ -75,11 +75,12 @@ Claude Code MCP Client (stdio JSON-RPC)
 - **Timeout Hierarchy (`outer_timeout >= sum(inner_budgets) + cleanup_grace`)**:
   - `mindie_launch.py` enforces `HOOK_TOTAL = 10.0s`, `HOOK_LOCK_BUDGET = 2.0s`, and `BOOTSTRAP_TOTAL = 540.0s`.
   - `bounded.py` kills the entire child process group (POSIX) or Windows Job Object on timeout before draining pipes, and uses temporary files for stdin so unresponsive children cannot block pipe writes.
-- **Four `v0.0.2` Iron Rules**:
-  1. **Lightweight SQLite Connections**: `identity.py` opens `native-tool-binds.sqlite3` with `PRAGMA journal_mode=WAL` and `PRAGMA busy_timeout=5000` (`timeout=5.0`). Never add `.owner`/`.authority.json` sidecar `lstat` checks or per-query schema reflection.
+- **Five Anti-Over-Defensive Iron Rules**:
+  1. **Lightweight SQLite Connections**: `identity.py` opens `mcp-binds.sqlite3` with `PRAGMA journal_mode=WAL` and `PRAGMA busy_timeout=5000` (`timeout=5.0`). Never add `.owner`/`.authority.json` sidecar `lstat` checks or per-query schema reflection.
   2. **Honest External Receipts**: Never overwrite a succeeded tool call with `isError=True` due to a local bind-accounting failure (`mcp_server.py`), and preserve active leases as `status="degraded"` when background service startup fails (`entry.py`).
   3. **Simple Regular-File I/O**: Use `Path.exists()`, `Path.is_file()`, and `Path.open("rb")` in `entry.py`, `transcript.py`, `product_contract.py`, `diagnostic_support.py`, and `receipt_layout.py` instead of `O_NONBLOCK`/`O_NOFOLLOW`/`fstat` or parent symlink walks (`_present`).
   4. **Never Write `~/.claude`**: All MindIE state and configuration live under MindIE-owned directories (`paths.py`).
+  5. **Zero Pre-Call Session-Binding Gates on Deterministic Tools (`P2.7`)**: `remote` and `components` MCP surfaces execute over standard `tools/call` without requiring `_meta['claudecode/toolUseId']` or a prior `PreToolUse` bind (`_CONNECTION_SESSION_ID` fallback); strict `claim_bind` + `knowledge_lease` applies exclusively to `knowledge` and `Stop` capture.
 
 ---
 
