@@ -45,6 +45,7 @@ from storage_common import (
     _binding,
     _bounded_deadline,
     _expired,
+    _identity,
     _json_safe,
     _recent_marker,
     _remaining,

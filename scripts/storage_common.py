@@ -38,7 +38,10 @@ MAX_JSON_BYTES = 512 * 1024
 MAX_WARNINGS = 6
 TERMINAL_BIND_STATUSES = ("succeeded", "failed", "ambiguous")
 PENDING_BIND_STATUSES = ("bound", "claimed")
-UNRESOLVED_SUBMISSION_STATES = frozenset({"uncertain", "unknown"})
+UNRESOLVED_SUBMISSION_STATES = frozenset({
+    "uncertain", "unknown", "pending", "submitting", "in_flight",
+})
+RESOLVED_SUBMISSION_STATES = frozenset({"acknowledged", "not_sent", "not_executed"})
 _VERSION = re.compile(r"(\d+)\.(\d+)\.(\d+)(?:[-+].*)?\Z")
 _TRASH_PREFIX = ".trash-"
 

@@ -33,6 +33,7 @@ from harness import HARNESS, REPOSITORY, compatibility, native_version
 from install_state import OperationLock, LockTimeout, atomic_write, read_binding
 from paths import MARKETPLACE, PLUGIN_QUALIFIED
 from product_contract import native_version as plugin_version, source_identity
+import setup_diagnostics
 
 CHECK_INTERVAL = 300
 FAILURE_BACKOFF = 60
@@ -54,6 +55,7 @@ def _typed_update_error(exc):
     That import must not replace the original failure or skip its receipt.
     Source-integrity codes stay unlabeled so they remain reportable.
     """
+    # resolver/busy/deferred/prerequisite are already typed by the child.
     if getattr(exc, "category", None) is not None:
         return exc
     try:
@@ -640,11 +642,17 @@ def check(binding, state=None):
         if result["candidate"] is None:
             from component_update import check as component_check
             try:
-                state["components"] = component_check(binding, native_installed["installPath"])
+                components = component_check(binding, native_installed["installPath"])
             except BaseException as exc:
                 if not getattr(exc, "mindie_stage", None):
                     exc.mindie_stage = "component_update"
                 raise
+            state["components"] = components
+            if isinstance(components, dict) and components.get("status") == "deferred":
+                state.update(status="deferred",
+                             stage=components.get("stage", "component_busy"),
+                             harness_version=version)
+                return state
             state.update(result, last_successful_check=time.time(), harness_version=version)
             state.pop("last_failed_check", None)
             return state
@@ -669,7 +677,8 @@ def check(binding, state=None):
         state.update(status="incompatible_harness", harness_version=version,
                      last_failed_check=time.time())
         return state
-    env = dict(os.environ, MINDIE_CC_CONFIG=binding["base_config"])
+    env = dict(os.environ, MINDIE_CC_CONFIG=binding["base_config"],
+               MINDIE_SETUP_ERROR_ENVELOPE="1")
     env.pop("PYTHONPATH", None)
     prepared = state.get("prepared")
     if prepared is None:
@@ -685,17 +694,22 @@ def check(binding, state=None):
                 timeout=360.0, env=env, receipt=process, transport=True,
             )
         except BaseException as original:
+            if isinstance(original, Exception):
+                original = setup_diagnostics.child_error(original)
             if not getattr(original, "mindie_stage", None):
                 original.mindie_stage = "binding_prepare"
             try:
                 observer("binding-prepare", process)
             except Exception as recording:
                 original.add_note("preparation outcome recording failed: " + type(recording).__name__)
-            raise
+            raise original
         observer("binding-prepare", process)
         if state["preparation_effect"] != "completed":
             raise _reasoned_runtime_error("binding preparation cleanup is not confirmed", "binding_prepare_cleanup_unconfirmed", substage="binding_prepare", mindie_stage="binding_prepare")
         prepared = json.loads(output)
+        if isinstance(prepared, dict) and prepared.get("status") == "deferred":
+            state.update(status="deferred", stage="binding_prepare_busy")
+            return state
         prepared.update(python=str(python), runtime_scripts=str(scripts))
         state["prepared"] = prepared
         state["activation_effect"] = "not_started"

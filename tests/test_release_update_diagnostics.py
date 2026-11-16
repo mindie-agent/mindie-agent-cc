@@ -227,3 +227,264 @@ def test_binding_prepare_and_activation_enable_transport_and_tag_stage(tmp_path)
             update._activate(saved, state["prepared"], {}, state)
     assert run_mock.call_args.kwargs["transport"] is True
     assert caught.value.mindie_stage == "runtime_activation"
+
+
+# --------------------------------------------------------------------------- #
+# Issue #360: owned `setup.py` children must not collapse into internal faults.
+# --------------------------------------------------------------------------- #
+
+def _envelope(error):
+    import setup_diagnostics
+
+    return json.dumps(setup_diagnostics.failure_envelope(error, source_root=SCRIPTS))
+
+
+def _publication_error(monkeypatch, stderr):
+    import bounded
+    import candidate_validate
+
+    def run(args, data, **kwargs):
+        kwargs["receipt"].update(started=True, completed=True, returncode=1,
+                                 cleanup_failed=False, stdout="", stderr=stderr)
+        return ""
+
+    monkeypatch.setattr(bounded, "run", run)
+    with pytest.raises(candidate_validate.CheckFailure) as caught:
+        candidate_validate.publication_git(
+            ["git", "fetch", "origin"], "fetch_failed", {}, timeout=1.0)
+    return caught.value
+
+
+def _component_prepare(*args, **kwargs):
+    from support import ROOT
+
+    return {"python": sys.executable, "scripts": str(SCRIPTS),
+            "source": str(ROOT), "components": {}}
+
+
+def _record_component_failure(tmp_path, monkeypatch, envelope):
+    import bounded
+    import component_update
+
+    monkeypatch.setattr(component_update, "prepare", _component_prepare)
+
+    def child(argv, *args, **kwargs):
+        assert kwargs["env"]["MINDIE_SETUP_ERROR_ENVELOPE"] == "1"
+        error = RuntimeError("command failed (1)")
+        error.mindie_output = envelope
+        error.returncode = 1
+        raise error
+
+    monkeypatch.setattr(bounded, "run", child)
+    saved = binding(tmp_path)
+    policy = Path(os.environ["MINDIE_DIAGNOSTICS_CONFIG"])
+    logs = Path(os.environ["MINDIE_DIAGNOSTICS_ROOT"])
+    configure_reporting(True, config=policy, roots=[str(logs)])
+
+    def check(value, _state=None):
+        component_update.check(
+            dict(value, product_validation={"source_sha256": "a" * 64}), SCRIPTS.parent)
+
+    with patch.object(update, "read_binding", return_value=saved), \
+            patch.object(update, "check", side_effect=check):
+        update.main()
+    return update.read_receipt(saved), _last_event(logs)
+
+
+@pytest.mark.parametrize("stderr, child_category, category", (
+    ("fatal: unable to access 'https://github.com/': Could not resolve host: github.com",
+     "resolver", "connectivity"),
+    ("fatal: unable to access 'https://github.com/': SSL certificate problem: "
+     "unable to get local issuer certificate", "certificate", "credentials"),
+    ("fatal: unable to access 'https://github.com/': connection reset by peer",
+     "temporary_network", "connectivity"),
+))
+def test_child_publication_transport_failure_stays_non_reportable(
+        tmp_path, monkeypatch, stderr, child_category, category):
+    error = _publication_error(monkeypatch, stderr)
+    assert error.category == child_category
+    assert error.substage == "publication_fetch"
+    assert error.reason_code == "fetch_failed"
+    assert "category" not in error.failure and "reason_code" not in error.failure
+    assert set(error.failure) == {"stage", "code", "process"}
+    receipt, event = _record_component_failure(tmp_path, monkeypatch, _envelope(error))
+
+    attributes = event["attributes"]
+    assert receipt["status"] == "failed"
+    assert attributes["category"] == category
+    assert event["reportable"] is False
+    assert attributes["stage"] == "publication_fetch"
+    assert attributes["substage"] == "publication_fetch"
+    assert attributes["reason_code"] == "fetch_failed"
+
+
+def test_child_lock_timeout_defers_without_an_error_event(tmp_path, monkeypatch):
+    import bounded
+    import component_update
+
+    calls = []
+    monkeypatch.setattr(component_update, "prepare", _component_prepare)
+
+    def child(argv, *args, **kwargs):
+        calls.append((list(argv), dict(kwargs)))
+        return json.dumps({"status": "deferred", "stage": "lock_busy", "switched": False})
+
+    monkeypatch.setattr(bounded, "run", child)
+    result = component_update.check(
+        dict(binding(tmp_path), product_validation={"source_sha256": "a" * 64}),
+        SCRIPTS.parent)
+
+    assert result == {"status": "deferred", "stage": "lock_busy"}
+    assert len(calls) == 1 and "--source" in calls[0][0]
+    assert "--activate" not in calls[0][0]
+    assert calls[0][1]["env"]["MINDIE_SETUP_ERROR_ENVELOPE"] == "1"
+
+    saved = binding(tmp_path)
+    logs = Path(os.environ["MINDIE_DIAGNOSTICS_ROOT"])
+    configure_reporting(True, config=Path(os.environ["MINDIE_DIAGNOSTICS_CONFIG"]),
+                        roots=[str(logs)])
+    with patch.object(update, "read_binding", return_value=saved), \
+            patch.object(update, "check",
+                         return_value={"status": "deferred", "stage": "lock_busy"}):
+        update.main()
+    receipt = update.read_receipt(saved)
+    assert receipt["status"] == "deferred"
+    assert "last_failed_check" not in receipt
+    assert not list(Path(logs).glob("events/*/*.jsonl"))
+
+
+def test_deferred_component_check_returns_without_marking_a_failure(tmp_path):
+    saved = binding(tmp_path)
+    state = {"last_successful_check": 10}
+    with patch.object(update, "native_binary", return_value="claude"), \
+            patch.object(update, "native_version", return_value="2.1.269"), \
+            patch.object(update, "installed_plugin",
+                         return_value={"enabled": True, "version": "0.0.1",
+                                       "installPath": str(SCRIPTS.parent)}), \
+            patch("mindie_knowledge.releases_io.fetch_releases", return_value=[]), \
+            patch("component_update.check",
+                  return_value={"status": "deferred", "stage": "lock_busy"}):
+        result = update.check(saved, state)
+
+    assert result["status"] == "deferred"
+    assert result["stage"] == "lock_busy"
+    assert result["components"] == {"status": "deferred", "stage": "lock_busy"}
+    assert "last_failed_check" not in result
+    assert result["last_successful_check"] == 10
+
+
+def _child_setup_envelope(monkeypatch, capsys):
+    import candidate_validate
+    import setup as setup_module
+
+    error = candidate_validate.CheckFailure(
+        "runtime_pins", "revision_mismatch", "mindie-knowledge")
+
+    def prepare(source, *args, **kwargs):
+        return setup_module.validate_candidate(source)
+
+    monkeypatch.setattr(setup_module, "prepare_binding", prepare)
+    monkeypatch.setattr(candidate_validate, "validate",
+                        lambda *args, **kwargs: (_ for _ in ()).throw(error))
+    monkeypatch.setenv("MINDIE_SETUP_ERROR_ENVELOPE", "1")
+    with pytest.raises(SystemExit) as caught:
+        setup_module.main(["--source", str(SCRIPTS.parent)])
+    assert caught.value.code == 1
+    return json.loads(capsys.readouterr().out)
+
+
+def test_child_internal_failure_keeps_setup_frames_and_reason_code(
+        tmp_path, monkeypatch, capsys):
+    envelope = json.dumps(_child_setup_envelope(monkeypatch, capsys))
+    receipt, event = _record_component_failure(tmp_path, monkeypatch, envelope)
+
+    attributes = event["attributes"]
+    assert receipt["status"] == "failed"
+    assert attributes["category"] == "internal"
+    assert event["reportable"] is True
+    assert attributes["error_code"] == "update_internal_failure"
+    assert attributes["reason_code"] == "revision_mismatch"
+    frames = attributes["stack_frames"]
+    assert any(frame["module"] == "mindie_agent_cc.setup"
+               and frame["function"] == "validate_candidate" for frame in frames), frames
+    assert not any("bounded" in frame["module"] for frame in frames), frames
+
+
+def product_identity(source, *, components=None):
+    import product_contract
+
+    return product_contract.identity(str(source), components=components)
+
+
+def test_validated_publication_skips_the_network_fetch_but_keeps_local_checks(monkeypatch):
+    import candidate_validate
+    from mindie_knowledge import runtime_inventory
+    from mindie_knowledge.component_releases import COMPONENTS
+    from support import ROOT
+
+    baseline = product_identity(ROOT)
+    components = {
+        "schema": "mindie-component-runtime/1",
+        "adapter_source_sha256": baseline["source_sha256"],
+        "lock_sha256": "a" * 64,
+        "runtime": {name: {"repository": COMPONENTS[name], "version": "0.0.1",
+                           "revision": revision}
+                    for name, revision in baseline["runtime"].items()},
+    }
+    expected = product_identity(ROOT, components=components)
+
+    calls = []
+    monkeypatch.setattr(runtime_inventory, "verify_lock",
+                        lambda plan: calls.append("verify_lock"))
+    monkeypatch.setattr(runtime_inventory, "verify",
+                        lambda runtime: calls.append("verify"))
+    real_runtime_check = candidate_validate.runtime_check
+
+    def runtime_check(scripts):
+        calls.append("runtime_check")
+        return real_runtime_check(scripts)
+
+    monkeypatch.setattr(candidate_validate, "runtime_check", runtime_check)
+
+    def forbidden(publication):
+        raise AssertionError("validated publication must not be fetched again")
+
+    monkeypatch.setattr(candidate_validate, "publication_contract", forbidden)
+    result = candidate_validate.validate(
+        ROOT, expected, verified_publication=dict(expected, status="validated"))
+
+    assert result["status"] == "validated"
+    assert calls == ["verify_lock", "verify", "runtime_check"]
+
+
+def test_typed_update_error_preserves_child_categories():
+    for category in ("resolver", "busy", "deferred", "prerequisite", "cancelled"):
+        error = RuntimeError("typed child failure")
+        error.category = category
+        assert update._typed_update_error(error) is error
+        assert error.category == category
+
+
+def test_legacy_diagnostics_treat_resolver_as_connectivity(tmp_path, monkeypatch):
+    import mindie_diagnostics.fallback as fallback
+
+    policy = Path(os.environ["MINDIE_DIAGNOSTICS_CONFIG"])
+    logs = Path(os.environ["MINDIE_DIAGNOSTICS_ROOT"])
+    configure_reporting(True, config=policy, roots=[str(logs)])
+
+    def legacy_policy(exception):
+        if getattr(exception, "category", None) in {"temporary_network", "rate_limited"}:
+            return "connectivity", False, "update_transport_unavailable"
+        return "internal", True, "update_internal_failure"
+
+    monkeypatch.setattr(fallback, "update_failure_policy", legacy_policy)
+    error = RuntimeError("git dns miss")
+    error.category = "resolver"
+
+    update._record_update_failure("native_update", error)
+
+    event = _last_event(logs)
+    assert event["attributes"]["category"] == "connectivity"
+    assert event["attributes"]["error_code"] == "update_transport_unavailable"
+    assert event["reportable"] is False
+    assert error.category == "resolver"

@@ -11,6 +11,7 @@ import argparse
 from contextlib import contextmanager
 import http.client
 import json
+import os
 from pathlib import Path
 import re
 import socket
@@ -303,7 +304,10 @@ def prepare(source, python, root, *, current_python=None, force=False, current_s
 
 
 def check(binding, source, *, force=False):
+    import setup_diagnostics
     from bounded import run
+
+    env = dict(os.environ, MINDIE_SETUP_ERROR_ENVELOPE="1")
     try:
         artifact = prepare(source, binding["python"], Path(binding["state_dir"]) / "component-runtimes", force=force,
                            current_source=binding["product_validation"]["source_sha256"])
@@ -311,16 +315,22 @@ def check(binding, source, *, force=False):
             return dict(status="up_to_date")
         output = run([artifact["python"], str(Path(artifact["scripts"]) / "setup.py"),
                       "--source", artifact["source"], "--config", binding["base_config"]],
-                     timeout=360, transport=True)
+                     timeout=360, transport=True, env=env)
         prepared = json.loads(output)
+        if not isinstance(prepared, dict):
+            raise ValueError("component preparation returned an invalid result")
+        if prepared.get("status") == "deferred":
+            return dict(status="deferred", stage=prepared.get("stage", "lock_busy"))
         result = run([artifact["python"], str(Path(artifact["scripts"]) / "setup.py"),
                       "--activate", prepared["config"]],
-                     timeout=40, transport=True)
+                     timeout=40, transport=True, env=env)
         return dict(json.loads(result), runtime=artifact["components"])
     except BaseException as exc:
+        if isinstance(exc, Exception):
+            exc = setup_diagnostics.child_error(exc)
         if not getattr(exc, "mindie_stage", None):
             exc.mindie_stage = "component_update"
-        raise
+        raise exc
 
 
 def main():

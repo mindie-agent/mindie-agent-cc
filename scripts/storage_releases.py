@@ -192,7 +192,8 @@ def prune_release_entries(binding=None, *, plugin_data=None, active=None,
     for name in sorted(names):
         if _version_key(name) is not None and _version_key(name) > _version_key(active):
             keep.add(name)  # never retire an installed newer generation
-    older = [name for name in sorted(names) if _version_key(name) < _version_key(active)]
+    older = [entry.name for _key, entry in versions
+             if _version_key(entry.name) < _version_key(active)]
     # Newer installed versions and the active one never consume the rollback
     # slot: always retain the immediately previous generation when available.
     if keep_count > 1:
@@ -223,8 +224,11 @@ def prune_release_entries(binding=None, *, plugin_data=None, active=None,
             account["partial"] = True
             account["warnings"].append("budget exhausted")
             break
-        if not complete and live_paths is None:
+        if not complete:
             account["deferred_in_use"] += 1
+            account["partial"] = True
+            if "incomplete process snapshot" not in account["warnings"]:
+                account["warnings"].append("incomplete process snapshot")
             continue
         try:
             if is_path_used_by_live_process(entry, live_paths):

@@ -29,9 +29,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-import re
 import sqlite3
-import stat
 import sys
 import time
 
@@ -41,12 +39,12 @@ from storage_common import (
     MAX_WARNINGS,
     MAX_WALK_FILES,
     PENDING_BIND_STATUSES,
+    RESOLVED_SUBMISSION_STATES,
     SCHEMA,
     SESSION_BUDGET_SECONDS,
     SESSION_RETENTION_SECONDS,
     SWEEP_BUDGET_SECONDS,
     TERMINAL_BIND_STATUSES,
-    UNRESOLVED_SUBMISSION_STATES,
     _TRASH_PREFIX,
     _binding,
     _bounded_deadline,
@@ -241,22 +239,44 @@ def _is_link(entry):
     return is_junction(entry)
 
 
-def _walk_bounded(root, deadline, *, limit=MAX_WALK_FILES):
+# Terminal remote-dev job states plus the legacy spellings older workers wrote.
+_TERMINAL_STATES = frozenset({
+    "completed", "succeeded", "failed", "cancelled", "canceled", "stopped",
+    "killed", "exited", "aborted", "timed_out", "timeout", "error", "absent",
+    "done",
+})
+_JOB_ID_KEYS = frozenset({"job_id", "jobId"})
+# A persisted job record pairs its id with job facts; `authorization` only
+# carries `token` + `job_id` and must never be mistaken for a pre-reply record.
+_JOB_RECORD_KEYS = frozenset({
+    "remote_dir", "command_preview", "command", "cancel_token", "cancelToken",
+    "remote_pid",
+})
+_JOB_SCHEMA = "remote-dev.job.v1"
+
+
+def _walk_bounded(root, deadline, *, limit=MAX_WALK_FILES, incomplete=None):
     """Yield paths below ``root`` without recursion and with a hard cap."""
     root = Path(root)
     stack = [root]
     seen = 0
     while stack:
         if _expired(deadline):
+            if incomplete is not None:
+                incomplete[0] = True
             return
         directory = stack.pop()
         try:
             with os.scandir(directory) as iterator:
                 for item in iterator:
                     if _expired(deadline):
+                        if incomplete is not None:
+                            incomplete[0] = True
                         return
                     seen += 1
                     if seen > limit:
+                        if incomplete is not None:
+                            incomplete[0] = True
                         return
                     entry = directory / item.name
                     yield entry
@@ -266,32 +286,34 @@ def _walk_bounded(root, deadline, *, limit=MAX_WALK_FILES):
                     except TimeoutError:
                         raise
                     except OSError:
+                        if incomplete is not None:
+                            incomplete[0] = True
                         continue
         except TimeoutError:
             raise
         except OSError:
+            if incomplete is not None:
+                incomplete[0] = True
             continue
 
 
 def _newest_mtime(root, deadline):
-    newest = 0.0
     try:
         newest = os.stat(root).st_mtime
     except TimeoutError:
         raise
     except OSError:
-        return newest
-    for entry in _walk_bounded(root, deadline, limit=MAX_WALK_FILES):
+        return float("inf")
+    incomplete = [False]
+    for entry in _walk_bounded(root, deadline, limit=MAX_WALK_FILES, incomplete=incomplete):
         try:
             info = os.stat(entry, follow_symlinks=False)
         except TimeoutError:
             raise
         except OSError:
-            continue
+            return float("inf")
         newest = max(newest, info.st_mtime)
-        if stat.S_ISDIR(info.st_mode):
-            continue
-    return newest
+    return float("inf") if incomplete[0] else newest
 
 
 def _active_locks(session_dir, deadline):
@@ -304,16 +326,23 @@ def _active_locks(session_dir, deadline):
         raise
     except (ImportError, OSError, RuntimeError):
         return True
-    for entry in _walk_bounded(session_dir, deadline, limit=MAX_WALK_FILES):
+    incomplete = [False]
+    for entry in _walk_bounded(session_dir, deadline, limit=MAX_WALK_FILES, incomplete=incomplete):
         if entry.name.endswith(".lock") and _probe_lock(entry):
             return True
-    return False
+    return incomplete[0]
+
+
+def _parse_json_records(entry, raw):
+    text = raw.decode("utf-8")
+    if entry.suffix.lower() in {".jsonl", ".ndjson"}:
+        return [json.loads(line) for line in text.splitlines() if line.strip()]
+    return [json.loads(text)]
 
 
 def _unresolved_write_state(session_dir, deadline):
-    markers = re.compile(
-        rb'"submission_state"\s*:\s*"(?:uncertain|unknown)"')
-    for entry in _walk_bounded(session_dir, deadline):
+    incomplete = [False]
+    for entry in _walk_bounded(session_dir, deadline, incomplete=incomplete):
         if entry.suffix.lower() not in {".json", ".jsonl", ".ndjson"}:
             continue
         try:
@@ -321,35 +350,52 @@ def _unresolved_write_state(session_dir, deadline):
         except TimeoutError:
             raise
         except OSError:
-            continue
+            return True
         if info.st_size > MAX_JSON_BYTES:
-            continue
+            return True
         try:
             raw = entry.read_bytes()
         except TimeoutError:
             raise
         except OSError:
-            continue
-        if markers.search(raw):
             return True
         try:
-            value = json.loads(raw.decode("utf-8", "replace"))
-        except ValueError:
-            continue
-        found = _contains_unresolved(value)
-        if found:
+            records = _parse_json_records(entry, raw)
+        except (UnicodeDecodeError, ValueError):
             return True
-    return False
+        if any(_contains_unresolved(record) for record in records):
+            return True
+    return incomplete[0]
+
+
+def _is_job_record(value):
+    """A persisted `remote-dev` job record, not its nested authorization block."""
+    schema = value.get("schema_version")
+    if isinstance(schema, str) and schema.casefold() == _JOB_SCHEMA:
+        return True
+    keys = value.keys()
+    return bool(_JOB_ID_KEYS & keys) and bool(_JOB_RECORD_KEYS & keys)
 
 
 def _contains_unresolved(value, depth=0):
     if depth > 8:
-        return False
+        return True
     if isinstance(value, dict):
+        if ("state" not in value and "status" not in value
+                and "submission_state" not in value and "submissionState" not in value
+                and _is_job_record(value)):
+            # Saved before submission: a lost reply keeps its recovery id.
+            return True
         for key, item in value.items():
-            if key in {"submission_state", "submissionState"} and isinstance(item, str) \
-                    and item.casefold() in UNRESOLVED_SUBMISSION_STATES:
-                return True
+            if key in {"submission_state", "submissionState"}:
+                # `acknowledged`/`not_sent`/`not_executed` are resolved replies;
+                # pending, in-flight, unknown and non-string values still defer.
+                if not isinstance(item, str) \
+                        or item.casefold() not in RESOLVED_SUBMISSION_STATES:
+                    return True
+            if key == "state":
+                if not isinstance(item, str) or item.casefold() not in _TERMINAL_STATES:
+                    return True
             if _contains_unresolved(item, depth + 1):
                 return True
     elif isinstance(value, (list, tuple)):
@@ -360,7 +406,16 @@ def _contains_unresolved(value, depth=0):
 def _prune_binds(state_dir, cutoff, deadline):
     account = {"status": "absent", "removed": 0, "protected_sessions": set()}
     path = state_dir / "mcp-binds.sqlite3"
-    if not path.is_file():
+    try:
+        if not os.path.lexists(path):
+            return account
+        if not path.is_file():
+            account.update(status="deferred", reason="NonRegularBindStore")
+            return account
+    except TimeoutError:
+        raise
+    except OSError as exc:
+        account.update(status="deferred", reason=type(exc).__name__)
         return account
     remaining = _remaining(deadline)
     busy = max(0.05, min(2.0, remaining if remaining is not None else 2.0))
@@ -451,6 +506,10 @@ def _prune_remote(state_dir, cutoff, deadline, protected_sessions):
             if not complete:
                 # A truncated process table cannot prove a session is dead.
                 account["deferred"] += 1
+                account["partial"] = True
+                if (len(account["warnings"]) < MAX_WARNINGS
+                        and "incomplete process snapshot" not in account["warnings"]):
+                    account["warnings"].append("incomplete process snapshot")
                 continue
             if live_paths is not None and is_path_used_by_live_process(entry, live_paths):
                 continue
@@ -504,16 +563,22 @@ def prune_sessions(binding=None, *, retention_seconds=SESSION_RETENTION_SECONDS,
         binds = _prune_binds(state_dir, cutoff, limit)
     except TimeoutError:
         _warn(account, "bind prune budget exhausted")
-        binds = {"protected_sessions": set()}
+        binds = {"status": "deferred", "reason": "TimeoutError", "protected_sessions": set()}
     except (OSError, ValueError) as exc:
         _warn(account, "bind prune: " + type(exc).__name__)
-        binds = {"protected_sessions": set()}
+        binds = {"status": "deferred", "reason": type(exc).__name__, "protected_sessions": set()}
     if binds.get("status") == "deferred":
         _warn(account, "bind prune deferred")
     account["binds"] = {key: value for key, value in binds.items()
                         if key != "protected_sessions"}
     account["binds_removed"] = binds.get("removed", 0) if isinstance(
         binds.get("removed"), int) else 0
+    if binds.get("status") not in {"absent", "empty", "completed"}:
+        account["remote"] = {"status": "deferred", "reason": "binds_unavailable",
+                             "removed": 0, "deferred": 0, "partial": True}
+        account["partial"] = True
+        account["status"] = "partial"
+        return account
     protected = binds.get("protected_sessions") or set()
     try:
         remote = _prune_remote(state_dir, cutoff, limit, protected)

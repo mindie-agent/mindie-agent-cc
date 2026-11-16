@@ -55,7 +55,13 @@ def checked(stage, code, operation):
     except CheckFailure:
         raise
     except Exception as exc:
-        raise CheckFailure(stage, code) from exc
+        error = CheckFailure(stage, code)
+        error.substage = stage
+        error.reason_code = code
+        category = getattr(exc, "category", None)
+        if category is not None:
+            error.category = category
+        raise error from exc
 
 
 def _plugin(source):
@@ -91,6 +97,11 @@ def adapter_check(source):
         "product_contract.py",
         "runtime_probe.py",
         "setup.py",
+        "setup_diagnostics.py",
+        "storage_common.py",
+        "storage_lifecycle.py",
+        "storage_reclaim.py",
+        "storage_releases.py",
         "bootstrap.py",
         "component_update.py",
         "install_state.py",
@@ -184,6 +195,38 @@ def runtime_check(scripts):
         raise ValueError(output.getvalue().strip() or "candidate runtime probe returned no result")
 
 
+def _transport_category(reason, out_text, err_text, output):
+    """Static transport class from this one process, never its raw text."""
+    from bounded import classify_transport_text
+
+    kind = classify_transport_text("\n".join(
+        part for part in (out_text, err_text, output if isinstance(output, str) else None)
+        if isinstance(part, str)))
+    if kind is not None:
+        return kind[0]
+    if reason == "timeout":
+        return "temporary_network"
+    if reason == "spawn_failed":
+        return "prerequisite"
+    if reason == "cancelled":
+        return "cancelled"
+    return None
+
+
+def _publication_failure(code, execution, reason, returncode, cleanup_failed,
+                         category=None):
+    """Attach typed transport facts to the instance; `failure` keeps its contract."""
+    error = CheckFailure("publication_fetch", code, process=dict(
+        execution=execution, reason=reason, returncode=returncode,
+        cleanup_failed=cleanup_failed,
+    ))
+    error.substage = "publication_fetch"
+    error.reason_code = code
+    if category is not None:
+        error.category = category
+    return error
+
+
 def publication_git(args, code, env, *, timeout=60.0):
     """Project only execution facts from one owned Git process."""
     from bounded import (
@@ -191,9 +234,14 @@ def publication_git(args, code, env, *, timeout=60.0):
     )
 
     receipt = {}
+    output = None
     try:
-        output = run(args, "", timeout=timeout, env=env, check=False, receipt=receipt)
+        output = run(args, "", timeout=timeout, env=env, check=False, receipt=receipt,
+                     capture_stderr=True)
     except Exception as exc:
+        # Raw streams never enter the receipt or the process receipt below.
+        out_text = receipt.pop("stdout", None)
+        err_text = receipt.pop("stderr", None)
         # An incomplete _spawn may already have created/resumed a process.
         # Only the runner's explicit pre-start cancellation proves no start.
         before_start = (receipt.get("started") is False
@@ -214,19 +262,23 @@ def publication_git(args, code, env, *, timeout=60.0):
             reason = "output_limit"
         elif execution == "completed" and returncode != 0:
             reason = "nonzero_exit"
-        raise CheckFailure("publication_fetch", code, process=dict(
-            execution=execution, reason=reason, returncode=returncode,
-            cleanup_failed=receipt.get("cleanup_failed") is True,
-        )) from exc
+        category = _transport_category(reason, out_text, err_text, output)
+        raise _publication_failure(
+            code, execution, reason, returncode,
+            receipt.get("cleanup_failed") is True, category,
+        ) from exc
+    out_text = receipt.pop("stdout", None)
+    err_text = receipt.pop("stderr", None)
     returncode = receipt.get("returncode")
     if receipt.get("completed") is not True or returncode != 0 or receipt.get("cleanup_failed"):
         reason = ("process_failed" if receipt.get("completed") is not True
                   else "nonzero_exit" if returncode != 0 else "cleanup_failed")
-        raise CheckFailure("publication_fetch", code, process=dict(
-            execution="completed" if receipt.get("completed") is True else "unknown",
-            reason=reason, returncode=returncode,
-            cleanup_failed=receipt.get("cleanup_failed") is True,
-        ))
+        category = _transport_category(
+            reason, out_text, err_text, output if isinstance(output, str) else None)
+        raise _publication_failure(
+            code, "completed" if receipt.get("completed") is True else "unknown",
+            reason, returncode, receipt.get("cleanup_failed") is True, category,
+        )
     return output
 
 
@@ -268,7 +320,17 @@ def publication_contract(publication):
             raise CheckFailure("publication_contract", code) from exc
 
 
-def validate(source, expected, verified_receipt=None):
+def _publication_verified(actual, verified_publication):
+    """The same immutable bytes and publication were validated on this host."""
+    if not isinstance(verified_publication, dict):
+        return False
+    if verified_publication.get("status") != "validated":
+        return False
+    return all(verified_publication.get(key) == actual.get(key)
+               for key in ("schema", "source_sha256", "product_sha256", "publication"))
+
+
+def validate(source, expected, verified_receipt=None, *, verified_publication=None):
     actual = checked("source", "source_invalid", lambda: identity(source, expected.get("candidate_revision"), components=expected.get("component_updates")))
     if actual != expected:
         raise CheckFailure("source", "source_changed")
@@ -284,8 +346,9 @@ def validate(source, expected, verified_receipt=None):
         raise CheckFailure("adapter", "release_version_mismatch")
     checked("runtime_api", "api_incompatible", lambda: runtime_check(Path(__file__).resolve().parent))
     if verified_receipt is None:
-        checked("publication_contract", "read_failed",
-                lambda: publication_contract(actual["publication"]))
+        if not _publication_verified(actual, verified_publication):
+            checked("publication_contract", "read_failed",
+                    lambda: publication_contract(actual["publication"]))
     else:
         checked("receipt", "receipt_mismatch", lambda: validate_receipt(json.dumps(verified_receipt), actual))
     if checked("source", "source_invalid", lambda: identity(source, actual["candidate_revision"], components=actual.get("component_updates"))) != actual:

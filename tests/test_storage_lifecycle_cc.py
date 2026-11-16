@@ -517,3 +517,142 @@ def test_expired_session_state_cleanup_is_reachable_from_the_native_entry(monkey
     monkeypatch.setattr(lifecycle, "maintenance_tick", fake_tick)
     assert entry_state.maintain_session_state() == {"status": "completed"}
     assert seen["budget_seconds"] == 1.0
+
+
+def _remote_session(state, name, payload, *, age=8 * 24 * 3600):
+    session = state / "remote" / name
+    session.mkdir(parents=True)
+    if payload is not None:
+        (session / "job.json").write_text(json.dumps(payload), encoding="utf-8")
+    _age(session, age)
+    return session
+
+
+def _job_record(state="succeeded", submission="acknowledged"):
+    """The real `remote-dev.job.v1` record, including its nested authorization."""
+    record = {
+        "schema_version": "remote-dev.job.v1", "job_id": "job-1",
+        "description": None, "target": {"cwd": "/remote"},
+        "connection": {"cwd": "/remote"}, "command_preview": "sleep 1",
+        "cwd": "/remote", "remote_dir": "/remote/.remote-dev/jobs/job-1",
+        "started_at": "2026-01-01T00:00:00Z",
+        "authorization": {"token": "private-token", "job_id": "job-1"},
+    }
+    if state is not None:
+        record["state"] = state
+    if submission is not None:
+        record["error_details"] = {"submission_state": submission}
+    return record
+
+
+def test_runtime_leases_hold_a_shared_lease_on_the_managed_generation(tmp_path):
+    from mindie_knowledge.storage import is_lease_held
+
+    binding = _binding(tmp_path)
+    generation = tmp_path / "data" / "mindie-agent" / "runtimes" / "cc" / "leased"
+    python = generation / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text("", encoding="utf-8")
+    binding["python"] = str(python)
+
+    with lifecycle.runtime_leases(binding) as leases:
+        assert leases, "runtime_leases must acquire the managed owning directory"
+        assert is_lease_held(generation)
+    assert not is_lease_held(generation)
+
+
+def test_remote_dev_job_schema_terminal_and_unresolved_states_decide_reclamation(tmp_path):
+    binding = _binding(tmp_path)
+    state = Path(binding["state_dir"])
+    expired = _remote_session(state, "expired", _job_record("succeeded"))
+    timed_out = _remote_session(state, "timed-out", _job_record("timeout"))
+    running = _remote_session(state, "running", _job_record("running"))
+    unknown = _remote_session(state, "unknown", _job_record("unknown"))
+    missing = _remote_session(state, "missing", _job_record(None, None))
+
+    report = lifecycle.prune_sessions(binding, budget_seconds=20.0)
+
+    assert report["status"] == "completed", report
+    assert not expired.exists() and not timed_out.exists()
+    assert running.is_dir() and unknown.is_dir() and missing.is_dir()
+
+
+def test_submission_reply_states_are_resolved_only_when_acknowledged():
+    accepted = ("acknowledged", "not_sent", "not_executed")
+    for value in accepted:
+        assert not storage_reclaim._contains_unresolved(
+            _job_record("succeeded", value)), value
+    for value in ("uncertain", "unknown", "pending", "submitting", "in_flight",
+                  "something_else", None, 0, ["uncertain"]):
+        record = _job_record("succeeded", None)
+        record["error_details"] = {"submission_state": value}
+        assert storage_reclaim._contains_unresolved(record), value
+    assert not storage_reclaim._contains_unresolved(_job_record("succeeded", None))
+    # The nested authorization block is not a pre-reply job record.
+    assert not storage_reclaim._contains_unresolved(
+        {"authorization": {"token": "private", "job_id": "job-1"}})
+
+
+def test_oversized_or_truncated_session_inspection_never_deletes(tmp_path):
+    binding = _binding(tmp_path)
+    state = Path(binding["state_dir"])
+    crowded = _remote_session(state, "crowded", None)
+    for index in range(401):
+        (crowded / ("entry-%03d" % index)).write_text("", encoding="utf-8")
+    _age(crowded)
+    huge = _remote_session(state, "huge", None)
+    (huge / "job.json").write_text(
+        json.dumps({"state": "succeeded", "padding": "x" * (513 * 1024)}),
+        encoding="utf-8")
+    _age(huge)
+    broken = _remote_session(state, "broken", None)
+    (broken / "job.json").write_text("{not-json", encoding="utf-8")
+    _age(broken)
+
+    report = lifecycle.prune_sessions(binding, budget_seconds=20.0)
+
+    assert report["reclaimed_dirs"] == 0, report
+    assert crowded.is_dir() and huge.is_dir() and broken.is_dir()
+
+
+def test_bind_store_failure_defers_remote_pruning_instead_of_using_empty_protection(
+        tmp_path, monkeypatch):
+    binding = _binding(tmp_path)
+    state = Path(binding["state_dir"])
+    session = _remote_session(state, "dead", _job_record("succeeded"))
+    (state / "mcp-binds.sqlite3").write_text("", encoding="utf-8")
+
+    def unavailable(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(storage_reclaim.sqlite3, "connect", unavailable)
+    report = storage_reclaim.prune_sessions(binding, budget_seconds=20.0)
+
+    assert report["status"] == "partial"
+    assert report["partial"] is True
+    assert report["remote"] == {"status": "deferred", "reason": "binds_unavailable",
+                                "removed": 0, "deferred": 0, "partial": True}
+    assert session.is_dir()
+
+
+def test_incomplete_process_snapshot_defers_every_release_candidate(tmp_path, monkeypatch):
+    binding = _binding(tmp_path)
+    plugin_data = tmp_path / "plugin-data"
+    releases = plugin_data / "releases"
+    for version in ("0.1.20", "0.1.24", "0.1.25"):
+        entry = releases / version
+        entry.mkdir(parents=True)
+        (entry / "entry.py").write_text("# entry\n", encoding="utf-8")
+
+    import mindie_knowledge.storage as knowledge_storage
+
+    monkeypatch.setattr(knowledge_storage, "live_process_prefixes",
+                        lambda **kwargs: (set(), False))
+    report = storage_releases.prune_release_entries(
+        binding, plugin_data=str(plugin_data), keep_versions=2)
+
+    assert report["status"] == "partial"
+    assert report["partial"] is True
+    assert report["deferred_in_use"] == 1
+    assert "incomplete process snapshot" in report["warnings"]
+    assert (releases / "0.1.20").is_dir()
