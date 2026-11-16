@@ -529,5 +529,3 @@ def test_activate_decodes_child_setup_error_envelope(tmp_path, kind):
         assert event["attributes"]["category"] == "internal"
         assert event["attributes"]["reason_code"] == "revision_mismatch"
         assert event["reportable"] is True
-
-
