@@ -112,6 +112,9 @@ def emit_catalog_error(exc) -> None:
     status = getattr(exc, "status", None)
     if type(status) is int and 100 <= status <= 599:
         payload["error"]["status"] = status
+    category = getattr(exc, "category", None)
+    if category in {"temporary_network", "rate_limited", "certificate", "internal"}:
+        payload["error"]["category"] = category
     print(json.dumps(payload, sort_keys=True))
     raise SystemExit(1)
 
@@ -145,13 +148,15 @@ def typed_catalog_error(exc):
             error = TimeoutError("component catalog probe timed out")
         elif kind == "ReleaseResponseTooLarge":
             return exc
-        elif kind == "ReleaseFetchError" and code not in _TRANSPORT_FETCH_CODES and status != 429:
+        elif (kind in {"ReleaseFetchError", "ReleaseJSONError"}
+              and code not in _TRANSPORT_FETCH_CODES and status != 429
+              and payload.get("category") != "temporary_network"):
             try:
                 from mindie_knowledge.releases_io import ReleaseFetchError
             except ImportError:
                 return exc
             error = ReleaseFetchError(code or "invalid_release_json", status=status)
-        else:
+        elif kind in {"CatalogError", "ReleaseFetchError", "ReleaseJSONError"}:
             category = (
                 "certificate" if code == "release_certificate_error"
                 else "rate_limited" if status == 429
@@ -162,6 +167,8 @@ def typed_catalog_error(exc):
                 category=category,
                 status=status,
             )
+        else:
+            return exc
         return _copy_process_attrs(exc, error)
     try:
         from mindie_knowledge.release_http import ReleaseResponseTooLarge
