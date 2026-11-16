@@ -236,7 +236,7 @@ def test_release_entry_rebinds_to_merged_interpreter_and_old_roots_retire(tmp_pa
         entry.parent.mkdir(parents=True)
         entry.write_text(
             "import os\n"
-            f"exec_or_wait(['{old_python}', '-I', 'launch.py', *sys.argv[1:]], {{}})\n",
+            f"exec_or_wait([{old_python!r}, '-I', 'launch.py', *sys.argv[1:]], {{}})\n",
             encoding="utf-8")
     monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(plugin_data))
     merged = dict(binding, python=str(tmp_path / "merged" / "bin" / "python"),
@@ -246,10 +246,10 @@ def test_release_entry_rebinds_to_merged_interpreter_and_old_roots_retire(tmp_pa
 
     assert refreshed["status"] == "refreshed"
     active = (releases / "0.1.25" / "entry.py").read_text(encoding="utf-8")
-    assert str(merged["python"]) in active
-    assert old_python not in active
-    assert str(merged["runtime_scripts"]) in active
-    assert old_python in (releases / "0.1.24" / "entry.py").read_text(encoding="utf-8")
+    assert repr(str(merged["python"])) in active
+    assert repr(old_python) not in active
+    assert repr(str(Path(merged["runtime_scripts"]) / "mindie_launch.py")) in active
+    assert repr(old_python) in (releases / "0.1.24" / "entry.py").read_text(encoding="utf-8")
     assert lifecycle.refresh_release_entry(merged)["status"] == "unchanged"
 
     pruned = lifecycle.prune_release_entries(merged)
@@ -291,7 +291,7 @@ def test_permission_denied_release_retirement_keeps_the_tree_and_defers(tmp_path
 def test_plugin_upgrade_with_component_floor_builds_one_runtime(tmp_path, monkeypatch):
     source = tmp_path / "source"
     (source / "scripts").mkdir(parents=True)
-    (source / "uv.lock").write_text("version = 1\n", encoding="utf-8")
+    (source / "uv.lock").write_bytes(b"version = 1\n")
     current_python = tmp_path / "current" / "bin" / "python"
     current_python.parent.mkdir(parents=True)
     current_python.write_text("", encoding="utf-8")
@@ -332,7 +332,7 @@ def test_plugin_upgrade_with_component_floor_builds_one_runtime(tmp_path, monkey
 def test_component_floor_not_needed_builds_only_the_baseline(tmp_path, monkeypatch):
     source = tmp_path / "source"
     source.mkdir()
-    (source / "uv.lock").write_text("version = 1\n", encoding="utf-8")
+    (source / "uv.lock").write_bytes(b"version = 1\n")
     current_python = tmp_path / "current" / "python"
     current_python.parent.mkdir(parents=True)
     current_python.write_text("", encoding="utf-8")
@@ -359,7 +359,7 @@ def test_component_floor_not_needed_builds_only_the_baseline(tmp_path, monkeypat
 def test_missing_current_interpreter_builds_baseline_then_component_floor(tmp_path, monkeypatch):
     source = tmp_path / "source"
     (source / "scripts").mkdir(parents=True)
-    (source / "uv.lock").write_text("version = 1\n", encoding="utf-8")
+    (source / "uv.lock").write_bytes(b"version = 1\n")
     config = tmp_path / "cc.json"
     config.write_text(json.dumps({
         "component_source": str(tmp_path),
@@ -417,7 +417,7 @@ def test_windows_runtime_key_names_keep_a_legacy_64_character_spelling():
 def test_completed_legacy_runtime_directory_is_read_without_rebuilding(tmp_path, monkeypatch):
     source = tmp_path / "source"
     source.mkdir()
-    (source / "uv.lock").write_text("version = 1\n", encoding="utf-8")
+    (source / "uv.lock").write_bytes(b"version = 1\n")
     key = "b" * 64
     runtimes = tmp_path / "runtimes"
     runtime = runtimes / key
