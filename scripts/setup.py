@@ -45,6 +45,10 @@ from install_state import (
 from maintenance import sync_public_feed
 from paths import config_path as default_config_path, service_launch_context, which_host_binary
 from product_contract import identity, official_feeds, publication_feed
+from storage_lifecycle import (
+    attach_cleanup, cleanup_fields, post_switch, refresh_release_entry,
+    render_entry, silent_tick,
+)
 
 def community_settings(args, parser):
     selected = any(
@@ -245,6 +249,14 @@ def prepare_binding(source, config=None, *, root=None, domain="vllm-ascend",
         status = "ready" if current == value else "prepared"
     os.environ["MINDIE_CC_CONFIG"] = str(adapter_file)
     result = dict(config=str(adapter_file), base_config=str(config), status=status)
+    if selected is None:
+        # First binding: reclaim generations left by earlier plugin versions
+        # before they accumulate another full runtime copy. Bounded and silent.
+        attach_cleanup(result, silent_tick(value, budget_seconds=1.2))
+    elif status == "ready":
+        # Self-heal a jump script left behind by a crash between the canonical
+        # publish and post-switch refresh. A byte-identical entry is a no-op.
+        refresh_release_entry(value, previous_python=selected.get("python"))
     if community is not None:
         from consent import record_choice
         from diagnostic_support import activate_reporting
@@ -356,8 +368,10 @@ def activate_binding(candidate_file, *, observation_seconds=30.0):
                                     service="ready", retirement=retirement,
                                     domain_restoration=restore_changed(domains, timeout=remaining()),
                                     error_type=type(exc).__name__, switched=False)
+                    cleanup = post_switch(candidate, previous_python=previous.get("python"))
                     return dict(status="activated", switched=True,
-                                seconds=time.monotonic() - started, retirement=retirement)
+                                seconds=time.monotonic() - started, retirement=retirement,
+                                **cleanup_fields(cleanup))
                 if state not in {"absent", "starting"}:
                     return dict(status="incomplete", stage="new_owner", service=state,
                                 retirement=retirement)
@@ -395,16 +409,7 @@ def publish_entry(path, adapter_file):
     diagnostics = dict(adapter.get("diagnostics_context", {}))
     diagnostics.setdefault("MINDIE_DIAGNOSTICS_CONFIG",
                            str(Path(adapter["base_config"]).parent / "diagnostics.json"))
-    value = (
-        "import os, sys\n"
-        f"os.environ['MINDIE_CC_CONFIG'] = {str(adapter_file)!r}\n"
-        f"os.environ.update({diagnostics!r})\n"
-        "os.environ.pop('PYTHONPATH', None)\n"
-        f"sys.path.insert(0, {str(HERE)!r})\n"
-        "from bounded import exec_or_wait\n"
-        f"exec_or_wait([{sys.executable!r}, '-I', "
-        f"{str(HERE / 'mindie_launch.py')!r}, *sys.argv[1:]], dict(os.environ))\n"
-    )
+    value = render_entry(adapter_file, sys.executable, HERE, diagnostics)
     _publish_bytes(Path(path), value.encode("utf-8"))
 
 

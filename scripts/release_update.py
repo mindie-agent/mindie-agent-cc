@@ -536,6 +536,20 @@ def _observe_activation(binding, state):
         state["activation_observation"] = "busy"
 
 
+def _storage_maintenance(binding, result):
+    """Attach bounded reclamation to the periodic check without changing status."""
+    try:
+        from storage_lifecycle import cleanup_fields, maintenance_tick
+
+        fields = cleanup_fields(maintenance_tick(binding, budget_seconds=3.0))
+    except TimeoutError:
+        fields = {"cleanup_warning": "storage cleanup budget exhausted"}
+    except Exception as exc:  # noqa: BLE001 - maintenance must not fail an update
+        fields = {"cleanup_warning": "storage cleanup failed: " + type(exc).__name__}
+    result.update(fields)
+    return result
+
+
 def _activate(binding, prepared, env, state):
     if state.get("activation_effect") == "unknown" and not _activation_settled(state):
         raise _reasoned_runtime_error("previous activation writer is not confirmed settled", "activation_writer_unsettled", substage="activation")
@@ -732,6 +746,7 @@ def main():
                         "logging_failed": True,
                         "error_type": type(recording).__name__,
                     }
+            _storage_maintenance(binding, result)
             _record(binding, result)
     except LockTimeout:
         return

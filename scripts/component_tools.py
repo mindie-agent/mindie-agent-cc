@@ -25,6 +25,10 @@ from bounded import CommandTimedOut, OutputLimitExceeded, run
 from paths import config_path, load_adapter_config, which_host_binary
 
 MAX_TIMEOUT_MS = 600000
+# The official sim SLA frontier emits a large structured map (about 220 KiB
+# for one A3 case). Keep sim requests inside one answer while the schema still
+# caps every component at 1 MiB.
+SIM_DEFAULT_OUTPUT_TOKENS = 131072
 
 DESCRIPTIONS = {
     "profiler": (
@@ -82,13 +86,17 @@ def catalog():
     }
     result = []
     for name, description in DESCRIPTIONS.items():
+        selected_limits = dict(limits)
+        if name == "sim":
+            selected_limits["max_output_tokens"] = dict(
+                limits["max_output_tokens"], default=SIM_DEFAULT_OUTPUT_TOKENS)
         result.append(dict(
             name=name, description=description + " No MindIE knowledge activation is required.",
             inputSchema=dict(type="object", additionalProperties=False, required=["argv"],
                              properties=dict(argv=dict(type="array", items=dict(type="string"),
                                                        description="Arguments for the installed CLI; no shell expansion."),
                                              cwd=dict(type="string", description="Optional absolute working directory; defaults to the native tool call directory."),
-                                             **limits)),
+                                             **selected_limits)),
             annotations=dict(readOnlyHint=False, destructiveHint=True, openWorldHint=True),
         ))
     for name, description, properties, required in (
@@ -175,7 +183,8 @@ def execute(name, arguments, session, *, cwd=None):
             argv += ["--output", arguments["output"]]
     else:
         raise ValueError("unknown deterministic component tool")
-    budget = arguments.get("max_output_tokens", 16384)
+    budget = arguments.get("max_output_tokens",
+                           SIM_DEFAULT_OUTPUT_TOKENS if name == "sim" else 16384)
     if type(budget) is not int or not 1 <= budget <= 262144:
         raise ValueError("max_output_tokens must be between 1 and 262144")
     milliseconds = arguments.get("timeout_ms", 120000)

@@ -22,6 +22,7 @@ import urllib.error
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from product_contract import identity, package_files
+from storage_lifecycle import pre_build_reclaim
 
 RETIRED_COMPONENTS = frozenset({"mindie-bench"})
 _TRANSPORT_FETCH_CODES = frozenset({"release_http_error", "release_transport_unavailable"})
@@ -289,6 +290,11 @@ def prepare(source, python, root, *, current_python=None, force=False, current_s
     pins = {name: row["revision"] for name, row in selected.get("runtime", {}).items()}
     if (current_python is not None or not changed) and pins == baseline["runtime"] and not needs_binding:
         return None
+    binding = dict(adapter, python=str(python))
+    if adapter.get("state_dir") and adapter.get("base_config"):
+        # Reclaim superseded adapter/component generations before uv sync needs
+        # the space. Bounded and non-fatal: a busy tree stays for the next tick.
+        pre_build_reclaim(binding, budget_seconds=1.5)
     artifact = build(source, root, baseline, selected["runtime"], python=python,
                      adapter_distribution="mindie-agent-cc",
                      files=[str(path.relative_to(source)) for path in package_files(source)])

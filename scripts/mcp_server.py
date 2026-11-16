@@ -648,23 +648,37 @@ def _read_line(stdin):
     return line.rstrip(b"\r\n") if line else False
 
 
+def _resident_binding():
+    from install_state import read_binding
+
+    try:
+        return read_binding()
+    except TimeoutError:
+        raise
+    except (OSError, ValueError, RuntimeError):
+        return None
+
+
 def serve(surface):
-    stdin = sys.stdin.buffer
-    while True:
-        line = _read_line(stdin)
-        if line is False:
-            return
-        if line is None or not line.strip():
-            continue
-        try:
-            message = json.loads(line)
-        except ValueError:
-            continue
-        if not isinstance(message, dict):
-            continue
-        response = handle(surface, message)
-        if response is not None:
-            send(response)
+    from storage_lifecycle import runtime_leases
+
+    with runtime_leases(_resident_binding()):
+        stdin = sys.stdin.buffer
+        while True:
+            line = _read_line(stdin)
+            if line is False:
+                return
+            if line is None or not line.strip():
+                continue
+            try:
+                message = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(message, dict):
+                continue
+            response = handle(surface, message)
+            if response is not None:
+                send(response)
 
 
 def serve_once(surface):

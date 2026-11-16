@@ -12,6 +12,15 @@ import threading
 import time
 
 def serve(surface: str, api) -> int:
+    """Hold a shared runtime lease for the whole resident MCP connection."""
+    binding = api._verify_installation()
+    from storage_lifecycle import runtime_leases
+
+    with runtime_leases(binding):
+        return _serve(surface, api, binding)
+
+
+def _serve(surface: str, api, binding) -> int:
     CONTROL_LIMIT = api.CONTROL_LIMIT
     CONTROL_TOOLS = api.CONTROL_TOOLS
     DispatchFailure = api.DispatchFailure
@@ -30,7 +39,6 @@ def serve(surface: str, api) -> int:
     _verify_installation = api._verify_installation
     bounded = api.bounded
     diagnostic_support = api.diagnostic_support
-    binding = _verify_installation()
     from harness import require_binding_support
     require_binding_support(binding)
     from release_update import BackgroundCheck
