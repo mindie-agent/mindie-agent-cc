@@ -488,3 +488,46 @@ def test_legacy_diagnostics_treat_resolver_as_connectivity(tmp_path, monkeypatch
     assert event["attributes"]["error_code"] == "update_transport_unavailable"
     assert event["reportable"] is False
     assert error.category == "resolver"
+
+
+@pytest.mark.parametrize("kind", ("prerequisite", "internal"))
+def test_activate_decodes_child_setup_error_envelope(tmp_path, kind):
+    import candidate_validate
+
+    saved = binding(tmp_path)
+    prepared = dict(
+        python=sys.executable,
+        runtime_scripts=str(SCRIPTS),
+        config=str(tmp_path / "prepared.json"),
+    )
+    child_exc = (
+        FileNotFoundError("uv is missing")
+        if kind == "prerequisite"
+        else candidate_validate.CheckFailure("runtime_pins", "revision_mismatch", "mindie-knowledge")
+    )
+
+    def run_child(*args, **kwargs):
+        assert kwargs["env"]["MINDIE_SETUP_ERROR_ENVELOPE"] == "1"
+        kwargs["receipt"].update(started=True, completed=True, cleanup_failed=False, returncode=1)
+        failure = RuntimeError("command failed (1)")
+        failure.mindie_output = _envelope(child_exc)
+        failure.returncode = 1
+        raise failure
+
+    state = {"activation_effect": "not_started"}
+    expected_cls = FileNotFoundError if kind == "prerequisite" else RuntimeError
+    with patch.object(update, "_record"), patch.object(update, "run", side_effect=run_child):
+        with pytest.raises(expected_cls) as caught:
+            update._activate(saved, prepared, {}, state)
+    _, event = _record_check_failure(tmp_path, caught.value)
+    if kind == "prerequisite":
+        assert caught.value.mindie_stage == "setup"
+        assert event["attributes"]["category"] == "prerequisite"
+        assert event["reportable"] is False
+    else:
+        assert caught.value.reason_code == "revision_mismatch"
+        assert event["attributes"]["category"] == "internal"
+        assert event["attributes"]["reason_code"] == "revision_mismatch"
+        assert event["reportable"] is True
+
+

@@ -563,11 +563,12 @@ def _activate(binding, prepared, env, state):
         state.update(activation_effect="not_started", activation_process={"started": False})
         raise
     process = {}
+    act_env = dict(env, MINDIE_SETUP_ERROR_ENVELOPE="1")
     try:
         output = run(
             [prepared["python"], str(Path(prepared["runtime_scripts"]) / "setup.py"),
              "--activate", prepared["config"]],
-            timeout=120.0, env=env, allow_service=True, receipt=process, transport=True,
+            timeout=120.0, env=act_env, allow_service=True, receipt=process, transport=True,
         )
         activated = json.loads(output)
         if not isinstance(activated, dict) or activated.get("status") not in {
@@ -583,6 +584,8 @@ def _activate(binding, prepared, env, state):
         if activated["status"] in {"activated", "current"}:
             state["installation_complete"] = True
     except BaseException as original:
+        if isinstance(original, Exception):
+            original = setup_diagnostics.child_error(original)
         if not getattr(original, "mindie_stage", None):
             original.mindie_stage = "runtime_activation"
         state["activation_process"] = process
@@ -593,7 +596,7 @@ def _activate(binding, prepared, env, state):
         except Exception as recording:
             state["recording_error"] = type(recording).__name__
             original.add_note("activation outcome recording failed: " + type(recording).__name__)
-        raise
+        raise original
     _record(binding, state)
     return activated
 
