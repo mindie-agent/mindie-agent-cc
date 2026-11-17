@@ -372,7 +372,7 @@ def test_ad07_symlinks_seed_lock_rsi_forwarders_and_v0125_upgrade_rollback(
 
     # AD-07 symlink read
     real_file = tmp_path / "real.txt"
-    real_file.write_text("Version: 0.1.26\n", encoding="utf-8")
+    real_file.write_text("Version: 0.1.26\n", encoding="utf-8", newline="\n")
     sym_file = tmp_path / "sym.txt"
     try:
         os.symlink(real_file, sym_file)
