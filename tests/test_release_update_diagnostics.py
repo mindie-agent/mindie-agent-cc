@@ -179,7 +179,7 @@ def test_native_writer_network_failure_is_typed_and_omits_streams(tmp_path):
     assert all("stderr" not in row.get("process", {}) for row in recorded)
 
 
-def test_native_writer_unclassified_failure_stays_untyped(tmp_path):
+def test_native_writer_unclassified_failure_is_external_prerequisite_not_internal(tmp_path):
     saved = binding(tmp_path)
     state = {}
 
@@ -193,8 +193,12 @@ def test_native_writer_unclassified_failure_stays_untyped(tmp_path):
     with patch.object(update, "_record"), patch.object(update, "run", side_effect=child):
         with pytest.raises(RuntimeError) as caught:
             update._mutation(saved, state, "claude", ["update"], "plugin")
-    assert getattr(caught.value, "category", None) is None
+    assert state["native_effect"] == "failed_cleanly"
+    assert getattr(caught.value, "category", None) == "prerequisite"
+    assert getattr(caught.value, "reportable", None) is False
     assert caught.value.returncode == 1
+    _receipt, event = _record_check_failure(tmp_path, caught.value)
+    assert event["reportable"] is False
 
 
 def test_post_install_stage_and_transport_classification_prevent_false_internal_report(tmp_path):

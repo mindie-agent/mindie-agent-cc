@@ -25,8 +25,6 @@ PROBE_MODULES = (
     "mindie_knowledge.loop.documents",
     "mindie_knowledge.loop.activation",
     "mindie_knowledge.loop.summary_scratch",
-    "mindie_knowledge.materials.reme_index",
-    "langmem.short_term",
     "remote_dev.mcp.server",
 )
 

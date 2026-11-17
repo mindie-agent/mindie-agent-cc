@@ -47,6 +47,13 @@ jobs:
               output.write("knowledge=" + pin + "\n")
       - name: Validate Harness interfaces and immutable release metadata
         run: uv run --locked --no-editable --group test python scripts/harness.py --source . --tests tests --revision ${{ github.sha }}
+      - name: Out-of-tree wheel build and seed verification smoke check
+        shell: bash
+        run: |
+          uv build --wheel --out-dir "$RUNNER_TEMP/mindie-cc-dist"
+          uv venv "$RUNNER_TEMP/mindie-cc-smoke-venv" --python 3.13
+          uv pip install --python "$RUNNER_TEMP/mindie-cc-smoke-venv" --no-deps "$RUNNER_TEMP"/mindie-cc-dist/*.whl
+          (cd "$RUNNER_TEMP" && "$RUNNER_TEMP/mindie-cc-smoke-venv/bin/python" -c "import mindie_cc.host_adapter as h; info = h.verify_bundled_seed(); assert info['schema'] == 'mindie-harness-seed/1'" 2>/dev/null || "$RUNNER_TEMP/mindie-cc-smoke-venv/Scripts/python.exe" -c "import mindie_cc.host_adapter as h; info = h.verify_bundled_seed(); assert info['schema'] == 'mindie-harness-seed/1'")
       - name: Check out the declared knowledge commit
         uses: actions/checkout@v4
         with:
@@ -66,6 +73,7 @@ jobs:
     needs: [component]
     if: always()
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - env:
           RESULTS: ${{ toJSON(needs) }}

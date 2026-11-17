@@ -10,7 +10,7 @@ disable-model-invocation: true
 
 - **Keep the user's task moving**: Knowledge, onboarding, diagnostics, and local ledgers are optional helpers. If any helper fails, report that specific error once and continue with deterministic MCP tools or authorized host-native tools. Reconcile any `unknown` remote write before repeating it.
 - **Zero-gate deterministic tools**: `remote-dev` and `components` (`coordinator`, `debugger`, `profiler`, `sim`, `diagnostics_status`, `diagnostics_bundle`) work in every Claude Code session and subagent over standard MCP without `/mindie-agent`, mandatory `PreToolUse` binds, or `context_file`; `coordinator` runs are addressed directly by `execution_id`. Obtain a `coordinator` lease (or verify an existing reservation) before running workloads on physical NPUs, pausing only that device step if ownership cannot be confirmed.
-- **Explicit `/mindie-agent` knowledge gate**: `UserPromptExpansion` activates the session lease when the user invokes `/mindie-agent`. All `knowledge_*` MCP tools (`knowledge_query`, `knowledge_explain`, `knowledge_feedback`, `knowledge_distill`, `knowledge_sync`) and background `Stop` capture require an active `/mindie-agent` lease in the current session (new chats, forks, and subagents require their own entry).
+- **Explicit `/mindie-agent` knowledge gate**: `UserPromptExpansion` activates the session lease when the user invokes `/mindie-agent` (supports subcommands `/mindie-agent status|deactivate|recover|sharing-enable|sharing-disable|reporting-status` and `--domain <domain>`). All `knowledge_*` MCP tools (`knowledge_query`, `knowledge_explain`, `knowledge_feedback`, `knowledge_distill`, `knowledge_sync`) and background `Stop` capture require an active `/mindie-agent` lease in the current session (new chats, forks, and subagents require their own entry).
 
 ## 2. Advisory Knowledge & Domain Tooling
 
@@ -18,10 +18,10 @@ disable-model-invocation: true
 - **Two-step retrieval (`L1–L4` graded units)**:
   1. `knowledge_query`: pass concise technical terms, optional `domain` (e.g., `"vllm-ascend"`, `"operators"`), and observed `conditions` (`token_budget` default `8000`, up to `64000`). Treat `condition_unknown` as unproven—probe the missing fact before applying the unit.
   2. `knowledge_explain`: pass exact `mindie://<domain>/units/<id>@<revision>` URIs in `refs=[...]`, observed `conditions`, currently visible `known_refs=[...]`, and `token_budget` (default `16000`).
-- **Optional feedback & distillation**: Record `knowledge_feedback` on `feedback_ref` when useful, and call `knowledge_distill` at `task_state="verified_milestone"` or `"completed"` (`reproduced_empirical` requires repeated verified runs; `L4` requires a verified ablation receipt).
+- **Optional feedback & distillation**: Record `knowledge_feedback` on `feedback_ref` when useful, and call `knowledge_distill` at `task_state="verified_milestone"` or `"completed"` (`reproduced_empirical` requires repeated verified runs; `L4` requires verified leave-one-out factor attribution).
 - **Long-horizon runs & de-biased exploration**:
-  - `coordinator` (`execution_id`) and `remote-dev` (`job_id`) persist authoritative run state—inspect existing handles before resubmitting after an interruption or compaction. Pass explicit `--time-window`, `--step-window`, or `--full-range` and `--clock-domain` to `mindie_profiler`.
-  - For multi-round optimization sweeps, you may optionally track hypotheses via `experiment_ledger.py`. When repeated `L3` attempts stall on a structural bottleneck, query `L4` structural mutators and optionally spawn a clean subagent seeded with `exploration_context.subagent_fact_pack.prompt_brief`, verifying multi-factor changes with leave-one-out ablations on the operator's real interface.
+  - `coordinator` (`execution_id`) and `remote-dev` (`job_id`) persist authoritative run state across parent sessions, subagents, and reconnections—inspect existing handles before resubmitting after an interruption or compaction. Pass explicit `--time-window`, `--step-window`, or `--full-range` and `--clock-domain` to `mindie_profiler`.
+  - For multi-round optimization sweeps, you may optionally track hypotheses via `rsi_loop.py` (`experiment-ledger.jsonl`). When repeated `L3` attempts stall on a structural bottleneck, query `L4` structural mutators and optionally spawn a clean subagent seeded with `exploration_context.subagent_fact_pack.prompt_brief`, verifying multi-factor changes with leave-one-out ablations on the operator's real interface.
 
 ## 3. Non-Intrusive First-Use Onboarding
 

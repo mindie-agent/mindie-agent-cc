@@ -63,6 +63,7 @@ FAILURE_CODES = {
     "process": {"nonzero_exit"},
 }
 FAILURE_COMPONENTS = {
+    "mindie-harness",
     "mindie-knowledge",
     "remote-dev",
     "mindie-diagnostics",
@@ -70,6 +71,9 @@ FAILURE_COMPONENTS = {
     "mindie-profiler",
     "mindie-sim",
     "mindie-coordinator",
+}
+OPTIONAL_SUBSTRATE_PINS = {
+    "mindie-harness": "harness",
 }
 PUBLICATION_PROCESS_CODES = {"init_failed", "fetch_failed", "revision_read_failed"}
 
@@ -191,19 +195,20 @@ def requirements(source):
         "mindie-sim": "sim",
         "mindie-coordinator": "coordinator",
     }
+    all_repos = {**expected, **OPTIONAL_SUBSTRATE_PINS}
     for package in tomllib.loads(raw.decode("utf-8")).get("package", []):
         name = package.get("name")
-        if name not in expected:
+        if name not in all_repos:
             continue
         source_url = package.get("source", {}).get("git", "")
         match = re.fullmatch(
-            r"https://github\.com/mindie-agent/" + re.escape(expected[name])
+            r"https://github\.com/mindie-agent/" + re.escape(all_repos[name])
             + r"\?rev=([0-9a-f]{40})#\1", source_url,
         )
         if match is None or name in pins:
             raise ValueError("runtime dependencies require exact official commit pins")
         pins[name] = match[1]
-    if set(pins) != set(expected):
+    if not set(expected).issubset(set(pins)) or not set(pins).issubset(set(all_repos)):
         raise ValueError("invalid runtime package combination")
     project_path = Path(source) / "pyproject.toml"
     if project_path.is_file():
@@ -292,7 +297,7 @@ def package_files(source):
     """Select executable/plugin inputs, excluding checkout and runtime state."""
     plugin = _plugin_root(source)
     result = set()
-    for name in (".claude-plugin", ".mcp.json", "hooks", "scripts", "skills",
+    for name in (".claude-plugin", ".mcp.json", "assets", "hooks", "scripts", "skills",
                  "product-contract.json", "harness-compatibility.json", "pyproject.toml", "uv.lock"):
         path = plugin / name
         entries = [path]

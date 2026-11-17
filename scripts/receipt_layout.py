@@ -24,6 +24,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import stat
 import tempfile
 
@@ -32,8 +33,8 @@ FORMAT = 1
 RELEASE_VERSION = "0.0.1"
 SCHEMA = "mindie-cc-remote-layout/1"
 _LIMIT = 4096
-# Files that remote-dev writes inside one native session directory.
-_DURABLE = ("jobs", "logs", "reads", "artifacts", "patches", "context")
+# Directories that remote-dev writes under REMOTE_DEV_STATE_DIR (shared or legacy per-session).
+_DURABLE = ("endpoints", "jobs", "logs", "reads", "artifacts", "patches", "context")
 
 
 def _version(value):
@@ -65,12 +66,15 @@ def _read(base):
 
 
 def _occupied(base):
-    """True when a native session directory already holds remote-dev state."""
+    """True when shared or legacy per-session directories already hold remote-dev state."""
     base = Path(base)
     if not base.is_dir():
         return False
+    for name in _DURABLE:
+        if (base / name).exists():
+            return True
     for session in base.iterdir():
-        if not session.is_dir() or session.name.startswith("."):
+        if not session.is_dir() or session.name.startswith(".") or session.name in _DURABLE:
             continue
         for name in _DURABLE:
             found = session / name
@@ -79,6 +83,36 @@ def _occupied(base):
         if any(path.suffix == ".json" and path.is_file() for path in session.glob("*")):
             return True
     return False
+
+
+def adopt_legacy_session_state(base: Path) -> None:
+    """Non-destructively surface pre-0.1.26 `remote/<session>/...` receipts into shared `base`."""
+    base = Path(base)
+    if not base.is_dir():
+        return
+    for entry in sorted(base.iterdir()):
+        if not entry.is_dir() or entry.name.startswith(".") or entry.name in _DURABLE:
+            continue
+        for tree_name in _DURABLE:
+            src_tree = entry / tree_name
+            if not src_tree.is_dir():
+                continue
+            for src_file in src_tree.rglob("*"):
+                if not src_file.is_file() or src_file.is_symlink():
+                    continue
+                dst_file = base / src_file.relative_to(entry)
+                if dst_file.exists():
+                    continue
+                dst_file.parent.mkdir(parents=True, exist_ok=True)
+                fd, tmp_name = tempfile.mkstemp(dir=dst_file.parent, prefix=".adopt-")
+                try:
+                    os.close(fd)
+                    shutil.copy2(src_file, tmp_name)
+                    os.replace(tmp_name, dst_file)
+                    tmp_name = None
+                finally:
+                    if tmp_name is not None:
+                        Path(tmp_name).unlink(missing_ok=True)
 
 
 def receipt_root(base):
@@ -113,6 +147,7 @@ def prepare_layout(base):
         release = release or previous["release_version"]
     value = dict(schema=SCHEMA, format=FORMAT, release_version=release)
     if value == previous:
+        adopt_legacy_session_state(base)
         yield selected
         return
     descriptor, name = tempfile.mkstemp(dir=base, prefix=".remote-layout-")
@@ -127,4 +162,5 @@ def prepare_layout(base):
     finally:
         if name is not None:
             Path(name).unlink(missing_ok=True)
+    adopt_legacy_session_state(base)
     yield selected

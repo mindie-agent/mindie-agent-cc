@@ -254,14 +254,19 @@ def _hook_can_start_service(op, raw):
         event = json.loads(text)
     except (ValueError, UnicodeDecodeError):
         return False
-    return (
-        isinstance(event, dict) and event.get("expansion_type") == "slash_command"
+    if not (
+        isinstance(event, dict)
+        and event.get("expansion_type") == "slash_command"
         and event.get("command_source") == "plugin"
-        and event.get("command_name") in {
-            "mindie-agent", "mindie-agent:mindie-agent", "mindie-agent:init",
-            "mindie-agent:sharing-enable",
-        }
-    )
+    ):
+        return False
+    name = event.get("command_name")
+    if name in {"mindie-agent", "mindie-agent:mindie-agent"}:
+        first = ((event.get("command_args") or "").strip().split(None, 1) or [""])[0]
+        if first in {"status", "deactivate", "recover", "sharing-disable", "reporting-status"}:
+            return False
+        return True
+    return name in {"mindie-agent:init", "mindie-agent:sharing-enable"}
 
 
 def _runtime(binding):

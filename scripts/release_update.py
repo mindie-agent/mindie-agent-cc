@@ -97,9 +97,10 @@ def _record_update_failure(stage, exc):
     typed = _typed_update_error(exc)
     resolved_stage = _effective_stage(stage, typed)
     code = getattr(typed, "returncode", None)
+    reportable = getattr(typed, "reportable", True) is not False
     return diagnostic_support.failure(
         "release.update", resolved_stage, "update", exception=typed,
-        exit_code=code if type(code) is int else None,
+        exit_code=code if type(code) is int else None, reportable=reportable,
     )
 
 
@@ -129,6 +130,7 @@ def _native_writer_error(process, streams, *, stage=None):
         f"native_{stage}_mutation_failed" if stage in {"catalog", "plugin"} else "native_mutation_failed",
         substage=stage if isinstance(stage, str) else None,
     )
+    error.reportable = False
     code = process.get("returncode")
     if type(code) is int:
         error.returncode = code
@@ -137,6 +139,8 @@ def _native_writer_error(process, streams, *, stage=None):
         error.category, retry_after = kind
         if retry_after is not None:
             error.retry_after = retry_after
+    else:
+        error.category = "temporary_network" if process.get("completed") is not True else "prerequisite"
     return error
 
 
@@ -255,7 +259,7 @@ def _pending_install(receipt):
     if (receipt.get("activation_effect") in {"unknown", "incomplete"}
             or receipt.get("preparation_effect") == "unknown"):
         return True
-    return (receipt.get("native_effect") in {"not_started", "verified"}
+    return (receipt.get("native_effect") in {"not_started", "failed_cleanly", "verified"}
             and receipt.get("status") in {
                 "selected", "installing", "failed", "deferred",
                 "incomplete", "incompatible_harness",
@@ -394,6 +398,10 @@ def _mutation(binding, state, native, args, stage):
                      transport=True, capture_stderr=True, max_output=4 * 1024 * 1024)
     except BaseException as original:
         _forget_process_streams(process)
+        if isinstance(original, Exception):
+            original.reportable = False
+            if getattr(original, "category", None) is None:
+                original.category = "prerequisite" if process.get("started") is False else "temporary_network"
         if process.get("started") is False:
             state["native_effect"] = "not_started"
         state["process"] = process
@@ -406,7 +414,7 @@ def _mutation(binding, state, native, args, stage):
     streams = _forget_process_streams(process)
     state["process"] = process
     if process.get("completed") is True and process.get("cleanup_failed") is False:
-        state["native_effect"] = "completed"
+        state["native_effect"] = "completed" if process.get("returncode") == 0 else "failed_cleanly"
     _record(binding, state)
     if (process.get("returncode") != 0 or process.get("completed") is not True
             or process.get("cleanup_failed") is not False):
