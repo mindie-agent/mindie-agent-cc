@@ -275,6 +275,33 @@ def test_ad11_single_skill_entry_subcommand_routing_and_p21_unactivated_knowledg
     skill_dirs = sorted(p.name for p in (ROOT / "skills").iterdir() if p.is_dir())
     assert skill_dirs == ["mindie-agent"]
 
+    skill_dir = ROOT / "skills" / "mindie-agent"
+    skill_md = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
+    assert skill_md.startswith("---\n")
+    frontmatter = skill_md.split("\n---\n", 1)[0]
+    assert "disable-model-invocation: true" in frontmatter
+
+    for moved in ("user-notice.md", "workspace-setup.md", "github-authentication.md"):
+        assert (ROOT / "docs" / "install" / moved).is_file()
+        assert not (skill_dir / "references" / moved).exists()
+
+    forbidden_snippets = (
+        "First-Use Onboarding",
+        "user-notice.md",
+        "workspace-setup.md",
+        "github-authentication.md",
+        "needs_onboarding_prompt",
+        "vllm-ascend-workspace",
+        "gh auth login",
+        "setup.py sharing",
+        "AskUserQuestion",
+        "mindie-agent/mindie-agent",
+    )
+    for md_path in sorted(skill_dir.rglob("*.md")):
+        body = md_path.read_text(encoding="utf-8")
+        for snippet in forbidden_snippets:
+            assert snippet not in body, f"{md_path.relative_to(ROOT)} still contains {snippet!r}"
+
     # Unified `/mindie-agent <subcommand>` routing
     cfg = make_config(tmp_path / "profile", sharing=False)
     os.environ["MINDIE_CC_CONFIG"] = str(cfg)

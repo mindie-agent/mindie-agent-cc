@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/mindie-agent/mindie-agent-cc/releases"><img src="https://img.shields.io/badge/release-v0.1.27-0F766E.svg" alt="Release v0.1.27"></a>
+  <a href="https://github.com/mindie-agent/mindie-agent-cc/releases"><img src="https://img.shields.io/badge/release-v0.1.28-0F766E.svg" alt="Release v0.1.28"></a>
   <a href="harness-compatibility.json"><img src="https://img.shields.io/badge/Claude_Code-%3E%3D2.1.269_%3C3.0.0-D97757.svg" alt="Claude Code >=2.1.269 <3.0.0"></a>
   <a href="pyproject.toml"><img src="https://img.shields.io/badge/python-3.13-3776AB.svg" alt="Python 3.13"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-0F766E.svg" alt="License: MIT"></a>
@@ -27,7 +27,7 @@
 
 ---
 
-**MindIE Agent for Claude Code** (`mindie-agent-cc`) is the native Claude Code plugin for [MindIE Agent](https://github.com/mindie-agent/mindie-agent), supporting the **Ascend NPU AI Infra design, development, and testing lifecycle**. Release `v0.1.27` (paired with `mindie-agent 0.1.13`) delivers three core capabilities: **local and community knowledge base retrieval with privacy redaction** (focused on `vLLM-Ascend` feature development and `AscendC` / `Triton` kernel engineering), **remote SSH / Docker development and NPU inspection**, and **unified fault diagnostics with sanitized reporting**; additional Ascend software domains are tracked on the project roadmap.
+**MindIE Agent for Claude Code** (`mindie-agent-cc`) is the native Claude Code plugin for [MindIE Agent](https://github.com/mindie-agent/mindie-agent), supporting the **Ascend NPU AI Infra design, development, and testing lifecycle**. Release `v0.1.28` (paired with `mindie-agent 0.1.13`) delivers three core capabilities: **local and community knowledge base retrieval with privacy redaction** (focused on `vLLM-Ascend` feature development and `AscendC` / `Triton` kernel engineering), **remote SSH / Docker development and NPU inspection**, and **unified fault diagnostics with sanitized reporting**; additional Ascend software domains are tracked on the project roadmap.
 
 Built on the [MindIE Agent Engineering Design Principles](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.en.md), **domain knowledge and the Skill system are invoked manually on demand via `/mindie-agent`** so they never pollute unrelated tasks, while **`remote-dev` remote NPU development and testing tools trigger automatically by default** in everyday conversation—surfacing every failure or uncertain external state transparently without silent fallbacks.
 
@@ -78,8 +78,8 @@ For `coordinator`, `profiler`, and `sim`, relative paths resolve against the cur
 > ```
 > **What Happens**: Community contribution is **off by default**. Once you opt in during setup, your saved consent persists across sessions; in any session where you have invoked `/mindie-agent`, every turn end (`Stop`) extracts the session's public user/assistant messages from activation onward in the background, runs local deterministic redaction and Gitleaks scanning, generates navigation metadata, and opens a sanitized knowledge PR—without re-prompting for consent or requiring a closing command (ordinary sessions where `/mindie-agent` was not invoked short-circuit on `Stop` without reading sharing settings or transcripts).
 > - **Unified Contribution Switch (`mindie-consent.json` beside the adapter configuration)**: Community knowledge sharing and automatic tool fault reporting share a single persistent choice. Explicitly enabling (`contribute`) configures knowledge sharing and starts the native background reporter; disabling (`disabled`) stops subsequent outgoing sends for both paths. Saved choices (including `disabled`, `read-only`, and `later`) persist across upgrades without re-prompting; only when a legacy knowledge-only `contribute` record returns `needs_choice` does `/mindie-agent` ask once to confirm the unified setting (never prompting separately for knowledge vs. fault reporting or per task). The plugin strictly separates **(1) local consent configuration written**, **(2) background reporter worker running**, and **(3) external GitHub Issue/PR created**.
-> - Read the **[User & Contribution Notice](skills/mindie-agent/references/user-notice.md)** for full details on sharing scope, redaction limits, and public Git history.
-> - To set up a multi-task Git worktree layout for `vllm` and `vllm-ascend`, see **[Workspace Setup](skills/mindie-agent/references/workspace-setup.md)** and [vllm-ascend-workspace](https://github.com/mindie-agent/vllm-ascend-workspace.git).
+> - Read the **[User & Contribution Notice](docs/install/user-notice.md)** for full details on sharing scope, redaction limits, and public Git history.
+> - To set up a multi-task Git worktree layout for `vllm` and `vllm-ascend`, see **[Workspace Setup](docs/install/workspace-setup.md)** and [vllm-ascend-workspace](https://github.com/mindie-agent/vllm-ascend-workspace.git).
 
 ---
 
@@ -111,8 +111,8 @@ If you are an AI Agent asked by the user to install this plugin, run the followi
      git ls-remote https://github.com/mindie-agent/mindie-agent-cc.git HEAD
    claude --version
    ```
-   - **Hard Gate (Never skip or silently ignore, and never mutate global or system-wide host Git config)**: If `gh` is missing, assist the user in installing it first (macOS: `brew install gh`; Windows: `winget install --id GitHub.cli`; Ubuntu / WSL: `sudo apt update && sudo apt install -y gh`). Reuse a working account. Otherwise follow [GitHub Sign-In](skills/mindie-agent/references/github-authentication.md): browser login on ordinary networks, or token login on enterprise networks / blocked browser authorization. Use an existing token in the hidden `gh` prompt (or a supplied private file), or guide token creation. Verify transport strictly with process-scoped `GIT_CONFIG_COUNT` (and `UV_SYSTEM_CERTS=true UV_NATIVE_TLS=true` on enterprise TLS networks) without mutating global host Git config.
-   - Verify `claude --version` satisfies the compatible range supported by release `v0.1.27`: `>= 2.1.269 < 3.0.0` (declared in [`harness-compatibility.json`](harness-compatibility.json)).
+   - **Hard Gate (Never skip or silently ignore, and never mutate global or system-wide host Git config)**: If `gh` is missing, assist the user in installing it first (macOS: `brew install gh`; Windows: `winget install --id GitHub.cli`; Ubuntu / WSL: `sudo apt update && sudo apt install -y gh`). Reuse a working account. Otherwise follow [GitHub Sign-In](docs/install/github-authentication.md): browser login on ordinary networks, or token login on enterprise networks / blocked browser authorization. Use an existing token in the hidden `gh` prompt (or a supplied private file), or guide token creation. Verify transport strictly with process-scoped `GIT_CONFIG_COUNT` (and `UV_SYSTEM_CERTS=true UV_NATIVE_TLS=true` on enterprise TLS networks) without mutating global host Git config.
+   - Verify `claude --version` satisfies the compatible range supported by release `v0.1.28`: `>= 2.1.269 < 3.0.0` (declared in [`harness-compatibility.json`](harness-compatibility.json)).
    - On **Linux or Windows WSL**, if the background knowledge service will be used, also run `systemctl --user show --property=Version` to verify `systemd >= 254` is reachable (inside WSL, use Linux-native `claude`, `git`, `uv`, and `gh`).
 
 2. **Optional project support and contribution setup**:
@@ -120,7 +120,7 @@ If you are an AI Agent asked by the user to install this plugin, run the followi
 
 3. **Add the marketplace, install the plugin, and initialize the locked runtime**:
    ```sh
-   claude plugin marketplace add "https://github.com/mindie-agent/mindie-agent-cc.git#v0.1.27"
+   claude plugin marketplace add "https://github.com/mindie-agent/mindie-agent-cc.git#v0.1.28"
    claude plugin install mindie-agent@mindie-agent-cc --scope user
    UV_SYSTEM_CERTS=true UV_NATIVE_TLS=true claude --init-only
    ```
@@ -133,18 +133,18 @@ If you are an AI Agent asked by the user to install this plugin, run the followi
    SETUP_PY=$(python3 -c "import glob, os; p = sorted(glob.glob(os.path.expanduser('~/.claude/plugins/**/mindie-agent*/scripts/setup.py'), recursive=True)); print(p[-1] if p else '')")
    uv run --no-project --python 3.13 python "$SETUP_PY" sharing --status
    ```
-   - Confirm `claude plugin list --json` shows `mindie-agent@mindie-agent-cc` (`0.1.26`) enabled with `user` scope, and inspect the JSON returned by `setup.py sharing --status` (including `needs_onboarding_prompt`).
+   - Confirm `claude plugin list --json` shows `mindie-agent@mindie-agent-cc` (`0.1.28`) enabled with `user` scope, and inspect the JSON returned by `setup.py sharing --status` (including `needs_onboarding_prompt`).
    - Confirm `claude mcp list` reports the plugin's `knowledge`, `remote`, and `components` MCP servers as `Connected`. A connected `components` server confirms MCP tool registration; calling `coordinator`, `profiler`, or `sim` still requires the corresponding optional CLI to be installed or configured in `component_commands`. Then report the verified GitHub account (`$GH_USER`) and plugin readiness to the user.
 
    Continue immediately with Step 5 after verification, then report the complete setup result.
 
 5. **Present the Native Interactive Onboarding Popup (Step 5) and apply choices**:
-   - Right after installation or whenever `setup.py sharing --status` reports `"needs_onboarding_prompt": true`, summarize the [User & Contribution Notice](skills/mindie-agent/references/user-notice.md) and **immediately invoke Claude Code's native `AskUserQuestion` tool** to ask the 3 onboarding questions in a single popup:
+   - Right after installation or whenever `setup.py sharing --status` reports `"needs_onboarding_prompt": true`, summarize the [User & Contribution Notice](docs/install/user-notice.md) and **immediately invoke Claude Code's native `AskUserQuestion` tool** to ask the 3 onboarding questions in a single popup:
      1. **Local Development Workspace `vllm-ascend-workspace`** (`header: "Workspace"`, `multiSelect: false`): `Initialize vllm-ascend-workspace (Recommended)` vs `Keep current directory` vs `Use existing workspace directory`
      2. **Community Knowledge Sharing & Automated Fault Reporting** (`header: "Sharing"`, `multiSelect: false`): `Enable (Recommended)` vs `Keep Local-Only Mode`
      3. **Would you like to give mindie-agent a Star on GitHub ⭐?** (`header: "GitHub Star"`, `multiSelect: false`): `Sure, star it ⭐ (Recommended)` (Star `mindie-agent/mindie-agent` on GitHub to support the project) vs `Maybe later` (Continue without starring)
    - Once the user responds, execute in this exact order:
-     1. **Resolve `WORKSPACE_ROOT` first**: If the user chose to initialize or use an existing workspace, follow [Workspace Setup](skills/mindie-agent/references/workspace-setup.md) to initialize/resolve the directory and store it in `WORKSPACE_ROOT` (or `WORKSPACE_ROOT="$(pwd)"` if keeping the current directory), then register the path in the host client and run `repo_init.py`.
+     1. **Resolve `WORKSPACE_ROOT` first**: If the user chose to initialize or use an existing workspace, follow [Workspace Setup](docs/install/workspace-setup.md) to initialize/resolve the directory and store it in `WORKSPACE_ROOT` (or `WORKSPACE_ROOT="$(pwd)"` if keeping the current directory), then register the path in the host client and run `repo_init.py`.
      2. **Persist the unified contribution & sharing choice**:
         ```sh
         # If the user chose Enable (Recommended):
@@ -212,7 +212,7 @@ flowchart LR
 ### Local Storage Layout
 
 - **Immutable Runtime Directory**: `${XDG_DATA_HOME:-$HOME/.local/share}/mindie-agent/runtimes/cc` on macOS/Linux/WSL, or `%LOCALAPPDATA%/mindie-agent/runtimes/cc` on Windows (indexed by source, lockfile, Python ABI, and platform).
-- **Persistent Release Entry**: `CLAUDE_PLUGIN_DATA/releases/0.1.26/entry.py` (decoupled from volatile plugin caches so long-lived sessions remain stable).
+- **Persistent Release Entry**: `CLAUDE_PLUGIN_DATA/releases/0.1.28/entry.py` (decoupled from volatile plugin caches so long-lived sessions remain stable).
 - **Adapter Configuration**: `${XDG_CONFIG_HOME:-$HOME/.config}/mindie-agent/cc.json` (records the active installation binding; user consent and contribution scope are stored separately as persistent user data).
 
 ---
@@ -237,7 +237,7 @@ uv run --locked --no-editable --group test python scripts/harness.py --source . 
 
 ### Release Benchmark
 
-- **Release Microbenchmark**: Each `0.1.26` plugin release attaches `benchmark-results.json` and `benchmark-results.md` measuring the `public-transcript` public-message parsing and hidden-reasoning filtering workload ([`benchmarks/release.json`](benchmarks/release.json)) in `us/op`. This serves as a reproducible CPU microbenchmark baseline, distinct from live A2/A3 NPU acceptance and end-to-end Agent productivity evaluation.
+- **Release Microbenchmark**: Each `0.1.28` plugin release attaches `benchmark-results.json` and `benchmark-results.md` measuring the `public-transcript` public-message parsing and hidden-reasoning filtering workload ([`benchmarks/release.json`](benchmarks/release.json)) in `us/op`. This serves as a reproducible CPU microbenchmark baseline, distinct from live A2/A3 NPU acceptance and end-to-end Agent productivity evaluation.
 
 ---
 

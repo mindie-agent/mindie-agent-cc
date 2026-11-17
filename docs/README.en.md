@@ -13,3 +13,10 @@ This directory contains the architecture guides, Harness interface verification 
 | [Service Continuity & Updates](service-continuity.md) | [服务连续性与平滑更新](service-continuity.zh.md) | Immutable `uv` runtime preparation, shared/exclusive admission locks, idle service handoff, and `Stop` queue durability |
 | [Failure Diagnostics & Cancellation](failure-diagnostics.md) | [故障诊断与本地进程取消](failure-diagnostics.zh.md) | Read-only status checks, local process cleanup on cancel, sanitized failure projections, and opt-in product fault reporting |
 | [Framework Stability & Testing](framework-stability.md) | [框架稳定性与测试契约](framework-stability.zh.md) | Everyday usage invariants, Windows atomic configuration I/O, reproducible component tests, and acceptance boundaries |
+
+## Installation & Consent Guides (`docs/install/`)
+
+- [User & Contribution Notice (`docs/install/user-notice.md`)](install/user-notice.md) — Sharing scope, deterministic redaction limits, public Git history, and unified consent switch
+- [GitHub Sign-In (`docs/install/github-authentication.md`)](install/github-authentication.md) — Setup-time `gh` authentication and process-scoped `GIT_CONFIG_COUNT` enterprise transport
+- [Workspace Setup (`docs/install/workspace-setup.md`)](install/workspace-setup.md) — Initial workspace onboarding and persistent sharing configuration
+- [Latest Release Notes: `v0.1.28`](releases/mindie-agent-cc-0.1.28.en.md) | [中文](releases/mindie-agent-cc-0.1.28.md)

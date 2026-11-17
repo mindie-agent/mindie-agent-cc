@@ -1,24 +1,14 @@
-# Setup, Contribution Configuration & Operations (Claude Code)
+# Runtime Operations, Multi-Domain Routing & Graded Knowledge (Claude Code)
 
-Load this reference when performing first-time setup, configuring community contribution or fault reporting, or consulting detailed graded-knowledge and profiler conventions.
+Load this reference when running `/mindie-agent` session subcommands, routing across knowledge domains, or consulting graded-knowledge and profiler conventions.
 
-## 1. Community Experience Contribution & Onboarding
+## 1. Session Lifecycle & Runtime Subcommands
 
 - **Unified `/mindie-agent` Entry**: Invoking `/mindie-agent` enables knowledge and background `Stop` capture for the current session (`new` chats, forks, and subagents require their own entry). Subcommands (`status`, `deactivate`, `recover --batch <ID> inspect|reconcile|retry|compact`, `sharing-enable`, `sharing-disable`, `reporting-status`) all route through `/mindie-agent <subcommand>`.
-- **First-Use Onboarding & `setup.py sharing`**:
-  1. Present [用户须知](user-notice.md).
-  2. When `python <runtime_scripts>/setup.py sharing --status` reports `"needs_onboarding_prompt": true`, call Claude Code's native **`AskUserQuestion`** tool to ask the 3 onboarding questions together (Community Knowledge Sharing & Automated Fault Reporting, GitHub Star for `mindie-agent/mindie-agent`, and Local Development Workspace `vllm-ascend-workspace`), then follow [Workspace Setup](workspace-setup.md) to resolve `WORKSPACE_ROOT` first.
-  3. **Unified Contribution & Fault-Reporting Switch**:
-     - `base_config.parent / "mindie-consent.json"` stores the persistent setting governing both scoped knowledge PRs and sanitized product fault Issues.
-     - Persist the user's choice via `setup.py sharing`:
-       ```sh
-       python <runtime_scripts>/setup.py sharing --enable --project-root "$WORKSPACE_ROOT"
-       # or when keeping local-only mode:
-       python <runtime_scripts>/setup.py sharing --disable
-       ```
-       (You may also use `/mindie-agent contribute --repository owner/repo --account USER --fork USER/repo --project-root /absolute/path --visibility public`.)
-     - When the hook returns `reporting.run_outside_hook=true`, execute `reporting.command_line` immediately outside the hook in the same setup flow (90-second timeout).
-     - Keep three states distinct when reporting status: (1) local consent config written, (2) background reporter running (`reporting.status == "running"`), and (3) external GitHub Issue/PR created.
+- **Runtime Consent & Reporter Status**:
+  - `base_config.parent / "mindie-consent.json"` stores the persistent setting governing both scoped knowledge PRs and sanitized product fault Issues (`/mindie-agent sharing-enable`, `/mindie-agent sharing-disable`, `/mindie-agent reporting-status`, or `/mindie-agent contribute --repository owner/repo --account USER --fork USER/repo --project-root /absolute/path --visibility public`).
+  - When the hook returns `reporting.run_outside_hook=true`, execute `reporting.command_line` outside the hook with a 90-second timeout.
+  - Keep three states distinct when reporting status: (1) local consent config written, (2) background reporter running (`reporting.status == "running"`), and (3) external GitHub Issue/PR created.
 
 ## 2. Multi-Domain Routing & `deactivate`
 

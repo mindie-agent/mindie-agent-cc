@@ -13,3 +13,10 @@
 | [服务连续性与平滑更新](service-continuity.zh.md) | [Service Continuity & Updates](service-continuity.md) | 不可变 `uv` 运行时准备、并发锁保护、空闲服务切换与 `Stop` 采集队列可靠性 |
 | [故障诊断与本地进程取消](failure-diagnostics.zh.md) | [Failure Diagnostics & Cancellation](failure-diagnostics.md) | 只读状态诊断、本地进程取消边界、失败原因脱敏投影与可选产品故障上报 |
 | [框架稳定性与测试契约](framework-stability.zh.md) | [Framework Stability & Testing](framework-stability.md) | 日常无感使用保障、Windows 原子配置读写、组件测试复现与验收边界说明 |
+
+## 安装与授权须知 (`docs/install/`)
+
+- [用户须知 (`docs/install/user-notice.md`)](install/user-notice.md) — 社区经验共享脱敏范围、公开 Git 历史说明与统一贡献开关
+- [GitHub 登录引导 (`docs/install/github-authentication.md`)](install/github-authentication.md) — 安装阶段 `gh` 认证与企业网络进程级 `GIT_CONFIG_COUNT` 配置
+- [开发工作区配置指南 (`docs/install/workspace-setup.md`)](install/workspace-setup.md) — 首次安装交互式工作区初始化与共享偏好持久化
+- [最新发布说明：`v0.1.28`](releases/mindie-agent-cc-0.1.28.md) | [English](releases/mindie-agent-cc-0.1.28.en.md)
