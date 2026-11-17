@@ -32,7 +32,7 @@ def _release_version(plugin_root: Path) -> str:
         version = data.get("version")
         if isinstance(version, str) and version:
             return version
-    return "0.1.26"
+    return "0.1.27"
 
 
 def resolve_target(
