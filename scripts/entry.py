@@ -673,12 +673,38 @@ def op_reporting(session, event, command):
     return _reporting_guidance()
 
 
+_UNIFIED_SUBCOMMANDS = frozenset({
+    "init",
+    "status",
+    "deactivate",
+    "recover",
+    "sharing-enable",
+    "sharing-disable",
+    "reporting-status",
+})
+
+
+def _normalize_unified_subcommand(event: dict) -> dict:
+    if event.get("command_name") not in {"mindie-agent", "mindie-agent:mindie-agent"}:
+        return event
+    raw_args = (event.get("command_args") or "").strip()
+    if not raw_args:
+        return event
+    parts = raw_args.split(None, 1)
+    sub = parts[0]
+    if sub not in _UNIFIED_SUBCOMMANDS:
+        return event
+    rest = parts[1] if len(parts) > 1 else ""
+    return dict(event, command_name=f"mindie-agent:{sub}", command_args=rest)
+
+
 def dispatch_event(event: dict) -> dict:
     if is_subagent(event):
         raise ValueError("subagent tasks are not activated")
     session = require_session(event.get("session_id"))
     require_absolute(event.get("cwd"), "cwd")
     require_absolute(event.get("transcript_path"), "transcript_path")
+    event = _normalize_unified_subcommand(event)
     command = slash_command(event)
     if command in {"reporting-status", "reporting-enable", "reporting-disable"}:
         return op_reporting(session, event, command)

@@ -112,9 +112,14 @@ def adapter_check(source):
         "organizer_distill.py",
         "experiment_ledger.py",
         "rsi_loop.py",
+        "host_adapter.py",
+        "plugin_entry.py",
     ):
         if not (plugin / "scripts" / name).is_file():
             raise ValueError("missing bounded runtime entry: " + name)
+    if (plugin / "assets" / "seed-lock.json").is_file():
+        from host_adapter import verify_bundled_seed
+        verify_bundled_seed(plugin)
     # The catalogue is source text. Executable selection stays on the Git pin.
     text = (plugin / "scripts" / "mcp_catalog.py").read_text(encoding="utf-8")
     for name in ("knowledge_query", "knowledge_explain", "knowledge_feedback",
@@ -167,6 +172,7 @@ def installed_revisions(pins):
         if actual != expected:
             raise CheckFailure("runtime_pins", "revision_mismatch", name)
         repository = {
+            "mindie-harness": "harness",
             "mindie-knowledge": "knowledge",
             "remote-dev": "remote-dev",
             "mindie-diagnostics": "diagnostics",

@@ -103,23 +103,39 @@ def installed_binding(expected=None, *, timeout=5.0):
 
 
 def atomic_write(path: Path, value) -> None:
+    try:
+        from mindie_harness.atomic import atomic_write_json
+    except ModuleNotFoundError:
+        atomic_write_json = None
+    if atomic_write_json is not None:
+        atomic_write_json(path, value)
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f"{path.name}.tmp-{os.getpid()}")
+    tmp = path.with_name(f"{path.name}.tmp-{os.getpid()}-{time.monotonic_ns()}")
     descriptor = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-        json.dump(value, stream, ensure_ascii=False, indent=2)
-        stream.write("\n")
-    os.replace(tmp, path)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(value, stream, ensure_ascii=False, indent=2)
+            stream.write("\n")
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 class LockTimeout(RuntimeError):
     pass
 
 def _lock_once(descriptor, exclusive: bool, *, bootstrap=False) -> bool:
     if not bootstrap:
-        from mindie_knowledge.loop.locks import try_lock_file
-        return try_lock_file(descriptor, exclusive=exclusive)
-    # Runtime construction precedes shared-core availability. uv preparation
-    # uses only this existing exclusive lock; no reader protocol is needed.
+        try:
+            from mindie_harness.locks import _try_lock_fd
+            return _try_lock_fd(descriptor, exclusive=exclusive)
+        except ModuleNotFoundError:
+            from mindie_knowledge.loop.locks import try_lock_file
+            return try_lock_file(descriptor, exclusive=exclusive)
     try:
         if os.name == "nt":
             os.lseek(descriptor, 0, os.SEEK_SET)
@@ -136,8 +152,12 @@ def _lock_once(descriptor, exclusive: bool, *, bootstrap=False) -> bool:
 def _unlock(descriptor, *, bootstrap=False) -> None:
     try:
         if not bootstrap:
-            from mindie_knowledge.loop.locks import unlock_file
-            unlock_file(descriptor)
+            try:
+                from mindie_harness.locks import _unlock_fd
+                _unlock_fd(descriptor)
+            except ModuleNotFoundError:
+                from mindie_knowledge.loop.locks import unlock_file
+                unlock_file(descriptor)
         elif os.name == "nt":
             os.lseek(descriptor, 0, os.SEEK_SET)
             msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)

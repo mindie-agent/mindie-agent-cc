@@ -17,6 +17,12 @@ dependencies = [
   "mindie-coordinator @ git+https://github.com/mindie-agent/coordinator@33e2c6966d21d62969a2148145e74885dc826e3c",
 ]
 
+[tool.mindie.substrate]
+package = "mindie-harness"
+min_version = "0.1.0"
+seed = "assets/mindie-harness-seed.pyz"
+seed_lock = "assets/seed-lock.json"
+
 [dependency-groups]
 test = [
   "pytest==9.1.1",
@@ -38,6 +44,8 @@ scripts = "mindie_cc"
 "uv.lock" = "mindie_cc/resources/uv.lock"
 ".claude-plugin/plugin.json" = "mindie_cc/resources/plugin.json"
 "harness-compatibility.json" = "mindie_cc/resources/harness-compatibility.json"
+"assets/mindie-harness-seed.pyz" = "mindie_cc/resources/assets/mindie-harness-seed.pyz"
+"assets/seed-lock.json" = "mindie_cc/resources/assets/seed-lock.json"
 
 [tool.uv]
 # The reviewed plugin selection also replaces older transitive component pins.
@@ -57,4 +65,5 @@ cache-keys = [
   { file = "product-contract.json" },
   { file = ".claude-plugin/plugin.json" },
   { file = "harness-compatibility.json" },
+  { file = "assets/**" },
 ]

@@ -40,6 +40,7 @@ KNOWLEDGE_TOOL_DEFS = [
     dict(
         name="knowledge_query",
         description=(
+            "Requires explicit /mindie-agent activation in the current session. "
             "Search graded rules and task material in the selected domain when a missing "
             "contract, mechanism, or method is needed for the next step. Returns bounded "
             "navigation cards and deduplicated foundation_cards; each match includes a "
@@ -80,6 +81,7 @@ KNOWLEDGE_TOOL_DEFS = [
     dict(
         name="knowledge_explain",
         description=(
+            "Requires explicit /mindie-agent activation in the current session. "
             "Read complete graded units or task/block references by their exact returned ref. "
             "For graded units, pass refs (even for one unit) with observed conditions, visible "
             "known_refs, and token_budget to assemble the dependency closure (shared prerequisites "
@@ -108,6 +110,7 @@ KNOWLEDGE_TOOL_DEFS = [
     dict(
         name="knowledge_feedback",
         description=(
+            "Requires explicit /mindie-agent activation in the current session. "
             "Record optional usage events (discovered, loaded, applied, evaluated) or an "
             "up/down rating for an exact feedback_ref returned by query or explain. "
             "evaluated requires run_id and outcome (supported, refuted, inconclusive) with "
@@ -143,6 +146,7 @@ KNOWLEDGE_TOOL_DEFS = [
     dict(
         name="knowledge_distill",
         description=(
+            "Requires explicit /mindie-agent activation in the current session. "
             "Distill caller-selected, authorized evidence into C5 graded units at "
             "task_state='verified_milestone' or 'completed'. Pass related_refs to compare "
             "against existing units as a delta, or pass a foreground mindie-distill-decision/1 "

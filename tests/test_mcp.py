@@ -168,8 +168,8 @@ class RemoteObservationBoundTests(unittest.TestCase):
             def uncertain(_name, _args):
                 self.assertEqual(os.environ.get("REMOTE_DEV_HARNESS_PROFILE"), "claude")
                 root = Path(os.environ["REMOTE_DEV_STATE_DIR"])
-                self.assertEqual(root, state / "remote" / session)
-                self.assertTrue((root.parent / "remote-layout.json").is_file())
+                self.assertEqual(root, state / "remote")
+                self.assertTrue((root / "remote-layout.json").is_file())
                 (root / "job.json").write_text('{"state":"uncertain"}')
                 raise RuntimeError("submission uncertain")
 
@@ -179,7 +179,7 @@ class RemoteObservationBoundTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "submission uncertain"):
                     mcp_server.remote_call("remote_bash", {}, session)
             self.assertEqual(receipt_layout.receipt_root(state / "remote"), state / "remote")
-            self.assertIn("uncertain", (state / "remote" / session / "job.json").read_text())
+            self.assertIn("uncertain", (state / "remote" / "job.json").read_text())
 
     def test_incompatible_layout_prevents_dispatch_without_replacing_receipts(self):
         import mcp_server

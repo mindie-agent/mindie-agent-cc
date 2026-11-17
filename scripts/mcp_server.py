@@ -482,7 +482,7 @@ def remote_call(name, args, session):
     base = state_dir() / "remote"
     try:
         with prepare_layout(base):
-            root = base / session
+            root = base
             root.mkdir(parents=True, exist_ok=True)
     except TimeoutError:
         raise
