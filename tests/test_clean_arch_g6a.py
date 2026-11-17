@@ -90,11 +90,12 @@ def test_issues_364_and_365_marketplace_add_failure_retries_cleanly_without_inte
         "state_dir": str(state_root),
         "claude_config_dir": str(claude_home),
     }
+    current_ver = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))["version"]
     candidate_sha = "b" * 40
     candidate = {
-        "tag_name": "v0.1.26",
+        "tag_name": f"v{current_ver}",
         "metadata": {
-            "version": "0.1.26",
+            "version": current_ver,
             "source": {"repository": update.REPOSITORY, "sha": candidate_sha},
             "compatibility": update.compatibility(ROOT),
         },
@@ -130,7 +131,7 @@ def test_issues_364_and_365_marketplace_add_failure_retries_cleanly_without_inte
                 "name": MARKETPLACE,
                 "source": "git",
                 "url": f"https://github.com/{update.REPOSITORY}.git",
-                "ref": "v0.1.26",
+                "ref": f"v{current_ver}",
                 "installLocation": str(ROOT),
             }])
         if cmd[:4] == ["claude", "plugin", "marketplace", "add"]:
@@ -152,7 +153,7 @@ def test_issues_364_and_365_marketplace_add_failure_retries_cleanly_without_inte
                 receipt.update(started=True, completed=True, cleanup_failed=False, returncode=0)
             return "ok"
         if cmd[:3] == ["claude", "plugin", "update"]:
-            installed_ver = "0.1.26"
+            installed_ver = current_ver
             if isinstance(receipt, dict):
                 receipt.update(started=True, completed=True, cleanup_failed=False, returncode=0)
             return "{}"

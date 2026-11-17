@@ -264,6 +264,7 @@ def prepare(source, python, root, *, current_python=None, force=False, current_s
     if plugin_upgrade and not adapter.get("component_source") and not managed:
         return None
     baseline = identity(source)
+    sub_kw = {"include_substrate": True} if "mindie-harness" in baseline["runtime"] else {}
     required = {
         name: version
         for name, version in required_components(adapter).items()
@@ -273,7 +274,7 @@ def prepare(source, python, root, *, current_python=None, force=False, current_s
     with _without_retired_inventory(component_runtime, retired_state):
         selected = _discover_catalog(
             current_python or python, baseline["runtime"], force=force,
-            required_components=required,
+            required_components=required, **sub_kw,
         )
     if isinstance(selected.get("runtime"), dict):
         for name in RETIRED_COMPONENTS:
@@ -298,7 +299,8 @@ def prepare(source, python, root, *, current_python=None, force=False, current_s
         pre_build_reclaim(binding, budget_seconds=1.5)
     artifact = build(source, root, baseline, selected["runtime"], python=python,
                      adapter_distribution="mindie-agent-cc",
-                     files=[str(path.relative_to(source)) for path in package_files(source)])
+                     files=[str(path.relative_to(source)) for path in package_files(source)],
+                     **sub_kw)
     scripts = readback(Path(artifact["python"]), Path(artifact["source"]))
     return dict(artifact, scripts=str(scripts))
 

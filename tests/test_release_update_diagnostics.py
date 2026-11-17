@@ -423,7 +423,7 @@ def product_identity(source, *, components=None):
 def test_validated_publication_skips_the_network_fetch_but_keeps_local_checks(monkeypatch):
     import candidate_validate
     from mindie_knowledge import runtime_inventory
-    from mindie_knowledge.component_releases import COMPONENTS
+    from mindie_knowledge.runtime_inventory import COMPONENTS_V2 as COMPONENTS
     from support import ROOT
 
     baseline = product_identity(ROOT)
@@ -441,7 +441,7 @@ def test_validated_publication_skips_the_network_fetch_but_keeps_local_checks(mo
     monkeypatch.setattr(runtime_inventory, "verify_lock",
                         lambda plan: calls.append("verify_lock"))
     monkeypatch.setattr(runtime_inventory, "verify",
-                        lambda runtime: calls.append("verify"))
+                        lambda runtime, **_kw: calls.append("verify"))
     real_runtime_check = candidate_validate.runtime_check
 
     def runtime_check(scripts):

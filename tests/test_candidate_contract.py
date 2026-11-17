@@ -118,6 +118,7 @@ class ProductContractTests(unittest.TestCase):
             self.assertEqual(
                 set(first["runtime"]),
                 {
+                    "mindie-harness",
                     "mindie-knowledge",
                     "remote-dev",
                     "mindie-diagnostics",
