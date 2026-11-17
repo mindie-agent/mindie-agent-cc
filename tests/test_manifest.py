@@ -58,6 +58,7 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual(
             set(pins),
             {
+                "mindie-harness",
                 "mindie-knowledge",
                 "remote-dev",
                 "mindie-diagnostics",
