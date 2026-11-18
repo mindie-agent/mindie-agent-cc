@@ -23,6 +23,7 @@ import pytest
 
 SESSION = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 SESSION_FILE = SESSION + ".jsonl"
+WORK_APP = str(Path("/work/app").resolve())
 
 
 def _projects() -> Path:
@@ -42,7 +43,7 @@ def _fork_prefix() -> list[dict]:
         {"type": "queue-operation", "operation": "enqueue", "sessionId": SESSION,
          "timestamp": "2026-01-01T00:00:00Z"},
         {"type": "user", "sessionId": SESSION, "timestamp": "2026-01-01T00:00:01Z",
-         "cwd": "/work/app", "message": {"content": "hello"}},
+         "cwd": WORK_APP, "message": {"content": "hello"}},
     ]
 
 
@@ -68,14 +69,14 @@ def test_capture_source_uses_fork_enqueue_boundary() -> None:
 
     records = _fork_prefix() + [
         {"type": "assistant", "sessionId": SESSION, "timestamp": "2026-01-01T00:00:02Z",
-         "cwd": "/work/app", "message": {"content": [{"type": "text", "text": "done"}]}},
+         "cwd": WORK_APP, "message": {"content": [{"type": "text", "text": "done"}]}},
     ]
     path = _write(records)
     source = transcript.capture_source(str(path), SESSION)
     assert source["session_id"] == SESSION
-    assert source["project_root"] == str(Path("/work/app").resolve())
+    assert source["project_root"] == WORK_APP
     assert source["created_at"] == 1767225600.0
-    binding = {"session": SESSION, "enabled": 1, "project_root": "/work/app",
+    binding = {"session": SESSION, "enabled": 1, "project_root": WORK_APP,
                "activated_at": 99.0}
     assert transcript.capture_source(str(path), SESSION, binding=binding)["created_at"] == 1767225600.0
     with pytest.raises(ValueError):
