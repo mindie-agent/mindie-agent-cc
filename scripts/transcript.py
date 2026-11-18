@@ -90,6 +90,96 @@ def capture_path(path, session_id, *, must_exist=True):
     return selected
 
 
+def _find_child_cwd(selected: Path, session_id: str, created: float) -> str | None:
+    """Locate own post-fork cwd in large forked transcripts (`> 64` inherited lines)."""
+    size = selected.stat().st_size
+    if size > 0:
+        tail_offset = max(0, size - SOURCE_HEAD_BYTES)
+        with selected.open("rb") as stream:
+            stream.seek(tail_offset)
+            tail = stream.read(SOURCE_HEAD_BYTES)
+        tail_lines = tail.splitlines()
+        if tail_offset > 0 and tail_lines:
+            tail_lines = tail_lines[1:]
+        for raw in tail_lines:
+            if not raw.strip():
+                continue
+            try:
+                rec = json.loads(raw)
+            except (ValueError, UnicodeDecodeError):
+                continue
+            if not isinstance(rec, dict):
+                continue
+            rec_session = rec.get("sessionId") or rec.get("session_id")
+            if rec_session is not None and rec_session != session_id:
+                raise ValueError("capture transcript belongs to another task")
+            cwd = rec.get("cwd")
+            stamp = to_seconds(rec.get("timestamp"))
+            if (isinstance(cwd, str) and os.path.isabs(cwd)
+                    and stamp is not None and math.isfinite(stamp) and stamp >= created):
+                return str(Path(cwd).resolve())
+    deadline = time.monotonic() + 0.5
+    scanned = 0
+    with selected.open("rb") as stream:
+        while scanned < 16 * 1024 * 1024 and time.monotonic() < deadline:
+            raw = stream.readline(1024 * 1024 + 1)
+            if not raw:
+                break
+            scanned += len(raw)
+            if not raw.endswith(b"\n") and len(raw) > 1024 * 1024:
+                while True:
+                    discard = stream.readline(1024 * 1024)
+                    if not discard or discard.endswith(b"\n"):
+                        break
+                    scanned += len(discard)
+                continue
+            try:
+                rec = json.loads(raw)
+            except (ValueError, UnicodeDecodeError):
+                continue
+            if not isinstance(rec, dict):
+                continue
+            rec_session = rec.get("sessionId") or rec.get("session_id")
+            if rec_session is not None and rec_session != session_id:
+                raise ValueError("capture transcript belongs to another task")
+            cwd = rec.get("cwd")
+            stamp = to_seconds(rec.get("timestamp"))
+            if (isinstance(cwd, str) and os.path.isabs(cwd)
+                    and stamp is not None and math.isfinite(stamp) and stamp >= created):
+                return str(Path(cwd).resolve())
+    return None
+
+
+def _peek_enqueue_boundary(stream, expected_session: str | None) -> float | None:
+    """Return initial own `enqueue` timestamp when present at the head of `stream`."""
+    pos = stream.tell()
+    try:
+        stream.seek(0)
+        head = stream.read(min(SOURCE_HEAD_BYTES, 65536))
+    finally:
+        stream.seek(pos)
+    for raw in head.split(b"\n")[:SOURCE_HEAD_LINES]:
+        if not raw.strip():
+            continue
+        try:
+            record = json.loads(raw)
+        except (ValueError, UnicodeDecodeError):
+            continue
+        if not isinstance(record, dict):
+            continue
+        rec_session = record.get("sessionId") or record.get("session_id")
+        if rec_session is None:
+            continue
+        if expected_session and rec_session != expected_session:
+            return None
+        if record.get("type") == "queue-operation" and record.get("operation") == "enqueue":
+            stamp = to_seconds(record.get("timestamp"))
+            return stamp if stamp is not None and math.isfinite(stamp) else None
+        if to_seconds(record.get("timestamp")) is not None:
+            return None
+    return None
+
+
 def capture_source(path, session_id, *, binding=None):
     """Read bounded native attribution, never inherited fork scope.
 
@@ -150,6 +240,15 @@ def capture_source(path, session_id, *, binding=None):
             return dict(
                 session_id=session_id,
                 project_root=str(Path(cwd).resolve()),
+                created_at=created,
+                transcript_path=str(selected),
+            )
+    if created is not None and binding is None:
+        child_cwd = _find_child_cwd(selected, session_id, created)
+        if child_cwd is not None:
+            return dict(
+                session_id=session_id,
+                project_root=child_cwd,
                 created_at=created,
                 transcript_path=str(selected),
             )
@@ -340,7 +439,10 @@ def read_material(
         raise ValueError("scan_until must be an exact byte boundary at or after start")
     if max_text_bytes <= 0:
         raise ValueError("invalid text budget")
-    boundary = to_seconds(not_before) if not_before is not None else None
+    if type(not_before) in (int, float) and math.isfinite(not_before) and not_before == 0:
+        boundary = 0.0
+    else:
+        boundary = to_seconds(not_before) if not_before is not None else None
     result = dict(
         status="ok",
         start=start,
@@ -410,6 +512,10 @@ def read_material(
                     coverage_note="task path identity unavailable; no public read",
                 )
                 return result
+            if boundary is not None:
+                created_floor = _peek_enqueue_boundary(stream, session_id or owner)
+                if created_floor is not None and created_floor > boundary:
+                    boundary = created_floor
             stream.seek(max(0, start - 1))
             middle = start > 0 and stream.read(1) != b"\n"
             if middle:

@@ -3,10 +3,12 @@ from contextlib import closing
 import json
 from pathlib import Path
 import sqlite3
+import sys
 from unittest.mock import patch
 
 import pytest
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import maintenance
 import transcript
 from mindie_knowledge import consent_store
@@ -90,6 +92,47 @@ def test_fork_start_excludes_large_inherited_history_and_preserves_resume(tmp_pa
         raw_stop(dict(stop, prompt_id=f"resume-{number}"), env)
         assert admission.check(session) == original
     assert len(capture_rows(tmp_path)) == 3
+    assert not marker.exists()
+
+
+def test_opted_in_large_fork_without_manual_activation_excludes_parent_history(tmp_path, monkeypatch):
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import admission as adapter_admission
+
+    event, stop, env, marker, path, admission = fork_fixture(tmp_path, monkeypatch)
+    session = event["session_id"]
+    rows = [
+        native_record(session, "queue-operation", 101, operation="enqueue"),
+        native_record(session, "user", 50, cwd=tmp_path / "parent-outside",
+                      text="PARENT_SENTINEL"),
+        *[native_record(session, "attachment", 50, cwd=tmp_path / "parent-outside")
+          for _ in range(100)],
+        native_record(session, "assistant", 51, cwd=tmp_path / "parent-outside",
+                      text="PARENT_PRIVATE " * 100000),
+        native_record(session, "user", 102, cwd=event["cwd"], text="CHILD_SENTINEL"),
+    ]
+    write_records(path, rows)
+    assert path.stat().st_size > transcript.SOURCE_HEAD_BYTES
+
+    # Even if an unhooked MCP call created a placeholder 0.0 lease beforehand,
+    # Stop raises the boundary to child_created_at (101) and read_material enforces it.
+    with patch.dict("os.environ", env):
+        adapter_admission.ensure_default_lease(session, project_root=event["cwd"], not_before=0.0)
+    assert admission.knowledge_lease(session)["activated_at"] == 0.0
+
+    raw_stop(stop, env)
+    assert len(capture_rows(tmp_path)) == 1
+    with closing(sqlite3.connect(store_file(tmp_path))) as db:
+        boundary, scope = db.execute("SELECT boundary,scope FROM captures").fetchone()
+    assert boundary == 101
+    assert scope == event["cwd"]
+    for candidate_floor in (boundary, 0.0):
+        material = transcript.read_material(
+            str(path), 0, session_id=session, not_before=candidate_floor
+        )
+        assert "CHILD_SENTINEL" in material["text"]
+        assert "PARENT_" not in material["text"]
     assert not marker.exists()
 
 

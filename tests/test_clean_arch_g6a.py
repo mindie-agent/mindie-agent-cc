@@ -284,6 +284,7 @@ def test_ad11_single_skill_entry_subcommand_routing_and_p21_unactivated_knowledg
     frontmatter = skill_md.split("\n---\n", 1)[0]
     assert "user-invocable: false" in frontmatter
     assert "disable-model-invocation" not in frontmatter
+    assert "disableModelInvocation" not in frontmatter
     desc_lines = [ln for ln in frontmatter.splitlines() if ln.startswith("description:")]
     assert len(desc_lines) == 1
     desc_val = desc_lines[0].split("description:", 1)[1].strip()
@@ -306,25 +307,34 @@ def test_ad11_single_skill_entry_subcommand_routing_and_p21_unactivated_knowledg
         "AskUserQuestion",
         "mindie-agent/mindie-agent",
         "/mindie-agent",
+        "$mindie-agent",
+        "disable-model-invocation",
+        "disableModelInvocation",
     )
     for md_path in sorted(skill_dir.rglob("*.md")):
         body = md_path.read_text(encoding="utf-8")
         for snippet in forbidden_snippets:
             assert snippet not in body, f"{md_path.relative_to(ROOT)} still contains {snippet!r}"
 
-    slash_check_paths = [
-        ROOT / ".claude-plugin" / "plugin.json",
-        ROOT / ".claude-plugin" / "marketplace.json",
-        ROOT / "README.md",
-        ROOT / "README.en.md",
-        ROOT / "docs" / "README.md",
-        ROOT / "docs" / "README.en.md",
-        *sorted((ROOT / "docs" / "install").glob("*.md")),
-    ]
-    for doc_path in slash_check_paths:
-        text = doc_path.read_text(encoding="utf-8")
-        for m in re.finditer(r"(?<![A-Za-z0-9_.%*}-])/mindie-agent(?![A-Za-z0-9_.*-]*/)", text):
-            raise AssertionError(f"{doc_path.relative_to(ROOT)} exposes slash command at {m.start()}")
+    slash_pat = re.compile(
+        r"(?<![A-Za-z0-9_./:-])(?<!\})[/\$]mindie-agent(?::mindie-agent)?(?![A-Za-z0-9_./-])"
+    )
+    for active_path in sorted(ROOT.rglob("*")):
+        if not active_path.is_file():
+            continue
+        rel = active_path.relative_to(ROOT).as_posix()
+        if (
+            rel.startswith((".git/", "docs/releases/", "docs/archive/", "tests/"))
+            or "__pycache__" in rel
+            or active_path.suffix not in {".md", ".json", ".toml", ".yml", ".yaml"}
+        ):
+            continue
+        text = active_path.read_text(encoding="utf-8")
+        m = slash_pat.search(text)
+        assert m is None, f"{rel} exposes {m.group(0)!r} at offset {m.start()}"
+        if active_path.suffix == ".json":
+            assert "disableModelInvocation" not in text
+            assert "disable-model-invocation" not in text
 
     cfg = make_config(tmp_path / "profile", sharing=False)
     os.environ["MINDIE_CC_CONFIG"] = str(cfg)

@@ -130,7 +130,7 @@ If you are an AI Agent asked by the user to install this plugin, run the followi
    ```sh
    claude plugin list --json
    claude mcp list
-   SETUP_PY=$(python3 -c "import glob, os; p = sorted(glob.glob(os.path.expanduser('~/.claude/plugins/**/mindie-agent*/scripts/setup.py'), recursive=True)); print(p[-1] if p else '')")
+   SETUP_PY=$(python3 -c "import glob, os; p = sorted(f for f in glob.glob(os.path.expanduser('~/.claude/plugins/**/scripts/setup.py'), recursive=True) if 'mindie-agent' in f); print(p[-1] if p else '')")
    uv run --no-project --python 3.13 python "$SETUP_PY" sharing --status
    ```
    - Confirm `claude plugin list --json` shows `mindie-agent@mindie-agent-cc` (`0.1.29`) enabled with `user` scope, and inspect the JSON returned by `setup.py sharing --status` (including `needs_onboarding_prompt`).

@@ -17,6 +17,7 @@ import time
 from mcp_catalog import is_readonly_tool
 
 READ_POOL_WORKERS = 16
+READ_LIMIT = 64
 
 
 def serve(surface: str, api) -> int:
@@ -64,6 +65,7 @@ def _serve(surface: str, api, binding) -> int:
     read_pool = ThreadPoolExecutor(max_workers=READ_POOL_WORKERS, thread_name_prefix="mindie-mcp-read")
     active_work = 0
     active_control = 0
+    active_read = 0
 
     def send(response):
         deadline = time.monotonic() + OUTPUT_BUDGET
@@ -98,7 +100,7 @@ def _serve(surface: str, api, binding) -> int:
         workers[:] = alive
 
     def execute(raw, message, ident, cancel, slot):
-        nonlocal active_work, active_control
+        nonlocal active_work, active_control, active_read
         try:
             try:
                 if cancel.is_set():
@@ -137,6 +139,8 @@ def _serve(surface: str, api, binding) -> int:
                     active_control -= 1
                 elif slot == "work":
                     active_work -= 1
+                elif slot == "read":
+                    active_read -= 1
 
     try:
         update.start_if_due()
@@ -224,7 +228,9 @@ def _serve(surface: str, api, binding) -> int:
                 else:
                     duplicate = False
                     if is_read:
-                        slot = "read"
+                        if active_read < READ_LIMIT:
+                            slot = "read"
+                            active_read += 1
                     elif is_control:
                         if active_work < WORK_LIMIT:
                             slot = "work"

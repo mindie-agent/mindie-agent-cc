@@ -121,6 +121,24 @@ class HookTests(unittest.TestCase):
             ),
             100.0,
         )
+        # Also verify workspace_root-only out-of-scope event (cwd omitted) in both mindie_launch & bridge!
+        ws_only_event = dict(
+            hook_event_name="Stop",
+            session_id=SESSION,
+            prompt_id="p-ws-only",
+            workspace_root=str(outside),
+            transcript_path=str(scope_dir / f"{SESSION}.jsonl"),
+            stop_hook_active=False,
+        )
+        self.assertLess(
+            self._min_stop_ms(
+                [sys.executable, str(LAUNCH), "hook", "stop"],
+                json.dumps(ws_only_event).encode(),
+                scope_env,
+            ),
+            100.0,
+        )
+        self.assertEqual(self._run(BRIDGE, ["stop"], ws_only_event, scope_env), {})
         self.assertEqual(list(scope_dir.rglob("*.sqlite3")), [])
 
     def test_first_opted_in_stop_auto_ensures_lease_refreshes_default_root_and_prepares_store(self):

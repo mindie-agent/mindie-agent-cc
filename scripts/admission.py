@@ -7,8 +7,10 @@ and read-only inspection to `mindie_knowledge.loop.activation.Admission`.
 [Invariants]
 - Read-only checks (`is_deactivated`, `knowledge_lease`) never create
   `admission.sqlite3` when absent on disk.
-- `ensure_default_lease` provisions an active session lease (`not_before=0.0`)
-  on demand unless the session was explicitly deactivated (`status == "inactive"`).
+- `ensure_default_lease` provisions an active session lease on demand unless
+  the session was explicitly deactivated (`status == "inactive"`), raising an
+  earlier `0.0` placeholder boundary when a verified native creation timestamp
+  (`not_before > 0`) becomes known.
 
 [Timeouts & Locks]
 - Uses shared core SQLite WAL + `busy_timeout=5000` inside `Admission`.
@@ -87,12 +89,31 @@ def ensure_default_lease(
     )
     resolved_root = str(Path(raw_root).expanduser().resolve())
     if existing is not None:
-        if (
+        existing_boundary = existing.get("activated_at")
+        same_root = (
             project_root is None
-            or existing.get("activated_at") != 0.0
             or str(Path(existing.get("project_root") or "").expanduser().resolve()) == resolved_root
-        ):
+        )
+        needs_boundary_raise = (
+            existing_boundary == 0.0
+            and isinstance(not_before, (int, float))
+            and float(not_before) > 0.0
+        )
+        if existing_boundary != 0.0:
             return existing
+        if same_root and not needs_boundary_raise:
+            return existing
+        if same_root and needs_boundary_raise:
+            adm = gate(engine)
+            adm._write(
+                lambda db: db.execute(
+                    "UPDATE leases SET activated_at=?, project_root=? WHERE session=? AND enabled=1",
+                    (float(not_before), resolved_root, session.strip()),
+                )
+            )
+            refreshed = knowledge_lease(session, engine=engine)
+            if refreshed is not None:
+                return refreshed
     return activate(
         session,
         project_root=resolved_root,

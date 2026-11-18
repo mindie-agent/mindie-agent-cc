@@ -219,8 +219,7 @@ class BindReceiptTests(unittest.TestCase):
             self.assertFalse(result["isError"])
             self.assertEqual(result["structuredContent"]["matches"], payload["matches"])
             self.assertIn("bind_warning", result["structuredContent"])
+            self.assertTrue(result["structuredContent"]["receipt_unconfirmed"])
             self.assertFalse(result["structuredContent"]["diagnostic_ref"]["logging_failed"])
-            replay = mcp_server.handle("knowledge", request)["result"]
-            self.assertTrue(replay["isError"])
         self.assertEqual(calls, ["completed"])
         self.assertFalse(identity.bind_db_path().exists())

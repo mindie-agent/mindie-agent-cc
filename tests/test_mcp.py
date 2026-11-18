@@ -90,7 +90,22 @@ class McpTests(unittest.TestCase):
             })
             self.assertFalse(unbound_resp["result"]["isError"])
 
-            # 3. Receipt Honesty: post-success SQLite failure keeps isError=False + receipt_warning + receipt_unconfirmed=True
+            # 3. Optional `claim_bind` SQLite/OSError resilience falls back cleanly; TimeoutError still raises
+            import sqlite3
+            with patch.object(mcp_server, "claim_bind", side_effect=sqlite3.OperationalError("database is locked")):
+                sqlite_fallback = mcp_server.handle("knowledge", {
+                    "jsonrpc": "2.0",
+                    "id": "sqlite-fb",
+                    "method": "tools/call",
+                    "params": {
+                        "name": "knowledge_query",
+                        "arguments": {"query": "AscendC"},
+                        "_meta": {"claudecode/toolUseId": "call_00_locked"},
+                    },
+                })
+            self.assertFalse(sqlite_fallback["result"]["isError"])
+
+            # 4. Receipt Honesty: post-success SQLite failure keeps isError=False + receipt_warning + receipt_unconfirmed=True
             identity.publish_bind(
                 SESSION,
                 "call_00_receipt_warn",
@@ -112,6 +127,66 @@ class McpTests(unittest.TestCase):
             sc = honest["result"]["structuredContent"]
             self.assertIs(sc["receipt_unconfirmed"], True)
             self.assertTrue(sc["receipt_warning"])
+
+    def test_distill_and_sync_budgets_and_feedback_cwd_scope_and_component_cwd(self):
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import admission
+        import mcp_server
+        import mindie_launch
+        import native_mcp
+        from mindie_knowledge import consent_store
+
+        # 1. Principle 10 helper timeout budgets: distill >= 450s, sync >= 330s, <= .mcp.json 660s
+        mcp_timeout_sec = json.loads((ROOT / ".mcp.json").read_text(encoding="utf-8"))["mcpServers"]["knowledge"]["timeout"] / 1000.0
+        distill_outer = mindie_launch._dispatch_budget(
+            "knowledge", {"method": "tools/call", "params": {"name": "knowledge_distill", "arguments": {}}}
+        )
+        sync_outer = mindie_launch._dispatch_budget(
+            "knowledge", {"method": "tools/call", "params": {"name": "knowledge_sync", "arguments": {}}}
+        )
+        self.assertGreaterEqual(distill_outer, 450.0)
+        self.assertGreaterEqual(sync_outer, 330.0)
+        self.assertGreaterEqual(mcp_timeout_sec, distill_outer)
+        self.assertGreaterEqual(mcp_timeout_sec, sync_outer)
+        self.assertEqual(native_mcp.READ_LIMIT, 64)
+
+        # 2. `knowledge_feedback` refreshes stale in-scope lease root when called from outside `project_roots`
+        sharing_dir = self.tmp / "fb-scope"
+        sharing_cfg = make_config(sharing_dir, sharing=True)
+        consent_store.record_choice(sharing_dir / "mindie-consent.json", "contribute")
+        outside = sharing_dir / "outside"
+        outside.mkdir(parents=True)
+        with patch.dict(os.environ, {"MINDIE_CC_CONFIG": str(sharing_cfg)}):
+            admission.ensure_default_lease(SESSION, project_root=str(sharing_dir / "project"), not_before=0.0)
+            self.assertEqual(
+                Path(admission.knowledge_lease(SESSION)["project_root"]).resolve(),
+                (sharing_dir / "project").resolve(),
+            )
+            with patch("knowledge_service.ensure_service", return_value={"url": "http://127.0.0.1:1", "token": "t"}), \
+                    patch("mindie_knowledge.loop.cli.rpc", return_value={"ok": True}):
+                mcp_server.knowledge_call(
+                    "knowledge_feedback",
+                    {"ref": "mindie://vllm-ascend/units/u1@1", "rating": "up"},
+                    SESSION,
+                    cwd=str(outside),
+                )
+            self.assertEqual(
+                Path(admission.knowledge_lease(SESSION)["project_root"]).resolve(),
+                outside.resolve(),
+            )
+
+        # 3. `components` surface forwards effective host cwd (`MINDIE_HOST_CWD`) when unhooked
+        host_ws = self.tmp / "host-workspace"
+        host_ws.mkdir()
+        seen_cwd = []
+        with patch.dict(os.environ, {"MINDIE_CC_CONFIG": str(self.config), "MINDIE_HOST_CWD": str(host_ws)}), \
+                patch("component_tools.execute", side_effect=lambda name, args, sess, cwd=None: seen_cwd.append(cwd) or {"content": [], "isError": False}):
+            comp_resp = mcp_server.handle("components", {
+                "jsonrpc": "2.0", "id": "comp-cwd", "method": "tools/call",
+                "params": {"name": "diagnostics_status", "arguments": {}},
+            })
+        self.assertFalse(comp_resp["result"]["isError"])
+        self.assertEqual(seen_cwd, [str(host_ws)])
 
     def test_read_pool_executes_knowledge_query_and_explain_concurrently_during_slow_mutations(self):
         from io import BytesIO

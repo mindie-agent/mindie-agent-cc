@@ -56,7 +56,7 @@ import rsi_explore
 
 MAX_YIELD_TIME_MS = 30000
 KNOWLEDGE_RPC_TIMEOUT = 30.0
-KNOWLEDGE_SYNC_TIMEOUT = 120.0
+KNOWLEDGE_SYNC_TIMEOUT = 300.0
 READ_POOL_WORKERS = 16
 MUTATION_POOL_WORKERS = 8
 EOF_DRAIN_SECONDS = 3.0
@@ -74,17 +74,6 @@ _CONNECTION_SESSION_ID = (
 )
 _SEND_LOCK = threading.Lock()
 _REMOTE_CALL_LOCK = threading.Lock()
-_CLAIMED_LOCK = threading.Lock()
-_CLAIMED_CALL_IDS: dict[str, None] = {}
-_MAX_CLAIMED_CACHE = 4096
-
-
-def _remember_claimed(call_id: str) -> None:
-    with _CLAIMED_LOCK:
-        if len(_CLAIMED_CALL_IDS) >= _MAX_CLAIMED_CACHE:
-            oldest = next(iter(_CLAIMED_CALL_IDS))
-            _CLAIMED_CALL_IDS.pop(oldest, None)
-        _CLAIMED_CALL_IDS[call_id] = None
 
 
 def _fallback_session(params: dict) -> str:
@@ -101,14 +90,24 @@ def _fallback_session(params: dict) -> str:
     return _CONNECTION_SESSION_ID
 
 
-def _effective_cwd(bound_cwd: str | None) -> str:
+def _known_host_cwd(bound_cwd: str | None = None, params: dict | None = None) -> str | None:
     if isinstance(bound_cwd, str) and os.path.isabs(bound_cwd):
         return bound_cwd
+    meta = params.get("_meta") if isinstance(params, dict) else None
+    if isinstance(meta, dict):
+        for key in ("cwd", "workspaceRoot", "workspace_root"):
+            val = meta.get(key)
+            if isinstance(val, str) and os.path.isabs(val.strip()):
+                return val.strip()
     for env_key in ("CLAUDE_PROJECT_DIR", "MINDIE_HOST_CWD"):
         val = os.environ.get(env_key, "").strip()
         if val and os.path.isabs(val):
             return val
-    return os.getcwd()
+    return None
+
+
+def _effective_cwd(bound_cwd: str | None) -> str:
+    return _known_host_cwd(bound_cwd) or os.getcwd()
 
 
 def canonical(value):
@@ -332,19 +331,33 @@ def _distill_timeout():
     return summary_budget.distill_rpc_timeout()
 
 
-def _maybe_provision_feedback_lease(session: str, project_root: str, target_eng) -> None:
-    from admission import ensure_default_lease, knowledge_lease
+def _sync_feedback_lease(session: str, caller_cwd: str | None, target_eng) -> None:
+    from admission import activate, ensure_default_lease, knowledge_lease
     from knowledge_service import engine_config
     from mindie_knowledge.loop.settings import from_engine_config
 
-    if knowledge_lease(session, engine=target_eng) is not None:
-        return
+    existing = knowledge_lease(session, engine=target_eng)
     cfg = target_eng if target_eng is not None else engine_config()
     settings = from_engine_config(cfg)
-    if settings.allows_capture() and settings.in_scope(project_root):
-        ensure_default_lease(
-            session, project_root=project_root, not_before=0.0, engine=target_eng
-        )
+    known = _known_host_cwd(caller_cwd)
+    if known is not None:
+        resolved_known = str(Path(known).expanduser().resolve())
+        if settings.allows_capture() and settings.in_scope(known):
+            if existing is None:
+                ensure_default_lease(session, project_root=known, not_before=0.0, engine=target_eng)
+            elif str(Path(existing.get("project_root") or "").expanduser().resolve()) != resolved_known:
+                activate(session, project_root=known,
+                         root_session=existing.get("root_session") or session,
+                         not_before=existing.get("activated_at"), engine=target_eng)
+        elif existing is not None and not settings.in_scope(known):
+            activate(session, project_root=known,
+                     root_session=existing.get("root_session") or session,
+                     not_before=existing.get("activated_at"), engine=target_eng)
+        return
+    if existing is None:
+        fallback = os.getcwd()
+        if settings.allows_capture() and settings.in_scope(fallback):
+            ensure_default_lease(session, project_root=fallback, not_before=0.0, engine=target_eng)
 
 
 def _knowledge_distill_call(args, session, ensure_service, rpc, *, cwd=None):
@@ -417,7 +430,7 @@ def _read_or_feedback_call(name, args, session, ensure_service, rpc, *, cwd=None
     if is_deactivated(session, engine=target_eng):
         raise ValueError("knowledge session lease is inactive")
     if name == "knowledge_feedback":
-        _maybe_provision_feedback_lease(session, _effective_cwd(cwd), target_eng)
+        _sync_feedback_lease(session, cwd, target_eng)
     payload = dict(body, _session_id=session, _session_verified=True)
     if routed_domain is not None and "domain" not in payload:
         payload["domain"] = routed_domain
@@ -597,16 +610,15 @@ def handle(surface, message):
         has_meta_id = isinstance(meta, dict) and meta.get("claudecode/toolUseId") is not None
         call_id = meta_tool_use_id(params) if has_meta_id else None
         if call_id is not None:
-            with _CLAIMED_LOCK:
-                replayed = call_id in _CLAIMED_CALL_IDS
-            if replayed:
-                raise ValueError("toolUseId has already been used; replay rejected")
             try:
                 bound = claim_bind(call_id, native_name, args)
                 claimed = True
-                _remember_claimed(call_id)
                 session = bound["session"]
             except MissingBind:
+                session = _fallback_session(params)
+            except TimeoutError:
+                raise
+            except (OSError, sqlite3.Error):
                 session = _fallback_session(params)
         else:
             session = _fallback_session(params)
@@ -650,7 +662,9 @@ def handle(surface, message):
             )
         elif surface == "components":
             from component_tools import execute
-            result = execute(local, args, session, cwd=bound.get("cwd"))
+            host_cwd = _known_host_cwd(bound.get("cwd"), params)
+            effective_comp_cwd = host_cwd if host_cwd and os.path.isdir(host_cwd) else None
+            result = execute(local, args, session, cwd=effective_comp_cwd)
         else:
             try:
                 payload = remote_call(local, args, session)

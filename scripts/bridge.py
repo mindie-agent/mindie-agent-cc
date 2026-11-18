@@ -193,10 +193,11 @@ def handle_stop():
                 return _stop_failure("authorization", "authority_unavailable")
             _print({})
             return 0
-        hook_cwd = event.get("cwd")
-        if isinstance(hook_cwd, str) and os.path.isabs(hook_cwd) and not settings.in_scope(hook_cwd):
-            _print({})
-            return 0
+        for candidate_dir in (event.get("cwd"), event.get("workspace_root")):
+            if isinstance(candidate_dir, str) and candidate_dir.strip():
+                if not os.path.isabs(candidate_dir) or not settings.in_scope(candidate_dir):
+                    _print({})
+                    return 0
 
         session = require_session(event.get("session_id"))
         turn = event.get("prompt_id")
@@ -226,7 +227,9 @@ def handle_stop():
             return 0
 
         lease = pinned or ensure_default_lease(
-            session, project_root=source["project_root"], not_before=0.0
+            session,
+            project_root=source["project_root"],
+            not_before=max(0.0, float(source["created_at"])),
         )
         attempted = True
         forwarded = dict(
