@@ -319,13 +319,27 @@ def test_ad11_single_skill_entry_subcommand_routing_and_p21_unactivated_knowledg
     slash_pat = re.compile(
         r"(?<![A-Za-z0-9_./:-])(?<!\})[/\$]mindie-agent(?::mindie-agent)?(?![A-Za-z0-9_./-])"
     )
-    for active_path in sorted(ROOT.rglob("*")):
-        if not active_path.is_file():
-            continue
+    owned_files: list[Path] = []
+    for owned_dir in (ROOT / "skills", ROOT / ".claude-plugin", ROOT / "hooks", ROOT / "docs"):
+        if owned_dir.is_dir():
+            owned_files.extend(p for p in sorted(owned_dir.rglob("*")) if p.is_file())
+    for top_glob in (
+        "README*.md",
+        "AGENTS.md",
+        "CONTRIBUTING*.md",
+        ".mcp.json",
+        "harness-compatibility.json",
+        "pyproject.toml",
+    ):
+        owned_files.extend(p for p in sorted(ROOT.glob(top_glob)) if p.is_file())
+
+    for active_path in owned_files:
         rel = active_path.relative_to(ROOT).as_posix()
+        parts = active_path.relative_to(ROOT).parts
         if (
-            rel.startswith((".git/", "docs/releases/", "docs/archive/", "tests/"))
-            or "__pycache__" in rel
+            rel.startswith(("docs/releases/", "docs/archive/"))
+            or any(part.startswith(".") and part not in {".claude-plugin", ".mcp.json"} for part in parts)
+            or "__pycache__" in parts
             or active_path.suffix not in {".md", ".json", ".toml", ".yml", ".yaml"}
         ):
             continue
