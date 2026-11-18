@@ -8,8 +8,8 @@
 
 ## 1. 日常使用与配置持久化保障
 
-- **授权一次配置，知识按会话显式启用**：社区知识贡献与自动工具故障上报共用 `<profile>/.mindie/mindie-consent.json` 中的统一贡献开关。保存后的统一贡献选择与已批准项目路径范围跨会话、`--fork-session` 子会话、宿主重启、插件升级与普通临时故障持久有效，无需重复确认授权。确定性工具（`remote-dev` 与事实状态查询 `mindie_status`）在所有会话中默认直接可用；而知识与经验飞轮（`knowledge_query`、`knowledge_explain`、`knowledge_feedback`、`knowledge_distill`、`knowledge_sync` 及 `Stop` 后台采集）则通过在当前会话中显式输入一次 `/mindie-agent` 按需启用。若旧版仅知识 `contribute` 配置缺少统一授权版本（`choice_revision`），升级后不会自动开启故障上传，而是保留原状态并显示 `needs_choice`，待用户显式确认一次后再启用。
-- **未激活会话或关闭共享时零额外开销**：在未调用 `/mindie-agent` 的普通会话中，或当社区贡献处于关闭状态时，`Stop` Hook 不会读取会话记录，也不会调用整理模型；与此同时，远端昇腾开发（`remote-dev`）默认常驻可用，本地知识检索（`mindie-knowledge`）可通过 `/mindie-agent` 随时按需唤醒。
+- **授权一次配置，知识与工具默认常驻可用**：社区知识贡献与自动工具故障上报共用 `mindie-consent.json` 中的统一贡献开关。保存后的统一贡献选择与已批准项目路径范围跨会话、`--fork-session` 子会话、宿主重启、插件升级与普通临时故障持久有效，无需重复确认授权。插件启用期间，确定性工具（`remote-dev`、`components`、`mindie_status`）与知识工具（`knowledge_query`、`knowledge_explain`、`knowledge_feedback`、`knowledge_distill`、`knowledge_sync`）在主会话与子智能体中均默认就绪，无需输入斜杠命令。若旧版仅知识 `contribute` 配置缺少统一授权版本（`choice_revision`），升级后不会自动开启故障上传，而是保留原状态并显示 `needs_choice`，待用户显式确认一次后再启用。
+- **未开启共享或超出授权目录时零额外开销**：当社区贡献未配置、已关闭或当前目录超出授权 `project_roots` 时，`Stop` Hook 在 `< 100ms` 内直接短路退出，不创建 SQLite 文件、不读取会话记录，也不调用整理模型；与此同时，远端昇腾开发（`remote-dev`）与本地知识检索（`mindie-knowledge`）保持默认可用。
 - **损坏配置绝不静默重置**：短暂的服务或网络波动由后台 Worker 依托持久化状态自动恢复；若配置文件本身损坏，系统会直接作为显式故障报告，绝不会当成“首次安装”重新弹窗覆盖用户原有的选择。
 
 ---

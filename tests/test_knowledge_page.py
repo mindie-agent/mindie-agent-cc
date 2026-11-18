@@ -396,14 +396,22 @@ class KnowledgePageTests(unittest.TestCase):
             lock.release()
 
     def test_explain_without_host_bind_fails_closed(self):
+        import identity
+
+        identity.publish_bind(
+            SESSION,
+            "call-tampered",
+            NATIVE,
+            {"ref": "mindie://vllm-ascend/units/expected@1"},
+        )
         message = {
             "jsonrpc": "2.0",
-            "id": "no-host",
+            "id": "tampered-host",
             "method": "tools/call",
             "params": {
                 "name": "knowledge_explain",
                 "arguments": {"ref": "mindie://vllm-ascend/missing"},
-                "_meta": {"claudecode/toolUseId": "call-no-host"},
+                "_meta": {"claudecode/toolUseId": "call-tampered"},
             },
         }
         proc = subprocess.run(
@@ -418,7 +426,7 @@ class KnowledgePageTests(unittest.TestCase):
         response = json.loads(proc.stdout.decode())
         text = response["result"]["content"][0]["text"]
         self.assertTrue(response["result"]["isError"])
-        self.assertIn("host did not authorize", text)
+        self.assertIn("does not match", text)
         self.assertNotIn("content_offset", text)
 
     def test_store_navigation_and_blocks_fit_knowledge_bound(self):

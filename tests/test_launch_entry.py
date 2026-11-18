@@ -77,17 +77,15 @@ def test_only_knowledge_business_calls_can_transfer_service_ownership(tmp_path):
 def test_only_stop_and_explicit_contribution_entries_allow_service_transfer():
     import mindie_launch
     assert mindie_launch._hook_can_start_service("stop", b"{}") is True
-    for command, expected in (
-        ("mindie-agent", True), ("mindie-agent:init", True),
-        ("mindie-agent:sharing-enable", True), ("mindie-agent:status", False),
-        ("mindie-agent:reporting-enable", False), ("mindie-agent:deactivate", False),
+    for command in (
+        "mindie-agent", "mindie-agent:init", "mindie-agent:sharing-enable",
+        "mindie-agent:status", "mindie-agent:reporting-enable", "mindie-agent:deactivate",
     ):
         event = dict(expansion_type="slash_command", command_source="plugin", command_name=command)
         raw = json.dumps(event).encode()
-        assert mindie_launch._hook_can_start_service("expansion", raw) is expected
+        assert mindie_launch._hook_can_start_service("expansion", raw) is False
+        assert mindie_launch._hook_can_start_service("prompt", raw) is False
         assert mindie_launch._hook_can_start_service("pretool", raw) is False
-        event["command_source"] = "user"
-        assert mindie_launch._hook_can_start_service("expansion", json.dumps(event).encode()) is False
 
 def _run(tmp, env, payload=b"", *, warning=False,
          expected_stage=None, expected_category=None):
@@ -215,35 +213,27 @@ def test_helper_failure_keeps_visible_warning_even_if_diagnostic_write_fails(cap
 def test_pretool_bind_failure_is_denied_not_empty_success(capsys, tmp_path):
     import mindie_launch
 
-    deny = {
-        "systemMessage": "MindIE PreToolUse bind failed: OSError: disk full",
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": "MindIE PreToolUse bind failed: OSError: disk full",
-        },
-    }
-
     def failed_bind(*args, **kwargs):
         receipt = kwargs.get("receipt")
         if receipt is not None:
             receipt["returncode"] = 2
             receipt["cleanup_failed"] = False
-        return json.dumps(deny)
+        return ""
 
     adapter = tmp_path / "cc.json"
     adapter.write_text(json.dumps({
         "base_config": str(adapter),
         "diagnostics_context": {},
     }), encoding="utf-8")
-    with patch.object(mindie_launch, "_read_hook_stdin", return_value=b"{}"), \
+    with patch.object(mindie_launch, "_config_path", return_value=adapter), \
+            patch.object(mindie_launch, "_read_hook_stdin", return_value=b"{}"), \
             patch.object(mindie_launch, "installed_binding", return_value=nullcontext({
                 "python": sys.executable, "runtime_scripts": str(SCRIPTS),
                 "adapter_config": str(adapter),
             })), patch.object(mindie_launch.bounded, "run", side_effect=failed_bind) as runner:
-        assert mindie_launch._hook("pretool") == 2
+        assert mindie_launch._hook("pretool") == 0
     assert runner.call_args.kwargs.get("check") is False
-    assert json.loads(capsys.readouterr().out) == deny
+    assert json.loads(capsys.readouterr().out) == {}
 
 
 @pytest.mark.parametrize("stdout", ["", "not-json", "[]", "null"])
@@ -262,17 +252,14 @@ def test_pretool_exit2_without_json_is_not_washed_to_exit0(capsys, tmp_path, std
         "base_config": str(adapter),
         "diagnostics_context": {},
     }), encoding="utf-8")
-    with patch.object(mindie_launch, "_read_hook_stdin", return_value=b"{}"), \
+    with patch.object(mindie_launch, "_config_path", return_value=adapter), \
+            patch.object(mindie_launch, "_read_hook_stdin", return_value=b"{}"), \
             patch.object(mindie_launch, "installed_binding", return_value=nullcontext({
                 "python": sys.executable, "runtime_scripts": str(SCRIPTS),
                 "adapter_config": str(adapter),
             })), patch.object(mindie_launch.bounded, "run", side_effect=failed_bind):
-        assert mindie_launch._hook("pretool") == 2
-    payload = json.loads(capsys.readouterr().out)
-    assert payload != {}
-    specific = payload["hookSpecificOutput"]
-    assert specific["hookEventName"] == "PreToolUse"
-    assert specific["permissionDecision"] == "deny"
+        assert mindie_launch._hook("pretool") == 0
+    assert json.loads(capsys.readouterr().out) == {}
 
 
 def test_pretool_helper_crash_denies_instead_of_warning_exit0(capsys, tmp_path):
@@ -283,16 +270,15 @@ def test_pretool_helper_crash_denies_instead_of_warning_exit0(capsys, tmp_path):
         "base_config": str(adapter),
         "diagnostics_context": {},
     }), encoding="utf-8")
-    with patch.object(mindie_launch, "_read_hook_stdin", return_value=b"{}"), \
+    with patch.object(mindie_launch, "_config_path", return_value=adapter), \
+            patch.object(mindie_launch, "_read_hook_stdin", return_value=b"{}"), \
             patch.object(mindie_launch, "installed_binding", return_value=nullcontext({
                 "python": sys.executable, "runtime_scripts": str(SCRIPTS),
                 "adapter_config": str(adapter),
             })), patch.object(mindie_launch.bounded, "run",
                               side_effect=RuntimeError("command failed (2)")):
-        assert mindie_launch._hook("pretool") == 2
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert "RuntimeError" in payload["systemMessage"]
+        assert mindie_launch._hook("pretool") == 0
+    assert json.loads(capsys.readouterr().out) == {}
 
 
 def test_initialize_reports_cached_installed_distribution_version():

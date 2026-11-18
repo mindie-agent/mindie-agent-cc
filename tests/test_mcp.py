@@ -44,34 +44,216 @@ class McpTests(unittest.TestCase):
             {"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
         )
         tools = response["result"]["tools"]
-        names = {item["name"] for item in tools}
+        by_name = {item["name"]: item for item in tools}
         self.assertEqual(
-            names,
+            set(by_name),
             {"mindie_status", "knowledge_query", "knowledge_explain",
              "knowledge_feedback", "knowledge_distill", "knowledge_sync"},
         )
+        for ro_name in ("mindie_status", "knowledge_query", "knowledge_explain"):
+            self.assertIs(by_name[ro_name]["annotations"]["readOnlyHint"], True)
+        for mut_name in ("knowledge_feedback", "knowledge_distill", "knowledge_sync"):
+            self.assertIs(by_name[mut_name]["annotations"]["readOnlyHint"], False)
         for item in tools:
             props = item["inputSchema"].get("properties") or {}
             self.assertNotIn("request_nonce", props)
             self.assertNotIn("session_id", props)
 
-    def test_knowledge_call_without_bind_fails_closed(self):
-        response = self._once(
-            "knowledge",
-            {
+    def test_knowledge_calls_work_without_pretool_bind_and_preserve_receipt_honesty(self):
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import identity
+        import mcp_server
+
+        with patch.dict(os.environ, {"MINDIE_CC_CONFIG": str(self.config)}), \
+                patch.object(mcp_server, "knowledge_call", return_value={"cards": [{"id": "u1"}]}) as kcall:
+            # 1. Subagent / unhooked call with ZERO `_meta` falls back cleanly to `_CONNECTION_SESSION_ID`
+            subagent_resp = mcp_server.handle("knowledge", {
                 "jsonrpc": "2.0",
-                "id": 2,
+                "id": "subagent-1",
+                "method": "tools/call",
+                "params": {"name": "knowledge_query", "arguments": {"query": "AscendC"}},
+            })
+            self.assertFalse(subagent_resp["result"]["isError"])
+            self.assertEqual(subagent_resp["result"]["structuredContent"], {"cards": [{"id": "u1"}]})
+            self.assertEqual(kcall.call_args.args[2], mcp_server._CONNECTION_SESSION_ID)
+
+            # 2. Unbound `claudecode/toolUseId` also falls back cleanly instead of failing closed
+            unbound_resp = mcp_server.handle("knowledge", {
+                "jsonrpc": "2.0",
+                "id": "unbound-2",
                 "method": "tools/call",
                 "params": {
                     "name": "knowledge_query",
-                    "arguments": {"query": "x"},
+                    "arguments": {"query": "AscendC"},
                     "_meta": {"claudecode/toolUseId": "call_00_missing"},
                 },
-            },
-        )
-        self.assertTrue(response["result"]["isError"])
+            })
+            self.assertFalse(unbound_resp["result"]["isError"])
 
-    def test_status_without_knowledge_activation_still_requires_native_bind(self):
+            # 3. Optional `claim_bind` SQLite/OSError resilience falls back cleanly; TimeoutError still raises
+            import sqlite3
+            with patch.object(mcp_server, "claim_bind", side_effect=sqlite3.OperationalError("database is locked")):
+                sqlite_fallback = mcp_server.handle("knowledge", {
+                    "jsonrpc": "2.0",
+                    "id": "sqlite-fb",
+                    "method": "tools/call",
+                    "params": {
+                        "name": "knowledge_query",
+                        "arguments": {"query": "AscendC"},
+                        "_meta": {"claudecode/toolUseId": "call_00_locked"},
+                    },
+                })
+            self.assertFalse(sqlite_fallback["result"]["isError"])
+
+            # 4. Receipt Honesty: post-success SQLite failure keeps isError=False + receipt_warning + receipt_unconfirmed=True
+            identity.publish_bind(
+                SESSION,
+                "call_00_receipt_warn",
+                "mcp__plugin_mindie-agent_knowledge__knowledge_query",
+                {"query": "AscendC"},
+            )
+            with patch.object(mcp_server, "finish_bind", side_effect=OSError(28, "disk full")):
+                honest = mcp_server.handle("knowledge", {
+                    "jsonrpc": "2.0",
+                    "id": "honest-3",
+                    "method": "tools/call",
+                    "params": {
+                        "name": "knowledge_query",
+                        "arguments": {"query": "AscendC"},
+                        "_meta": {"claudecode/toolUseId": "call_00_receipt_warn"},
+                    },
+                })
+            self.assertFalse(honest["result"]["isError"])
+            sc = honest["result"]["structuredContent"]
+            self.assertIs(sc["receipt_unconfirmed"], True)
+            self.assertTrue(sc["receipt_warning"])
+
+    def test_distill_and_sync_budgets_and_feedback_cwd_scope_and_component_cwd(self):
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import admission
+        import mcp_server
+        import mindie_launch
+        import native_mcp
+        from mindie_knowledge import consent_store
+
+        # 1. Principle 10 helper timeout budgets: distill >= 450s, sync >= 330s, <= .mcp.json 660s
+        mcp_timeout_sec = json.loads((ROOT / ".mcp.json").read_text(encoding="utf-8"))["mcpServers"]["knowledge"]["timeout"] / 1000.0
+        distill_outer = mindie_launch._dispatch_budget(
+            "knowledge", {"method": "tools/call", "params": {"name": "knowledge_distill", "arguments": {}}}
+        )
+        sync_outer = mindie_launch._dispatch_budget(
+            "knowledge", {"method": "tools/call", "params": {"name": "knowledge_sync", "arguments": {}}}
+        )
+        self.assertGreaterEqual(distill_outer, 450.0)
+        self.assertGreaterEqual(sync_outer, 330.0)
+        self.assertGreaterEqual(mcp_timeout_sec, distill_outer)
+        self.assertGreaterEqual(mcp_timeout_sec, sync_outer)
+        self.assertEqual(native_mcp.READ_LIMIT, 64)
+
+        # 2. `knowledge_feedback` refreshes stale in-scope lease root when called from outside `project_roots`
+        sharing_dir = self.tmp / "fb-scope"
+        sharing_cfg = make_config(sharing_dir, sharing=True)
+        consent_store.record_choice(sharing_dir / "mindie-consent.json", "contribute")
+        outside = sharing_dir / "outside"
+        outside.mkdir(parents=True)
+        with patch.dict(os.environ, {"MINDIE_CC_CONFIG": str(sharing_cfg)}):
+            admission.ensure_default_lease(SESSION, project_root=str(sharing_dir / "project"), not_before=0.0)
+            self.assertEqual(
+                Path(admission.knowledge_lease(SESSION)["project_root"]).resolve(),
+                (sharing_dir / "project").resolve(),
+            )
+            with patch("knowledge_service.ensure_service", return_value={"url": "http://127.0.0.1:1", "token": "t"}), \
+                    patch("mindie_knowledge.loop.cli.rpc", return_value={"ok": True}):
+                mcp_server.knowledge_call(
+                    "knowledge_feedback",
+                    {"ref": "mindie://vllm-ascend/units/u1@1", "rating": "up"},
+                    SESSION,
+                    cwd=str(outside),
+                )
+            self.assertEqual(
+                Path(admission.knowledge_lease(SESSION)["project_root"]).resolve(),
+                outside.resolve(),
+            )
+
+        # 3. `components` surface forwards effective host cwd (`MINDIE_HOST_CWD`) when unhooked
+        host_ws = self.tmp / "host-workspace"
+        host_ws.mkdir()
+        seen_cwd = []
+        with patch.dict(os.environ, {"MINDIE_CC_CONFIG": str(self.config), "MINDIE_HOST_CWD": str(host_ws)}), \
+                patch("component_tools.execute", side_effect=lambda name, args, sess, cwd=None: seen_cwd.append(cwd) or {"content": [], "isError": False}):
+            comp_resp = mcp_server.handle("components", {
+                "jsonrpc": "2.0", "id": "comp-cwd", "method": "tools/call",
+                "params": {"name": "diagnostics_status", "arguments": {}},
+            })
+        self.assertFalse(comp_resp["result"]["isError"])
+        self.assertEqual(seen_cwd, [str(host_ws)])
+
+    def test_read_pool_executes_knowledge_query_and_explain_concurrently_during_slow_mutations(self):
+        from io import BytesIO
+        import threading
+        import mcp_server
+
+        mut_entered = threading.Event()
+        release_mut = threading.Event()
+        seen_reads = []
+        outputs = []
+
+        def fake_knowledge_call(name, args, session, **_kw):
+            if name == "knowledge_feedback":
+                mut_entered.set()
+                release_mut.wait(timeout=5.0)
+                return {"recorded": True}
+            seen_reads.append(name)
+            return {"tool": name}
+
+        requests = [
+            {"jsonrpc": "2.0", "id": f"mut-{i}", "method": "tools/call",
+             "params": {"name": "knowledge_feedback", "arguments": {"ref": "mindie://d/units/u@1", "rating": "up"}}}
+            for i in range(mcp_server.MUTATION_POOL_WORKERS)
+        ] + [
+            {"jsonrpc": "2.0", "id": "ro-query", "method": "tools/call",
+             "params": {"name": "knowledge_query", "arguments": {"query": "mla"}}},
+            {"jsonrpc": "2.0", "id": "ro-explain", "method": "tools/call",
+             "params": {"name": "knowledge_explain", "arguments": {"ref": "mindie://d/units/u@1"}}},
+        ]
+
+        class ControlledStdin:
+            def __init__(self, items):
+                self._lines = [(json.dumps(x) + "\n").encode("utf-8") for x in items]
+                self._idx = 0
+
+            def readline(self):
+                if self._idx < len(self._lines):
+                    line = self._lines[self._idx]
+                    self._idx += 1
+                    if self._idx == mcp_server.MUTATION_POOL_WORKERS:
+                        mut_entered.wait(timeout=2.0)
+                    return line
+                # Wait until both read-only calls finish BEFORE releasing slow mutations!
+                deadline = time.monotonic() + 3.0
+                while len(seen_reads) < 2 and time.monotonic() < deadline:
+                    import time as _t
+                    _t.sleep(0.01)
+                release_mut.set()
+                return b""
+
+        import time
+        fake_stdin = type("FakeStdin", (), {"buffer": ControlledStdin(requests)})()
+        with patch.dict(os.environ, {"MINDIE_CC_CONFIG": str(self.config)}), \
+                patch.object(mcp_server, "knowledge_call", side_effect=fake_knowledge_call), \
+                patch.object(mcp_server, "_resident_binding", return_value=None), \
+                patch.object(mcp_server, "send", side_effect=outputs.append), \
+                patch("sys.stdin", fake_stdin):
+            mcp_server.serve("knowledge")
+
+        by_id = {msg["id"]: msg for msg in outputs}
+        self.assertIn("ro-query", by_id)
+        self.assertIn("ro-explain", by_id)
+        self.assertFalse(by_id["ro-query"]["result"]["isError"])
+        self.assertFalse(by_id["ro-explain"]["result"]["isError"])
+        self.assertCountEqual(seen_reads, ["knowledge_query", "knowledge_explain"])
+
+    def test_status_default_on_works_with_or_without_bind_and_rejects_replay(self):
         try:
             from mindie_knowledge.loop import settings as _settings  # noqa: F401
         except ImportError:
@@ -80,6 +262,19 @@ class McpTests(unittest.TestCase):
         sys.path.insert(0, str(ROOT / "scripts"))
         os.environ["MINDIE_CC_CONFIG"] = str(self.config)
         import identity
+
+        unhooked = self._once(
+            "knowledge",
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {"name": "mindie_status", "arguments": {}},
+            },
+            env=env,
+        )
+        self.assertFalse(unhooked["result"].get("isError"))
+        self.assertTrue(json.loads(unhooked["result"]["content"][0]["text"])["knowledge_enabled"])
 
         identity.publish_bind(
             SESSION,
@@ -104,7 +299,7 @@ class McpTests(unittest.TestCase):
         self.assertFalse(response["result"].get("isError"))
         payload = json.loads(response["result"]["content"][0]["text"])
         self.assertTrue(payload["configured"])
-        self.assertFalse(payload["knowledge_enabled"])
+        self.assertTrue(payload["knowledge_enabled"])
         replay = self._once(
             "knowledge",
             {

@@ -141,7 +141,6 @@ def test_sync_failed_result_stays_error_when_cleanup_also_failed(tmp_path, monke
 
 def test_default_domain_activation_does_not_authorize_another_feed(sync_profile, tmp_path):
     _engine_file, engine = sync_profile
-    admission.gate().activate(SESSION, project_root=str(tmp_path))
     other = dict(engine, domain="operators", root=str(tmp_path / "operators"),
                  admission_path=str(tmp_path / "operators-admission.sqlite3"))
     other_file = tmp_path / "operators.json"
@@ -150,8 +149,17 @@ def test_default_domain_activation_does_not_authorize_another_feed(sync_profile,
     adapter = json.loads(config.read_text())
     adapter["domain_configs"] = {"operators": str(other_file)}
     config.write_text(json.dumps(adapter))
-    with patch("maintenance.sync_public_feed") as sync:
+    with patch("maintenance.sync_public_feed", return_value={"result": "ok", "results": []}) as sync:
+        ok = call_sync({"domain": "operators"})
+    assert not ok["isError"], ok
+    assert sync.call_count == 1
+    assert not Path(other["admission_path"]).exists()
+
+    target_gate = admission.gate(other)
+    target_gate.activate(SESSION, project_root=str(tmp_path))
+    target_gate.deactivate(SESSION)
+    with patch("maintenance.sync_public_feed") as sync_blocked:
         result = call_sync({"domain": "operators"})
     assert result["isError"], result
-    assert "/mindie-agent" in result["content"][0]["text"]
-    sync.assert_not_called()
+    assert "inactive" in result["content"][0]["text"]
+    sync_blocked.assert_not_called()

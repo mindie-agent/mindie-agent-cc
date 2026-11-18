@@ -19,4 +19,4 @@ This directory contains the architecture guides, Harness interface verification 
 - [User & Contribution Notice (`docs/install/user-notice.md`)](install/user-notice.md) — Sharing scope, deterministic redaction limits, public Git history, and unified consent switch
 - [GitHub Sign-In (`docs/install/github-authentication.md`)](install/github-authentication.md) — Setup-time `gh` authentication and process-scoped `GIT_CONFIG_COUNT` enterprise transport
 - [Workspace Setup (`docs/install/workspace-setup.md`)](install/workspace-setup.md) — Initial workspace onboarding and persistent sharing configuration
-- [Latest Release Notes: `v0.1.28`](releases/mindie-agent-cc-0.1.28.en.md) | [中文](releases/mindie-agent-cc-0.1.28.md)
+- [Latest Release Notes: `v0.1.29`](releases/mindie-agent-cc-0.1.29.en.md) | [中文](releases/mindie-agent-cc-0.1.29.md)

@@ -16,12 +16,13 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual(market["name"], "mindie-agent-cc")
         self.assertEqual(market["plugins"][0]["source"], "./")
         self.assertEqual(market["plugins"][0]["name"], "mindie-agent")
+        self.assertEqual(plugin["version"], "0.1.29")
         self.assertEqual(plugin["version"], market["plugins"][0]["version"])
+        self.assertNotIn("/mindie-agent", plugin["description"])
+        self.assertNotIn("/mindie-agent", market["plugins"][0]["description"])
         hooks = json.loads((ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
-        expansion = hooks["hooks"]["UserPromptExpansion"]
-        matchers = {item["matcher"] for item in expansion}
-        self.assertIn("mindie-agent:init", matchers)
-        self.assertIn("mindie-agent:sharing-enable", matchers)
+        self.assertNotIn("UserPromptExpansion", hooks["hooks"])
+        self.assertEqual(set(hooks["hooks"]), {"PreToolUse", "Stop", "SessionStart"})
         self.assertTrue(hooks["hooks"]["Stop"])
         matcher = hooks["hooks"]["PreToolUse"][0]["matcher"]
         self.assertTrue(matcher.startswith("^mcp__plugin_mindie-agent_"))

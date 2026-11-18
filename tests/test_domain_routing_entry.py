@@ -188,10 +188,10 @@ class DomainRoutingEntryTests(unittest.TestCase):
                     self.env_patch.stop()
                     shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def _call(self, number, name, arguments, session=SESSION):
+    def _call(self, number, name, arguments, session=SESSION, cwd=None):
         call_id = f"call_domain_routing_{number}"
         native_name = f"mcp__plugin_mindie-agent_knowledge__{name}"
-        identity.publish_bind(session, call_id, native_name, arguments)
+        identity.publish_bind(session, call_id, native_name, arguments, cwd=cwd)
         response = mcp_server.handle("knowledge", {
             "jsonrpc": "2.0",
             "id": number,
@@ -339,10 +339,21 @@ class DomainRoutingEntryTests(unittest.TestCase):
         }, session=DISTILL_SESSION)
 
         self.assertTrue(result["isError"], result)
-        self.assertIn("manual /mindie-agent activation", result["content"][0]["text"])
-        self.assertEqual(self.ensure_calls, [])
+        self.assertIn("outside current contribution authorization", result["content"][0]["text"])
         self.assertFalse(self.marker.exists(),
-                         "a missing target lease must fail before the model worker")
+                         "an out-of-scope target lease must fail before the model worker")
+
+        self.ensure_calls.clear()
+        self.target_admission.deactivate(DISTILL_SESSION)
+        revoked = self._call(121, "knowledge_distill", {
+            "inputs": [dict(DISTILL_INPUTS[0])],
+            "task_state": "verified_milestone",
+            "domain": TARGET_DOMAIN,
+        }, session=DISTILL_SESSION, cwd=str(self.target_tmp / "project"))
+        self.assertTrue(revoked["isError"], revoked)
+        self.assertIn("inactive", revoked["content"][0]["text"])
+        self.assertEqual(self.ensure_calls, [])
+        self.assertFalse(self.marker.exists())
 
     def test_installed_runtime_without_selector_keeps_default_and_fails_explicit(self):
         import builtins

@@ -8,34 +8,32 @@
 
 ## 1. 入口与任务身份自动绑定
 
-### 知识按会话手动启用 vs 确定性工具默认常驻
-`mindie-agent-cc` 将确定性工程工具与按会话启用的知识飞轮明确解耦：
-- **远端昇腾开发（`remote-dev`）与事实状态查询（`mindie_status`）**：在普通会话中默认直接可用，无需输入 `/mindie-agent`，也与知识服务及社区贡献开关完全独立。
-- **领域知识与经验飞轮（`mindie-knowledge` 工具集与 `Stop` 采集）**：需在当前会话中显式输入一次 `/mindie-agent`（由 `UserPromptSubmit` / `UserPromptExpansion` 设置 `entry_enabled = 1`）。启用后在本会话后续轮次持续有效，直至执行 `/mindie-agent deactivate`；新建会话、`--fork-session` 分支会话与子代理均不会自动继承该授权。
-- **统一入口（`/mindie-agent` 或 `/mindie-agent:init`）**：激活当前会话的知识租约并提供交互式配置与状态管理。其 `UserPromptExpansion` 事件会自动传入当前任务 ID 与工作目录，直接复用已保存的偏好，仅在用户需要开启公开贡献但缺少目标仓库、账号或项目根目录时提示补充。
+### 全量工具静默默认就绪与语义 Skill 加载
+`mindie-agent-cc` 将默认就绪的研发工具集与显式授权的经验采集清晰分层：
+- **全量 MCP 服务默认就绪（`knowledge`、`remote`、`components`）**：插件启用期间在主会话、`Task` 子智能体与 `--fork-session` 分支会话中开箱即用，无需输入斜杠命令。只读检索（`knowledge_query`、`knowledge_explain`、`mindie_status`）绝不创建空的 `admission.sqlite3`；`knowledge_distill` 与作用域内 `knowledge_feedback` 在未显式停用时按需自动初始化会话租约（`not_before=0.0`）。
+- **静默语义 Skill（`skills/mindie-agent/SKILL.md`）**：声明 `user-invocable: false`，从斜杠菜单隐藏命令入口，仅在涉及昇腾 NPU 研发任务时由 Claude 按需语义加载。
 
-### `PreToolUse` 到 MCP 调用的确定性绑定
-在每次工具调用执行前，Claude Code 的 `PreToolUse` Hook 会提供原生 `tool_use_id`、会话 ID、工具名称与参数；紧接着发起的 MCP 请求会在 `_meta["claudecode/toolUseId"]` 中携带同一个 ID：
-- 适配层利用这一原生机制在内部自动完成“工具调用 ↔ 当前会话任务”的身份绑定，无需让大模型自己生成或传递会话参数。
-- 每次绑定仅消费一次，并严格校验工具名与参数摘要；缺失或不一致的绑定将直接拒绝（Fail-Closed）。
-- 消费 `PreToolUse` 绑定仅证明原生会话身份，不代表已开启知识系统：`knowledge_*` 工具还会进一步校验 `admission.knowledge_lease(session)`（`entry_enabled == 1`）后才会连接知识服务，而 `remote-dev` 与 `mindie_status` 仅凭该单次绑定即可直接执行。
-- 新建会话与 `--fork-session` 分支会话各自拥有独立绑定，绝不继承父任务的后台作业归属、手动激活租约或历史采集范围。
+### 可选 `PreToolUse` 身份提示与连接级回退
+在主会话工具调用前，被动的 `PreToolUse` Hook 记录原生 `tool_use_id`、会话 ID、工具名称与参数摘要，紧随其后的 MCP 请求携带 `_meta["claudecode/toolUseId"]`：
+- 若存在匹配的 `PreToolUse` 绑定记录，`mcp_server.py` 单次消费并严格校验工具名与参数摘要（拒绝重放或篡改绑定）。
+- 若未触发 `PreToolUse`（如 `Task` 子智能体或直接 MCP 调用），`mcp_server.py` 平滑回退至已验证的 `_meta`/环境会话 ID 或连接级 `_CONNECTION_SESSION_ID`。
+- 新建会话与 `--fork-session` 分支会话各自拥有独立会话身份，同时共享 `REMOTE_DEV_STATE_DIR`（`state_dir() / "remote"`）以支持子智能体轮询或停止父会话 `job_id`。
 
 ---
 
 ## 2. `Stop` Hook 与公开对话提取
 
-### 快速、非阻塞的 `Stop` 交接
+### 快速、同意优先的 `Stop` 交接
 `Stop` Hook 在极短的本地交接窗口内静默返回中性结果，绝不向业务大模型返回“继续执行”指令：
-- **当当前会话未调用 `/mindie-agent` 或社区贡献处于关闭状态时**：`Stop` 先检查 `admission.knowledge_lease(session)` 并直接短路返回 `{}`——不读取对话文件、不创建采集记录，也不发起任何整理模型调用。
-- **当当前会话已通过 `/mindie-agent` 启用且当前项目已开启社区贡献时**：`Stop` 校验当前 Claude Profile 下的会话文件、核对已保存的项目授权范围，并将采集引用写入本地队列交由后台 Worker 异步处理。
+- **当社区贡献未配置、已关闭或 `cwd` 超出授权 `project_roots` 时**：`Stop` 先校验 `mindie-consent.json` 与 `community_config`，在 `< 100ms` 内直接短路返回 `{}`——不打开或创建 `admission.sqlite3`、不读取对话文件、不创建采集记录，也不发起任何整理模型调用。
+- **当社区贡献已开启且当前项目处于授权 `project_roots` 内时**：`Stop` 校验当前 Claude Profile 下的会话文件、按需自动确保会话租约（`not_before=0.0`）、在首次采集前初始化缺失的 `state-v4.sqlite3`，并将采集引用写入本地队列交由后台 Worker 异步处理。
 - 写入采集队列仅代表完成本地准入；后续的分块索引生成与 GitHub PR 发布由后台 Worker 独立生成回执。任何失败或结果不确定的模型调用均保留真实记录，绝不静默重放。
 
 ### 确定性的公开消息筛选
-仅当前已激活 `/mindie-agent` 会话中用户与助手的公开可见文本会被纳入采集范围：
+仅已获授权会话中用户与助手的公开可见文本会被纳入采集范围：
 - 解析器仅提取带有效 `sessionId`、时间戳的公开文本块。
 - 内部思考过程（Thinking blocks）、工具调用输入与返回载荷、注入的 `isMeta` 消息、附件、系统记录与支线会话（Sidechains）均被确定性剔除。
-- 采集起点不早于 `max(created_at, activated_at)`——即“会话/Fork 创建时间”与“当前会话执行 `/mindie-agent` 激活时间”中的较晚者。
+- 采集起点不早于 `max(created_at, activated_at)`——即“会话/Fork 创建时间”与租约 `activated_at` 边界中的较晚者。
 
 ---
 

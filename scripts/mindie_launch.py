@@ -2,14 +2,15 @@
 """Stable native facade; each operation dispatches the selected complete helper.
 
 [Role]
-Top-level entrypoint invoked by Claude Code hooks (`SessionStart`,
-`UserPromptExpansion`, `PreToolUse`, `Stop`) and `.mcp.json` (`mcp-server`).
+Top-level entrypoint invoked by Claude Code hooks (`SessionStart`, `PreToolUse`,
+`Stop`) and `.mcp.json` (`knowledge`, `remote`, `components`).
 
 [Invariants]
 - Resolves the locked runtime binding (`install_state.py`) or runs cold-start
   `bootstrap.py` when required.
-- Never silently swallows helper failures; attaches redacted diagnostic
-  references to user-facing hook warnings.
+- Passive `PreToolUse` and `UserPromptSubmit` hooks never block tool execution or
+  create SQLite state when unconfigured; `Stop` checks sharing consent and
+  authorized `project_roots` before spawning capture workers.
 
 [Timeouts & Locks]
 - `HOOK_TOTAL = 10.0s`, `HOOK_LOCK_BUDGET = 2.0s`. SessionStart outer timeout
@@ -17,8 +18,8 @@ Top-level entrypoint invoked by Claude Code hooks (`SessionStart`,
   deadline is read before `--source` setup. Remote MCP: native wait + 60s grace.
 
 [Side-Effect Policy]
-- Dispatches into `entry.py`, `bridge.py`, `mcp_server.py`, or background
-  `maintenance.py` / `release_update.py` under the locked runtime interpreter.
+- Dispatches into `bridge.py`, `mcp_server.py`, or background `maintenance.py` /
+  `release_update.py` under the locked runtime interpreter.
 """
 
 from __future__ import annotations
@@ -32,13 +33,9 @@ import threading
 import time
 from contextlib import nullcontext
 from pathlib import Path
+import stat as stat_mod
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import bounded
-import diagnostic_support
-from install_state import (
-    InstallationUnavailable, LockTimeout, binding_snapshot, installed_binding,
-)
 
 HOOK_TOTAL = float(os.environ.get("MINDIE_HOOK_TOTAL_SECONDS") or 10.0)
 HOOK_LOCK_BUDGET = float(os.environ.get("MINDIE_HOOK_LOCK_BUDGET_SECONDS") or 2.0)
@@ -54,10 +51,13 @@ CONTROL_LIMIT = 1
 EOF_JOIN = 3.0
 OUTPUT_BUDGET = 1.0
 CALL_CHILD_BUDGET = 60.0
+KNOWLEDGE_SYNC_BUDGET = 300.0
+KNOWLEDGE_DISTILL_DEFAULT_BUDGET = 420.0
+KNOWLEDGE_HELPER_GRACE = 30.0
 ENTRY_CHILD_BUDGET = 180.0
 REMOTE_GRACE_SECONDS = 60.0
 REMOTE_MIN_BUDGET_SECONDS = 180.0
-REMOTE_MAX_OUTPUT = bounded.REMOTE_MAX_OUTPUT
+REMOTE_MAX_OUTPUT = 32 * 1024 * 1024
 REMOTE_NATIVE_MAX_WAIT_MS = {
     "remote_bash": 600000,
     "remote_bashoutput": 600000,
@@ -65,7 +65,34 @@ REMOTE_NATIVE_MAX_WAIT_MS = {
 }
 CONTROL_TOOLS = {"remote_job_status", "remote_job_stop", "remote_job_tail"}
 JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{2,95}$")
+_COMMUNITY_REPO_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
+_COMMUNITY_BRANCH_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,120}\Z")
+_REQUIRED_BINDING_KEYS = ("python", "runtime_scripts", "adapter_config", "base_config", "engine_config")
 CONFIG_ENV = "MINDIE_CC_CONFIG"
+
+
+def __getattr__(name: str):
+    if name == "bounded":
+        import bounded as mod
+
+        globals()["bounded"] = mod
+        return mod
+    if name == "diagnostic_support":
+        import diagnostic_support as mod
+
+        globals()["diagnostic_support"] = mod
+        return mod
+    if name in {"InstallationUnavailable", "LockTimeout", "binding_snapshot", "installed_binding"}:
+        import install_state as mod
+
+        for attr in ("InstallationUnavailable", "LockTimeout", "binding_snapshot", "installed_binding"):
+            globals().setdefault(attr, getattr(mod, attr))
+        return globals()[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def _attr(name: str):
+    return sys.modules[__name__].__dict__[name] if name in globals() else __getattr__(name)
 
 
 def _config_path() -> Path:
@@ -90,19 +117,95 @@ def _load_config():
 def _record_hook(stage, category, op="stop", exception=None):
     """One static diagnostic for an outer entry failure. Genuine off stays quiet."""
     try:
-        diagnostic_support.failure(
-            "hook", stage, category, exception=exception, reportable=(op != "stop"),
+        _attr("diagnostic_support").failure(
+            "hook", stage, category, exception=exception,
+            reportable=op not in {"stop", "pretool", "prompt", "expansion"},
         )
     except Exception:
         pass
 
 
+def _read_small_json(path: Path, limit: int = 65536) -> tuple[str | None, dict | None]:
+    try:
+        st = path.stat()
+        if not stat_mod.S_ISREG(st.st_mode) or st.st_size > limit:
+            return "unavailable", None
+        with path.open("rb") as stream:
+            blob = stream.read(limit + 1)
+    except FileNotFoundError:
+        return "missing", None
+    except TimeoutError:
+        raise
+    except OSError:
+        return "unavailable", None
+    if len(blob) > limit:
+        return "unavailable", None
+    try:
+        data = json.loads(blob.decode("utf-8-sig"))
+    except (UnicodeError, ValueError):
+        return "corrupt", None
+    if not isinstance(data, dict):
+        return "corrupt", None
+    return None, data
+
+
+def _fast_binding_snapshot(base_data: dict | None = None) -> dict:
+    if "binding_snapshot" in globals():
+        return globals()["binding_snapshot"]()
+    base = _config_path()
+    if base_data is None:
+        state, data = _read_small_json(base)
+        if state is not None:
+            raise ValueError("adapter configuration is unavailable")
+    else:
+        data = base_data
+    selected_raw = data.get("adapter_config")
+    if isinstance(selected_raw, str) and selected_raw and Path(selected_raw) != base:
+        s_state, s_data = _read_small_json(Path(selected_raw))
+        if s_state is not None:
+            raise ValueError("selected adapter binding is unavailable")
+        data = s_data
+    for key in _REQUIRED_BINDING_KEYS:
+        val = data.get(key)
+        if not isinstance(val, str) or not val or not os.path.isabs(val):
+            raise ValueError("selected adapter binding is incomplete")
+    if not Path(data["python"]).is_file() or not Path(data["runtime_scripts"]).is_dir():
+        raise ValueError("selected adapter binding is incomplete")
+    return data
+
+
+def _validate_community_doc(data: dict) -> tuple[bool, list[str]]:
+    if data.get("schema") != "mindie-community-config/1":
+        raise ValueError("community sharing configuration is invalid")
+    enabled = data.get("enabled")
+    if type(enabled) is not bool:
+        raise ValueError("community sharing configuration is invalid")
+    idle = data.get("idle_seconds")
+    if idle is not None and (type(idle) is not int or not 30 <= idle <= 86400):
+        raise ValueError("community sharing configuration is invalid")
+    repo = data.get("repository")
+    if repo is not None and (not isinstance(repo, str) or not _COMMUNITY_REPO_RE.fullmatch(repo)):
+        raise ValueError("community sharing configuration is invalid")
+    branch = str(data.get("branch") or "main")
+    if not _COMMUNITY_BRANCH_RE.fullmatch(branch) or ".." in branch:
+        raise ValueError("community sharing configuration is invalid")
+    roots = data.get("project_roots", [])
+    if not isinstance(roots, list) or not all(isinstance(r, str) and os.path.isabs(r) for r in roots):
+        raise ValueError("community sharing configuration is invalid")
+    if enabled:
+        gen = data.get("generation")
+        enabled_at = data.get("enabled_at")
+        if (not isinstance(gen, str) or not gen
+                or type(enabled_at) not in (int, float)
+                or not math.isfinite(enabled_at) or enabled_at <= 0):
+            raise ValueError("community sharing configuration is invalid")
+    return enabled, roots
+
+
 def _sharing_enabled(binding=None) -> bool:
     """True only for explicit enabled sharing; unreadable config is not off."""
-    from entry import _read_regular_json
-
     path = _config_path()
-    state, data = (None, binding) if binding is not None else _read_regular_json(path)
+    state, data = (None, binding) if binding is not None else _read_small_json(path)
     if state == "missing":
         return False
     if state is not None:
@@ -112,14 +215,63 @@ def _sharing_enabled(binding=None) -> bool:
         return False
     if not isinstance(community, str) or not os.path.isabs(community):
         raise ValueError("community configuration path is invalid")
-    from mindie_knowledge.loop.settings import load
-
-    sharing = load(community)
-    if sharing.state == "missing":
+    c_state, c_data = _read_small_json(Path(community))
+    if c_state == "missing":
         return False
-    if sharing.state not in {"enabled", "disabled"}:
+    if c_state is not None:
         raise ValueError("community sharing configuration is invalid")
-    return sharing.enabled
+    enabled, _ = _validate_community_doc(c_data)
+    return enabled
+
+
+_DEFAULT_SHARING_ENABLED = _sharing_enabled
+
+
+def _probe_stop_consent(binding: dict) -> tuple[bool, list[Path] | None]:
+    """Single pure-stdlib read of community + consent before reading Stop stdin."""
+    if _sharing_enabled is not _DEFAULT_SHARING_ENABLED:
+        return bool(_sharing_enabled(binding)), None
+    community = binding.get("community_config") if isinstance(binding, dict) else None
+    if community is None:
+        return False, None
+    if not isinstance(community, str) or not os.path.isabs(community):
+        raise ValueError("community configuration path is invalid")
+    c_state, c_data = _read_small_json(Path(community))
+    if c_state == "missing":
+        return False, None
+    if c_state is not None:
+        raise ValueError("community sharing configuration is invalid")
+    enabled, raw_roots = _validate_community_doc(c_data)
+    if not enabled:
+        return False, None
+    consent_ref = c_data.get("consent_config")
+    if not isinstance(consent_ref, str) or not consent_ref or not os.path.isabs(consent_ref):
+        return True, None
+    s_state, s_data = _read_small_json(Path(consent_ref))
+    if s_state == "missing":
+        return False, None
+    if s_state is not None or s_data.get("schema") != "mindie-consent/1":
+        return True, None
+    choice = s_data.get("choice")
+    if choice in {"disabled", "later", "read-only"}:
+        return False, None
+    if choice != "contribute":
+        return True, None
+    if not raw_roots:
+        return False, None
+    return True, [Path(r).expanduser().resolve(strict=False) for r in raw_roots]
+
+
+def _path_in_roots(candidate: str, roots: list[Path]) -> bool:
+    if not roots or not isinstance(candidate, str) or not os.path.isabs(candidate):
+        return False
+    try:
+        resolved = Path(candidate).expanduser().resolve(strict=False)
+        return any(resolved == root or resolved.is_relative_to(root) for root in roots)
+    except TimeoutError:
+        raise
+    except (OSError, ValueError):
+        return False
 
 
 class DispatchFailure(RuntimeError):
@@ -133,24 +285,22 @@ class DispatchFailure(RuntimeError):
 
 def _dispatch_failure(current, stage, category, exc, started):
     elapsed_ms = max(0, int((time.monotonic() - started) * 1000))
-    diagnostic = diagnostic_support.failure(
-        "mcp_dispatch",
-        stage,
-        category,
-        exception=exc,
-        revision=current.get("sha"),
-        elapsed_ms=elapsed_ms,
+    diagnostic = _attr("diagnostic_support").failure(
+        "mcp_dispatch", stage, category, exception=exc,
+        revision=current.get("sha"), elapsed_ms=elapsed_ms,
     )
     return DispatchFailure(diagnostic, stage)
 
 
 _CONNECTION_ID = os.environ.get("MINDIE_MCP_CONNECTION_ID") or f"cc-mcp-{os.getpid()}-{os.urandom(6).hex()}"
+_LAUNCH_CWD = os.getcwd()
 
 
 def _child_env(current: dict) -> dict:
     env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
     env["PYTHONIOENCODING"] = "utf-8"
     env["MINDIE_MCP_CONNECTION_ID"] = _CONNECTION_ID
+    env.setdefault("MINDIE_HOST_CWD", _LAUNCH_CWD)
     env[CONFIG_ENV] = current["adapter_config"]
     adapter = json.loads(Path(current["adapter_config"]).read_text(encoding="utf-8"))
     env.update(adapter.get("diagnostics_context", {}))
@@ -177,28 +327,8 @@ def _hook_warning(*, unavailable=False) -> int:
     return 0
 
 
-def _pretool_deny(reason: str, code: int = 2) -> int:
-    text = f"MindIE PreToolUse bind failed: {reason}"
-    print(json.dumps({"systemMessage": text, "hookSpecificOutput": {
-        "hookEventName": "PreToolUse", "permissionDecision": "deny",
-        "permissionDecisionReason": text}}, ensure_ascii=False), flush=True)
-    return int(code) or 2
-
-
 def _session_start_incomplete() -> int:
     print(json.dumps({"systemMessage": "MindIE startup maintenance is incomplete."}))
-    return 0
-
-
-def _expansion_error(text: str) -> int:
-    payload = {
-        "additionalContext": text,
-        "hookSpecificOutput": {
-            "hookEventName": "UserPromptExpansion",
-            "additionalContext": text,
-        },
-    }
-    print(json.dumps(payload, ensure_ascii=False), flush=True)
     return 0
 
 
@@ -245,28 +375,31 @@ def _read_hook_stdin(deadline):
 
 
 def _hook_can_start_service(op, raw):
-    if op == "stop":
+    return op == "stop"
+
+
+def _stop_event_in_scope(raw: bytes, roots: list[Path] | None) -> bool:
+    if not raw:
         return True
-    if op != "expansion":
-        return False
     try:
-        text = raw.decode("utf-8-sig") if isinstance(raw, (bytes, bytearray)) else str(raw).lstrip("\ufeff")
-        event = json.loads(text)
-    except (ValueError, UnicodeDecodeError):
-        return False
-    if not (
-        isinstance(event, dict)
-        and event.get("expansion_type") == "slash_command"
-        and event.get("command_source") == "plugin"
-    ):
-        return False
-    name = event.get("command_name")
-    if name in {"mindie-agent", "mindie-agent:mindie-agent"}:
-        first = ((event.get("command_args") or "").strip().split(None, 1) or [""])[0]
-        if first in {"status", "deactivate", "recover", "sharing-disable", "reporting-status"}:
-            return False
+        event = json.loads(raw.decode("utf-8-sig"))
+    except (UnicodeDecodeError, ValueError):
         return True
-    return name in {"mindie-agent:init", "mindie-agent:sharing-enable"}
+    if not isinstance(event, dict):
+        return True
+    if event.get("hook_event_name") not in {None, "Stop"}:
+        return False
+    if event.get("stop_hook_active") not in {None, False}:
+        return False
+    agent_id = event.get("agent_id")
+    if isinstance(agent_id, str) and agent_id.strip():
+        return False
+    if roots is not None:
+        for candidate_dir in (event.get("cwd"), event.get("workspace_root")):
+            if isinstance(candidate_dir, str) and candidate_dir.strip():
+                if not _path_in_roots(candidate_dir, roots):
+                    return False
+    return True
 
 
 def _runtime(binding):
@@ -275,49 +408,70 @@ def _runtime(binding):
 
 
 def _verify_installation(expected=None, *, timeout=5.0):
-    with installed_binding(expected, timeout=timeout) as value:
+    with _attr("installed_binding")(expected, timeout=timeout) as value:
         return value
 
 
 def _hook(op: str) -> int:
-    deadline = time.monotonic() + HOOK_TOTAL
-    if op == "stop" and not _config_path().exists():
+    if op in {"expansion", "prompt", "user-prompt-submit"}:
         return _fail_open()
-    raw = _read_hook_stdin(deadline)
+    deadline = time.monotonic() + HOOK_TOTAL
+    if not _config_path().exists():
+        return _fail_open()
     stage = "installation"
     receipt = {}
     try:
-        admission = (
-            nullcontext(binding_snapshot()) if op == "stop"
-            else installed_binding(timeout=min(HOOK_LOCK_BUDGET, max(0, deadline - time.monotonic())))
-        )
-        with admission as binding:
-            stage = "sharing-probe"
-            if op == "stop" and not _sharing_enabled(binding):
+        if op == "stop":
+            if "binding_snapshot" in globals():
+                binding = globals()["binding_snapshot"]()
+                stage = "sharing-probe"
+                should_run, roots = _probe_stop_consent(binding)
+                if not should_run:
+                    return _fail_open()
+            else:
+                state, base_data = _read_small_json(_config_path())
+                if state == "missing":
+                    return _fail_open()
+                if state is not None:
+                    raise ValueError("adapter configuration is unavailable")
+                stage = "sharing-probe"
+                should_run, roots = _probe_stop_consent(base_data)
+                if not should_run:
+                    return _fail_open()
+                stage = "installation"
+                binding = _fast_binding_snapshot(base_data)
+            raw = _read_hook_stdin(deadline)
+            if not _stop_event_in_scope(raw, roots):
                 return _fail_open()
-            selected = _runtime(binding)
+            admission = nullcontext(binding)
+        else:
+            raw = _read_hook_stdin(deadline)
+            admission = _attr("installed_binding")(
+                timeout=min(HOOK_LOCK_BUDGET, max(0, deadline - time.monotonic()))
+            )
+        with admission as active_binding:
+            selected = _runtime(active_binding)
             script = Path(selected["scripts"]) / "bridge.py"
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise TimeoutError("hook input deadline exhausted")
             stage = "helper_failed"
-            out = bounded.run(
+            out = _attr("bounded").run(
                 [selected["python"], str(script), op], raw, timeout=remaining,
                 env=_child_env(selected), cwd=str(script.parent),
                 check=op != "pretool", receipt=receipt,
                 allow_service=_hook_can_start_service(op, raw),
             )
-        code = int(receipt.get("returncode") or 0) if op == "pretool" else 0
+        if op == "pretool" and int(receipt.get("returncode") or 0):
+            _record_hook("pretool_helper", "child_failure", op)
+            return _fail_open()
         try:
             value = json.loads(out.strip()) if (out or "").strip() else None
         except ValueError:
             value = None
-        if op == "pretool" and code:
-            if isinstance(value, dict) and value:
-                print(json.dumps(value, ensure_ascii=False), flush=True)
-                return code
-            return _pretool_deny("helper exited without a JSON receipt", code)
         if not isinstance(value, dict):
+            if op == "pretool":
+                return _fail_open()
             raise ValueError("hook result must be one object")
         print(json.dumps(value, ensure_ascii=False), flush=True)
         return 0
@@ -325,13 +479,11 @@ def _hook(op: str) -> int:
         category = ("timeout" if isinstance(exc, TimeoutError) else
                     "child_failure" if stage == "helper_failed" else "configuration")
         _record_hook(stage, category, op, exc)
-        if isinstance(exc, LockTimeout):
-            return _hook_warning(unavailable=True)
         if op == "pretool":
-            return _pretool_deny(f"{type(exc).__name__}: {exc}",
-                                 int(receipt.get("returncode") or 0) or 2)
-        if op == "expansion":
-            return _expansion_error("MindIE entry failed; inspect reporting-status.")
+            return _fail_open()
+        lock_timeout_cls = globals().get("LockTimeout")
+        if lock_timeout_cls is not None and isinstance(exc, lock_timeout_cls):
+            return _hook_warning(unavailable=True)
         return _hook_warning()
 
 
@@ -439,6 +591,17 @@ def remote_budget(name, arguments=None, *, native_wait_ms=None,
     return max(float(minimum), wait + float(grace))
 
 
+def _knowledge_distill_budget() -> float:
+    try:
+        from mindie_knowledge.loop import summary_budget
+
+        inner = float(summary_budget.distill_rpc_timeout())
+    except Exception:
+        worker_sec = float(os.environ.get("MINDIE_SUMMARY_TIMEOUT_SECONDS") or 315.0)
+        inner = max(KNOWLEDGE_DISTILL_DEFAULT_BUDGET, worker_sec + 105.0)
+    return inner + KNOWLEDGE_HELPER_GRACE
+
+
 def _dispatch_budget(surface, message):
     name = _local_tool_name(message)
     arguments = (message.get("params") or {}).get("arguments") or {}
@@ -451,15 +614,18 @@ def _dispatch_budget(surface, message):
             milliseconds = 120000
         return milliseconds / 1000 + 30.0
     if surface == "knowledge" and name == "knowledge_sync":
-        return 150.0
+        return KNOWLEDGE_SYNC_BUDGET + KNOWLEDGE_HELPER_GRACE
+    if surface == "knowledge" and name == "knowledge_distill":
+        return _knowledge_distill_budget()
     if name == "mindie_entry":
         return ENTRY_CHILD_BUDGET
     return CALL_CHILD_BUDGET
 
 
 def _dispatch(surface: str, raw: bytes, ident, cancel=None, *, binding=None, deadline=None):
+    bounded_mod = _attr("bounded")
     if cancel is not None and cancel.is_set():
-        raise bounded.CommandCancelled("command cancelled")
+        raise bounded_mod.CommandCancelled("command cancelled")
     selected = {}
     started = time.monotonic()
     payload = raw if raw.endswith(b"\n") else raw + b"\n"
@@ -470,7 +636,7 @@ def _dispatch(surface: str, raw: bytes, ident, cancel=None, *, binding=None, dea
                          "knowledge_query", "knowledge_explain", "knowledge_feedback",
                          "knowledge_distill"})
     try:
-        with installed_binding(binding) as current:
+        with _attr("installed_binding")(binding) as current:
             selected = _runtime(current)
             script = Path(selected["scripts"]) / "mcp_server.py"
             process = {}
@@ -480,7 +646,7 @@ def _dispatch(surface: str, raw: bytes, ident, cancel=None, *, binding=None, dea
                 if deadline is None
                 else max(0.01, deadline - time.monotonic())
             )
-            out = bounded.run(
+            out = bounded_mod.run(
                 [selected["python"], str(script), surface, "--once"], payload,
                 timeout=timeout,
                 env=_child_env(selected), cwd=str(script.parent), cancel=cancel,
@@ -489,17 +655,17 @@ def _dispatch(surface: str, raw: bytes, ident, cancel=None, *, binding=None, dea
                 **({"max_output": KNOWLEDGE_MAX_OUTPUT} if surface == "knowledge"
                    else {"max_output": REMOTE_MAX_OUTPUT}),
             )
-    except bounded.CommandCancelled:
+    except bounded_mod.CommandCancelled:
         raise
-    except (TimeoutError, bounded.CommandTimedOut):
+    except (TimeoutError, bounded_mod.CommandTimedOut):
         raise
-    except (InstallationUnavailable, LockTimeout) as exc:
+    except (_attr("InstallationUnavailable"), _attr("LockTimeout")) as exc:
         raise _dispatch_failure(selected, "installation_unavailable", "configuration",
                                 exc, started) from None
     except Exception as exc:
         raise _dispatch_failure(selected, "helper_failed", "child_failure", exc, started) from None
     if cancel is not None and cancel.is_set():
-        raise bounded.CommandCancelled("command cancelled")
+        raise bounded_mod.CommandCancelled("command cancelled")
     try:
         response = json.loads(out)
     except ValueError:
@@ -567,18 +733,18 @@ def main(argv=None) -> int:
             _record_hook("installation", "timeout", op="session-start")
             return _session_start_incomplete()
         try:
-            with installed_binding(timeout=max(0.0, deadline - time.monotonic())) as binding:
+            with _attr("installed_binding")(timeout=max(0.0, deadline - time.monotonic())) as binding:
                 from harness import require_binding_support
                 require_binding_support(binding)
                 selected = _runtime(binding)
                 script = Path(selected["scripts"]) / "maintenance.py"
                 from maintenance import TOTAL_BUDGET
                 remaining = max(0.01, deadline - time.monotonic())
-                raw = bounded.run([selected["python"], str(script)], event,
-                                  timeout=min(remaining, TOTAL_BUDGET),
-                                  env=_child_env(selected), cwd=str(script.parent))
+                raw = _attr("bounded").run([selected["python"], str(script)], event,
+                                           timeout=min(remaining, TOTAL_BUDGET),
+                                           env=_child_env(selected), cwd=str(script.parent))
             result = json.loads(raw)
-        except (InstallationUnavailable, LockTimeout):
+        except (_attr("InstallationUnavailable"), _attr("LockTimeout")):
             return _hook_warning(unavailable=True)
         except Exception as exc:
             category = "timeout" if isinstance(exc, TimeoutError) else "unavailable"
@@ -587,7 +753,7 @@ def main(argv=None) -> int:
         if result["status"] != "ready":
             return _session_start_incomplete()
         return _fail_open()
-    if kind == "hook" and name in {"expansion", "pretool", "stop"}:
+    if kind == "hook" and name in {"expansion", "prompt", "user-prompt-submit", "pretool", "stop"}:
         return _hook(name)
     if kind == "mcp" and name in {"knowledge", "remote", "components"}:
         return _mcp(name)

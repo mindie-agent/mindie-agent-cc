@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/mindie-agent/mindie-agent-cc/releases"><img src="https://img.shields.io/badge/release-v0.1.28-0F766E.svg" alt="Release v0.1.28"></a>
+  <a href="https://github.com/mindie-agent/mindie-agent-cc/releases"><img src="https://img.shields.io/badge/release-v0.1.29-0F766E.svg" alt="Release v0.1.29"></a>
   <a href="harness-compatibility.json"><img src="https://img.shields.io/badge/Claude_Code-%3E%3D2.1.269_%3C3.0.0-D97757.svg" alt="Claude Code >=2.1.269 <3.0.0"></a>
   <a href="pyproject.toml"><img src="https://img.shields.io/badge/python-3.13-3776AB.svg" alt="Python 3.13"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-0F766E.svg" alt="License: MIT"></a>
@@ -20,64 +20,64 @@
   <b>中文</b> | <a href="README.en.md">English</a> ·
   <a href="#快速开始">快速开始</a> ·
   <a href="#装上之后能做什么触发方式与使用示例">应用场景</a> ·
-  <a href="#日常使用与命令参考统一入口-mindie-agent">命令参考</a> ·
+  <a href="#日常使用与工作流参考">日常使用</a> ·
   <a href="#架构与组件边界">系统架构</a> ·
   <a href="docs/README.md">技术文档</a>
 </p>
 
 ---
 
-**MindIE Agent for Claude Code**（`mindie-agent-cc`）是 [MindIE Agent](https://github.com/mindie-agent/mindie-agent) 面向 Claude Code 的原生插件，服务于**昇腾（Ascend）NPU 上的 AI Infra 设计、开发与测试全流程**。当前 `v0.1.28`（配套主产品 `0.1.13`）已交付三大核心能力：**本地与社区知识库检索及隐私脱敏**（优先覆盖 `vLLM-Ascend` 特性开发与 `AscendC` / `Triton` 算子工程）、**远端 SSH / Docker 开发与 NPU 状态巡检**，以及**统一故障诊断与脱敏上报**；更多昇腾基础软件领域将随演进路线图持续扩展。
+**MindIE Agent for Claude Code**（`mindie-agent-cc`）是 [MindIE Agent](https://github.com/mindie-agent/mindie-agent) 面向 Claude Code 的原生插件，服务于**昇腾（Ascend）NPU 上的 AI Infra 设计、开发与测试全流程**。当前 `v0.1.29`（配套主产品 `0.1.13`）已交付三大核心能力：**本地与社区知识库检索及隐私脱敏**（覆盖 `vLLM-Ascend`、`xLLM`、`MindIE-SD`、`AscendC` / `Triton` 算子与 `CANN` 工程）、**远端 SSH / Docker 开发与 NPU 状态巡检**，以及**统一故障诊断与脱敏上报**。
 
-项目设计遵循 [MindIE Agent 工程设计原则](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.md)：**领域知识与 Skill 体系通过 `/mindie-agent` 手动按需唤醒**，不干扰非昇腾常规任务；**`remote-dev` 远端昇腾开发与测试工具默认常驻自动触发**；所有状态与报错真实透明，不做静默降级或盲目重试。
+项目设计遵循 [MindIE Agent 工程设计原则](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.md)：**插件启用后全量工具静默默认就绪（Silent Default-On）**，无需输入任何斜杠命令或前置会话绑定；语义 Skill（`user-invocable: false`）仅在涉及昇腾 NPU 研发任务时由 Claude 按需加载；社区经验采集严格遵循显式 Opt-In 与授权目录边界，所有状态与报错真实透明，不做静默降级或盲目重试。
 
 ---
 
 ## 装上之后能做什么？（触发方式与使用示例）
 
-MindIE Agent 采用**「领域知识与 Skill 手动按需触发 + 远端开发测试工具默认常驻触发」**的设计：
+MindIE Agent 采用**「全量 MCP 工具默认就绪 + 昇腾语义 Skill 按需静默加载 + 社区经验显式授权后台沉淀」**的设计：
 
 | 能力模块 | 触发方式 | 什么时候用？ | 怎么用？ |
 | :--- | :--- | :--- | :--- |
-| **经验、知识库与 Skill 系统**<br/>（`mindie-knowledge` + `mindie-agent` Skill） | **🎯 当前会话手动触发** | 开展昇腾 AI Infra 架构设计、`vLLM-Ascend` 特性开发、`AscendC` / `Triton` 算子实现、单测/精度测试构建、性能调优或问题定位时 | 在当前会话中显式输入一次 **`/mindie-agent` + 你的需求描述**，即可在本会话后续轮次持续启用知识检索（`knowledge_query` / `knowledge_explain`）、反馈（`knowledge_feedback`）、蒸馏（`knowledge_distill`）与同步（`knowledge_sync`）；输入 `/mindie-agent deactivate` 可在当前会话关闭 |
-| **远端昇腾 NPU 开发与本地组件工具**<br/>（`remote` + `components` MCP 服务 + `mindie_status`） | **⚡ 默认自动触发** | 日常需要将本地代码同步到远端昇腾服务器/容器、跑编译与测试、查看 `npu-smi`、管理机器/NPU 租约、分析采集数据、做仿真测算或导出本地诊断包时 | **无需输入 `/mindie-agent`**，直接用自然语言描述操作即可 |
-| **研发经验沉淀与社区共建**<br/>（`Stop` 后台采集 + Gitleaks 脱敏） | **🔄 已启用会话后台自动运行** | 希望将有价值的架构设计、算子开发、测试验证或调优经验脱敏沉淀回开源知识库时 | **授权一次配置，按会话生效**——首次配置开启社区贡献后，在已通过 `/mindie-agent` 启用知识系统的会话中，每次回合结束自动在后台完成本地脱敏与知识 PR 整理；未调用 `/mindie-agent` 的普通会话不触发后台采集 |
+| **经验、知识库与语义 Skill 系统**<br/>（`mindie-knowledge` + `skills/mindie-agent`） | **⚡ 静默默认就绪 & 语义自动加载** | 开展昇腾 AI Infra 架构设计、`vLLM-Ascend` / `xLLM` / `MindIE-SD` 特性开发、`AscendC` / `Triton` 算子实现、单测/精度测试构建、性能调优或问题定位时 | **无需任何斜杠命令**，直接用自然语言描述昇腾研发任务即可；主会话、`Task` 子智能体与分支会话均可直接调用 `knowledge_query`、`knowledge_explain`、`knowledge_feedback`、`knowledge_distill`、`knowledge_sync` 与 `mindie_status` |
+| **远端昇腾 NPU 开发与本地组件工具**<br/>（`remote` + `components` MCP 服务） | **⚡ 默认自动触发** | 日常需要将本地代码同步到远端昇腾服务器/容器、跑编译与测试、查看 `npu-smi`、管理机器/NPU 租约、分析采集数据、做仿真测算或导出本地诊断包时 | **无需额外命令**，直接用自然语言描述操作即可 |
+| **研发经验沉淀与社区共建**<br/>（`Stop` 后台采集 + Gitleaks 脱敏） | **🔄 显式开启且在授权目录内自动运行** | 希望将有价值的架构设计、算子开发、测试验证或调优经验脱敏沉淀回开源知识库时 | **授权一次配置，授权目录内无感生效**——开启社区贡献并绑定 `project_roots` 后，位于授权目录内的会话回合结束时自动完成本地脱敏与知识 PR 整理；未开启或超出授权目录时在 `< 100ms` 内静默退出且零 SQLite 副作用 |
 
-### 场景 1：输入 `/mindie-agent` 唤醒知识库与 Skill 辅助设计、开发与测试（手动触发）
+### 场景 1：自然语言直接唤醒知识库与语义 Skill 辅助设计、开发与测试
 > **痛点**：在昇腾上设计新特性、开发 `AscendC` / `Triton` 算子或编写 `vLLM-Ascend` 测试时，缺少现成的架构规范、算子接口约束与历史经验参考。  
 > **用法示例（直接复制发给 Claude Code）**：
 > ```text
-> /mindie-agent 我准备在 vllm-ascend 中为新模型设计并接入一个自定义融合算子（支持 Triton / AscendC 实现）并补齐单元与精度测试，请结合知识库里的现有设计规范和开发经验帮我制定实现方案。
+> 我准备在 vllm-ascend 中为新模型设计并接入一个自定义融合算子（支持 Triton / AscendC 实现）并补齐单元与精度测试，请结合知识库里的现有设计规范和开发经验帮我制定实现方案。
 > ```
-> **会发生什么**：输入 `/mindie-agent` 后，插件会唤醒 `mindie-agent` Skill 与本地同步的 [`knowledge-vllm-ascend`](https://github.com/mindie-agent/knowledge-vllm-ascend) 知识库，检索出带有**适用版本、验证证据和已知限制**的真实设计、开发与测试案例作为参考。
+> **会发生什么**：Claude Code 自动按需加载昇腾研发工作流规范并检索本地同步的 [`knowledge-vllm-ascend`](https://github.com/mindie-agent/knowledge-vllm-ascend) 等分级知识库，返回带有**适用条件、验证证据和已知限制**的真实设计、开发与测试单元。
 
 ### 场景 2：日常对话直接操作远端昇腾 NPU 服务器与容器（`remote-dev` 默认自动触发）
 > **痛点**：开发机是 Mac 或 Windows 笔记本，而昇腾 NPU 环境在远端服务器或容器里，频繁手动同步代码、编译算子、看长耗时测试日志非常繁琐。  
-> **用法示例（无需斜杠命令，直接用自然语言发给 Claude Code）**：
+> **用法示例（直接用自然语言发给 Claude Code）**：
 > ```text
 > 帮我连上远端 910B 服务器的 vllm_dev 容器，看看当前 NPU 显存占用，然后把我本地新写的算子实现和 rotary_embedding 单测同步过去跑一下完整的 pytest 验证。
 > ```
 > **会发生什么**：内置的 `remote-dev` MCP 服务作为常驻工具集，会在识别到远端开发意图时**默认自动触发**，完成文件读写、补丁同步、长耗时编译/测试后台托管与实时日志轮询。即使不开启知识库服务或社区贡献，`remote-dev` 也能完全独立工作。
 
-#### `components` 本地诊断与分析组件工具（默认常驻，无需 `/mindie-agent`）
+#### `components` 本地诊断与分析组件工具（默认常驻）
 
-插件通过 `components` MCP 服务在所有会话中默认提供 5 个工具，无需先输入 `/mindie-agent`（交互式终端看板 `npu-top` 仅供人工在终端使用，不注册为 MCP 工具）：
+插件通过 `components` MCP 服务在所有会话与子智能体中默认提供以下工具（交互式终端看板 `npu-top` 仅供人工在终端使用，不注册为 MCP 工具）：
 
 | 工具名 | 用途 | 安装要求 | 调用参数与返回结果 |
 | :--- | :--- | :--- | :--- |
 | `diagnostics_status`<br/>`diagnostics_bundle` | 查看本地诊断与上报状态，或导出脱敏后的本地诊断包（仅保存在本地，不会启动上报进程或上传到 GitHub） | **内置可用**（直接使用插件自带的 `mindie-diagnostics` 环境） | `diagnostics_status` 可选传 `config`；`diagnostics_bundle` 必传 `root`（可选 `operation_id`、`output`） |
-| `coordinator`<br/>`profiler`<br/>`sim` | 调用 `mindie-coordinator`（设备探测与租约）、`mindie-profiler`（采集数据剖析）、`mindie-sim`（性能仿真测算）命令行工具 | **按需独立安装**（插件默认不自带）。先查找配置的 Python 环境，再查 `PATH`，也可在 `${XDG_CONFIG_HOME:-$HOME/.config}/mindie-agent/cc.json` 的 `component_commands` 中指定 | 传入参数数组 `argv`（如 `["--help"]`），可选绝对路径 `cwd`；返回 `component`、`status`、`exit_code`、`stdout`、`stderr`（仅在 `stdout` 为 JSON 时附带 `result`） |
+| `coordinator`<br/>`debugger`<br/>`profiler`<br/>`sim` | 调用 `mindie-coordinator`（设备探测与租约）、`mindie-debugger`（故障分诊与精度定位）、`mindie-profiler`（采集数据剖析）、`mindie-sim`（性能仿真测算）命令行工具 | **按需独立安装或随锁定运行时提供**。先查找配置的 Python 环境，再查 `PATH`，也可在 `${XDG_CONFIG_HOME:-$HOME/.config}/mindie-agent/cc.json` 的 `component_commands` 中指定 | 传入参数数组 `argv`（如 `["--help"]`），可选绝对路径 `cwd`；返回 `component`、`status`、`exit_code`、`stdout`、`stderr`（仅在 `stdout` 为 JSON 时附带 `result`） |
 
-调用 `coordinator`、`profiler`、`sim` 时，相对路径默认按当前会话的工作目录解析；若对应组件未安装，工具会直接返回明确提示，不会自动安装或改动 Claude 配置。涉及物理 NPU 采集或计时的操作仍需先申请对应设备租约。单次调用超时默认 120 秒（`timeout_ms=120000`）、最多可设 10 分钟（`600000`）；输出默认最多 64 KiB（`max_output_tokens=16384`）、最多可设 1 MiB（`262144`），两路输出合计按每 token 4 字节计，大报告建议保存到文件。
+调用组件工具时，相对路径默认按当前会话的工作目录解析；若对应组件未安装，工具会直接返回明确提示，不会自动安装或改动 Claude 配置。涉及物理 NPU 采集或计时的操作仍需先申请对应设备租约。单次调用超时默认 120 秒（`timeout_ms=120000`）、最多可设 10 分钟（`600000`）；输出默认最多 64 KiB（`max_output_tokens=16384`）、最多可设 1 MiB（`262144`），两路输出合计按每 token 4 字节计，大报告建议保存到文件。
 
 ### 场景 3：研发经验后台沉淀与统一贡献开关（一次配置，无日常额外操作）
 > **痛点**：完成了一项复杂的特性设计、算子适配或深度调优后，关掉终端经验就散落了；想分享又担心泄露机器 IP、Token 或私有路径。  
 > **用法示例（像平时一样正常开展研发与测试即可）**：
 > ```text
-> /mindie-agent 帮我结合知识库和远端 NPU 容器完成当前 vllm-ascend 自定义算子的编译与精度对齐验证，并跑通对应的单测。
+> 帮我结合知识库和远端 NPU 容器完成当前 vllm-ascend 自定义算子的编译与精度对齐验证，并跑通对应的单测。
 > ```
-> **会发生什么**：社区共享**默认关闭**。当你显式开启社区贡献后，保存的授权配置会跨会话持久生效；在任何通过 `/mindie-agent` 启用了知识系统的会话中，每次回合结束（`Stop`）时，插件都会在后台提取该会话自激活起的公开可见对话，通过本地确定性规则与 Gitleaks 完成脱敏，生成检索索引并自动整理为开源知识 PR，无需重复确认授权或额外执行收尾命令（未调用 `/mindie-agent` 的普通会话在 `Stop` 阶段直接短路跳过，不读取对话或配置）。
-> - **统一贡献开关（适配器配置文件同目录的 `mindie-consent.json`）**：社区知识贡献与自动工具故障上报共用同一个持久化开关。显式开启（`contribute`）会配置知识共享并启动原生后台 reporter；关闭（`disabled`）会同时停止两条路径的后续外发。已保存的有效设置（包括 `disabled` / `read-only` / `later`）在升级后直接沿用、不重复弹窗；仅当检测到旧版仅知识 `contribute` 记录返回 `needs_choice` 时，才会在 `/mindie-agent` 中向你确认一次统一选择（不会分开询问知识与故障授权，也不会在每次任务中重复确认）。系统严格区分**本地授权配置已写入**、**后台 reporter 进程运行中**与**外部 GitHub Issue/PR 已实际创建**三种状态。
+> **会发生什么**：社区共享**默认关闭**。当你显式开启社区贡献后，保存的授权配置会跨会话持久生效；在位于授权 `project_roots` 目录内的会话中，每次回合结束（`Stop`）时，插件会在后台自动确保会话租约并提取公开可见对话，通过本地确定性规则与 Gitleaks 完成脱敏，生成检索索引并自动整理为开源知识 PR，无需重复确认授权或额外执行收尾命令（未配置、已关闭或超出授权目录的会话在 `Stop` 阶段直接快速短路退出，不创建 SQLite 状态文件）。
+> - **统一贡献开关（适配器配置文件同目录的 `mindie-consent.json`）**：社区知识贡献与自动工具故障上报共用同一个持久化开关。显式开启（`contribute`）会配置知识共享并启动原生后台 reporter；关闭（`disabled`）会同时停止两条路径的后续外发。已保存的有效设置（包括 `disabled` / `read-only` / `later`）在升级后直接沿用、不重复弹窗。系统严格区分**本地授权配置已写入**、**后台 reporter 进程运行中**与**外部 GitHub Issue/PR 已实际创建**三种状态。
 > - 关于共享范围、本地脱敏边界与公开 Git 历史的详细说明，请参阅 **[用户须知](docs/install/user-notice.md)**。
 > - 如需在本地快速搭建 `vllm` + `vllm-ascend` 多任务 Git Worktree 协同目录，可参考 **[工作区配置指南](docs/install/workspace-setup.md)** 按需初始化 [vllm-ascend-workspace](https://github.com/mindie-agent/vllm-ascend-workspace.git)。
 
@@ -112,7 +112,7 @@ MindIE Agent 采用**「领域知识与 Skill 手动按需触发 + 远端开发�
    claude --version
    ```
    - **硬性门禁（严禁跳过或静默忽略，且严禁修改宿主机全局或系统级 Git 配置）**：若未安装 `gh`，请先协助安装（macOS：`brew install gh`；Windows：`winget install --id GitHub.cli`；Ubuntu / WSL：`sudo apt update && sudo apt install -y gh`）。账号读取成功时复用已有认证；需要登录时按 [GitHub 登录引导](docs/install/github-authentication.md) 选择方式：普通网络使用浏览器，企业网络或浏览器授权受阻时优先 Token。已有 Token 就在 `gh` 隐藏输入提示中粘贴（或使用已提供的私有文件），没有则引导创建。仅使用进程级 `GIT_CONFIG_COUNT`（及企业证书场景下的 `UV_SYSTEM_CERTS=true UV_NATIVE_TLS=true`）验证传输通道，切勿污染宿主机全局 Git 配置。
-   - 确认 `claude --version` 满足当前发行版 `v0.1.28` 声明支持的兼容版本范围：`>= 2.1.269 < 3.0.0`（定义于 [`harness-compatibility.json`](harness-compatibility.json)）。
+   - 确认 `claude --version` 满足当前发行版 `v0.1.29` 声明支持的兼容版本范围：`>= 2.1.269 < 3.0.0`（定义于 [`harness-compatibility.json`](harness-compatibility.json)）。
    - 若在 **Linux 或 Windows WSL** 下使用后台知识服务，请额外执行 `systemctl --user show --property=Version` 确认 `systemd >= 254` 且可访问（WSL 内须使用 Linux 原生 `claude`、`git`、`uv` 与 `gh`）。
 
 2. **可选支持与贡献准备**：
@@ -120,7 +120,7 @@ MindIE Agent 采用**「领域知识与 Skill 手动按需触发 + 远端开发�
 
 3. **添加插件源、安装并完成无模型冷启动初始化**：
    ```sh
-   claude plugin marketplace add "https://github.com/mindie-agent/mindie-agent-cc.git#v0.1.28"
+   claude plugin marketplace add "https://github.com/mindie-agent/mindie-agent-cc.git#v0.1.29"
    claude plugin install mindie-agent@mindie-agent-cc --scope user
    UV_SYSTEM_CERTS=true UV_NATIVE_TLS=true claude --init-only
    ```
@@ -130,11 +130,11 @@ MindIE Agent 采用**「领域知识与 Skill 手动按需触发 + 远端开发�
    ```sh
    claude plugin list --json
    claude mcp list
-   SETUP_PY=$(python3 -c "import glob, os; p = sorted(glob.glob(os.path.expanduser('~/.claude/plugins/**/mindie-agent*/scripts/setup.py'), recursive=True)); print(p[-1] if p else '')")
+   SETUP_PY=$(python3 -c "import glob, os; p = sorted(f for f in glob.glob(os.path.expanduser('~/.claude/plugins/**/scripts/setup.py'), recursive=True) if 'mindie-agent' in f); print(p[-1] if p else '')")
    uv run --no-project --python 3.13 python "$SETUP_PY" sharing --status
    ```
-   - 确认 `claude plugin list --json` 中包含 `mindie-agent@mindie-agent-cc`（版本 `0.1.28`，状态已启用），并检查 `setup.py sharing --status` 返回的 JSON（含 `needs_onboarding_prompt` 状态）。
-   - 确认 `claude mcp list` 中插件的 `knowledge`、`remote`、`components` 三个 MCP 服务均显示 `Connected`。其中 `components` 显示 `Connected` 表示 MCP 工具入口已就绪；调用 `coordinator`、`profiler`、`sim` 时，对应可选 CLI 仍需已安装或在适配器配置中指定路径。验证通过后，向用户汇报已验证的 GitHub 账号（`$GH_USER`）及插件就绪状态。
+   - 确认 `claude plugin list --json` 中包含 `mindie-agent@mindie-agent-cc`（版本 `0.1.29`，状态已启用），并检查 `setup.py sharing --status` 返回的 JSON（含 `needs_onboarding_prompt` 状态）。
+   - 确认 `claude mcp list` 中插件的 `knowledge`、`remote`、`components` 三个 MCP 服务均显示 `Connected`。验证通过后，向用户汇报已验证的 GitHub 账号（`$GH_USER`）及插件就绪状态。
 
    验证成功后立即继续第 5 步，完成首次交互式配置后一起汇报安装结果。
 
@@ -167,19 +167,19 @@ MindIE Agent 采用**「领域知识与 Skill 手动按需触发 + 远端开发�
 
 ---
 
-## 日常使用与命令参考（统一入口 `/mindie-agent`）
+## 日常使用与工作流参考
 
-MindIE Agent 将交互能力收敛在 **`/mindie-agent` 这一统一入口**中。日常使用无需记忆复杂的子命令或参数，底层操作上下文仅在需要时通过**渐进式披露（Progressive Disclosure）**按需向 Agent 展开：
+插件安装并启用后**全程零命令负担**，无需记忆任何斜杠命令或子命令参数：
 
 | 使用场景 | 你只需要输入 | 背后自动完成的事 |
 |---|---|---|
-| **日常昇腾 AI Infra 设计、开发（`vLLM-Ascend` / `AscendC` / `Triton`）、测试与调优** | `/mindie-agent <直接描述你的设计、开发或测试需求>` | 自动唤醒昇腾 Skill 引导与本地 `mindie-knowledge` 领域知识检索，配合 `remote-dev` 完成实机开发、验证与调优 |
-| **首次初始化配置、查看状态或修改共享偏好** | `/mindie-agent`（或 `/mindie-agent 看下当前状态`、`/mindie-agent 开启/关闭社区经验共享`） | Agent 根据当前会话展开的上下文自动展示运行状态或引导完成配置，保存的选择跨会话与插件升级持久生效 |
-| **日常远端昇腾服务器/容器开发** | **无需任何斜杠命令**，直接用自然语言对话 | 常驻的 `remote-dev` MCP 工具集默认自动触发，完成远端文件读写、打补丁与后台作业轮询 |
+| **日常昇腾 AI Infra 设计、开发（`vLLM-Ascend` / `xLLM` / `MindIE-SD` / `AscendC` / `Triton`）、测试与调优** | **直接用自然语言描述你的设计、开发或测试需求** | Claude 按需语义加载 `skills/mindie-agent/SKILL.md` 并调用默认就绪的 `knowledge_*` 与 `components` MCP 工具，配合 `remote-dev` 完成实机开发、验证与调优 |
+| **查看运行状态或修改社区共享偏好** | 直接用自然语言说明（如「看下当前 MindIE 状态」或通过 `setup.py sharing` 切换） | 通过只读 `mindie_status` / `diagnostics_status` 查看真实状态，或通过 `setup.py sharing --enable/--disable` 更新持久化授权偏好 |
+| **日常远端昇腾服务器/容器开发** | **直接用自然语言对话** | 常驻的 `remote-dev` MCP 工具集默认自动触发，完成远端文件读写、打补丁与后台作业轮询 |
 
 ### 自动更新与安全卸载
 
-- **后台静默更新**：后台维护线程按冷却周期异步检查兼容当前 Claude Code 版本的最高正式插件 Release 以及各官方共享组件仓库的正式 GitHub Release（参见 [`docs/releases/mindie-agent-cc-0.1.26.md`](docs/releases/mindie-agent-cc-0.1.26.md)）。新版本或新组件组合的 Python 运行时在后台独立构建并通过无模型探针校验，待服务空闲时退役旧服务并冷态原子切换绑定，全程不阻塞当前对话、不主动启动知识服务，也不会重置你的统一贡献开关配置与会话手动 `/mindie-agent` 授权边界。
+- **后台静默更新**：后台维护线程按冷却周期异步检查兼容当前 Claude Code 版本的最高正式插件 Release 以及各官方共享组件仓库的正式 GitHub Release（参见 [`docs/releases/mindie-agent-cc-0.1.26.md`](docs/releases/mindie-agent-cc-0.1.26.md)）。新版本或新组件组合的 Python 运行时在后台独立构建并通过无模型探针校验，待服务空闲时退役旧服务并冷态原子切换绑定，全程不阻塞当前对话、不主动启动知识服务，也不会重置你的统一贡献开关配置。
 - **安全卸载**：关闭正在使用插件的会话后，在终端执行原生卸载命令（建议加上 `--keep-data` 保留运行时数据与回执，确保历史任务安全收尾）：
   ```sh
   claude plugin uninstall mindie-agent@mindie-agent-cc --scope user --keep-data --json
@@ -212,7 +212,7 @@ flowchart LR
 ### 本地目录说明
 
 - **锁定运行时目录**：macOS / Linux / WSL 下位于 `${XDG_DATA_HOME:-$HOME/.local/share}/mindie-agent/runtimes/cc`，Windows 下位于 `%LOCALAPPDATA%/mindie-agent/runtimes/cc`（按源码、锁文件与平台哈希隔离存储，构建后不可变）。
-- **持久化发行版入口**：`CLAUDE_PLUGIN_DATA/releases/0.1.28/entry.py`（脱离宿主易失缓存，确保长会话期间入口稳定可用）。
+- **持久化发行版入口**：`CLAUDE_PLUGIN_DATA/releases/0.1.29/entry.py`（脱离宿主易失缓存，确保长会话期间入口稳定可用）。
 - **适配器配置文件**：`${XDG_CONFIG_HOME:-$HOME/.config}/mindie-agent/cc.json`（记录当前安装绑定；用户的贡献授权与范围作为持久数据独立保存）。
 
 ---
@@ -237,7 +237,7 @@ uv run --locked --no-editable --group test python scripts/harness.py --source . 
 
 ### 发布基准测试（Release Benchmark）
 
-- **发行版微基准测试（Release Microbenchmark）**：每个 `0.1.28` 插件 Release 均随附 `benchmark-results.json` 和 `benchmark-results.md`，按 [`benchmarks/release.json`](benchmarks/release.json) 测量 `public-transcript` 公开消息解析与隐藏推理过滤的耗时（单位 `us/op`）。该指标作为可复现的本地 CPU 微基准基线，与远端 A2/A3 NPU 实机集成验收及端到端 Agent 研发效率评估相互独立。
+- **发行版微基准测试（Release Microbenchmark）**：每个 `0.1.29` 插件 Release 均随附 `benchmark-results.json` 和 `benchmark-results.md`，按 [`benchmarks/release.json`](benchmarks/release.json) 测量 `public-transcript` 公开消息解析与隐藏推理过滤的耗时（单位 `us/op`）。该指标作为可复现的本地 CPU 微基准基线，与远端 A2/A3 NPU 实机集成验收及端到端 Agent 研发效率评估相互独立。
 
 ---
 

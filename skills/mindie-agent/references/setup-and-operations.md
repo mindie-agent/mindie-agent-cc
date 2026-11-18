@@ -1,23 +1,22 @@
 # Runtime Operations, Multi-Domain Routing & Graded Knowledge (Claude Code)
 
-Load this reference when running `/mindie-agent` session subcommands, routing across knowledge domains, or consulting graded-knowledge and profiler conventions.
+Load this reference when routing across knowledge domains, inspecting session/reporter state, or consulting graded-knowledge and profiler conventions.
 
-## 1. Session Lifecycle & Runtime Subcommands
+## 1. Silent Default-On Session Lifecycle & Opt-In Capture
 
-- **Unified `/mindie-agent` Entry**: Invoking `/mindie-agent` enables knowledge and background `Stop` capture for the current session (`new` chats, forks, and subagents require their own entry). Subcommands (`status`, `deactivate`, `recover --batch <ID> inspect|reconcile|retry|compact`, `sharing-enable`, `sharing-disable`, `reporting-status`) all route through `/mindie-agent <subcommand>`.
-- **Runtime Consent & Reporter Status**:
-  - `base_config.parent / "mindie-consent.json"` stores the persistent setting governing both scoped knowledge PRs and sanitized product fault Issues (`/mindie-agent sharing-enable`, `/mindie-agent sharing-disable`, `/mindie-agent reporting-status`, or `/mindie-agent contribute --repository owner/repo --account USER --fork USER/repo --project-root /absolute/path --visibility public`).
-  - When the hook returns `reporting.run_outside_hook=true`, execute `reporting.command_line` outside the hook with a 90-second timeout.
+- **Default-On MCP Surfaces**: `knowledge_*` (`knowledge_query`, `knowledge_explain`, `knowledge_feedback`, `knowledge_distill`, `knowledge_sync`) and `mindie_status` are exposed on `tools/list` at startup and execute across main sessions, `Task` subagents, and forks without manual command activation. Read-only retrieval (`knowledge_query`, `knowledge_explain`, `mindie_status`) never creates `admission.sqlite3`; `knowledge_distill` and scoped `knowledge_feedback` auto-provision a default session lease (`not_before=0.0`) on demand unless the session was explicitly deactivated.
+- **Opt-In Consent & `Stop` Capture**:
+  - `base_config.parent / "mindie-consent.json"` and `community_config` store the persistent opt-in policy governing both scoped knowledge PRs and sanitized product fault Issues (`mindie_status` and `diagnostics_status` inspect factual local state without mutating it).
+  - The `Stop` hook checks `mindie-consent.json` and authorized `project_roots` before opening `admission.sqlite3` or spawning capture workers: when sharing is unconfigured, disabled, or `cwd` is outside authorized `project_roots`, `Stop` exits immediately with zero SQLite files created; when sharing is enabled and `cwd` is inside authorized `project_roots`, `Stop` auto-ensures the session lease (`not_before=0.0`) and hands off redacted transcript capture.
   - Keep three states distinct when reporting status: (1) local consent config written, (2) background reporter running (`reporting.status == "running"`), and (3) external GitHub Issue/PR created.
 
-## 2. Multi-Domain Routing & `deactivate`
+## 2. Multi-Domain Routing
 
 - **Route Registration**: Register an additional domain Engine/Feed in an existing base adapter config with:
   ```sh
   python -m mindie_knowledge.loop.domain_routes register --adapter-config <path> --domain <domain> --engine-config <path>
   ```
-- **Target-Domain Activation**: Distilling or contributing to a registered non-default `domain` requires that domain's own consent and `project_root` scope plus `/mindie-agent --domain <domain>`.
-- **Deactivation**: `/mindie-agent deactivate` revokes the current `session_id` across the default domain and all registered `domain_configs`, returning `status="partial"` (`partial=True`) with per-domain `domains[]` details if any domain fails during revocation.
+- **Target-Domain Operations**: Read-only `knowledge_query`, `knowledge_explain`, and `knowledge_sync` route across registered `domain_configs` out of the box. Distilling or publishing contributions to a registered `domain` requires that domain's own opt-in consent and `project_root` scope, auto-provisioning the target domain's session lease on demand unless explicitly deactivated.
 
 ## 3. Graded Knowledge (`L1–L4`), `knowledge_distill` & Usage Feedback
 

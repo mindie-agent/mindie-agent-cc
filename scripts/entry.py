@@ -1,14 +1,13 @@
-"""Slash-command operations invoked from UserPromptExpansion.
+"""Session status, consent state, and native entry operations.
 
 [Role]
-Handles `/mindie-agent` slash commands (`activate`, `deactivate`, `status`,
-`sharing-enable`, `sharing-disable`, `sharing-status`) from the Claude Code
-`UserPromptExpansion` hook. An optional native `--domain DOMAIN` activates one
-existing configured domain through the shared domain-routing helper.
+Implements session status facts (`status_facts`, `status_payload`) and explicit
+session/consent/domain helpers (`activate`, `deactivate`, `status`,
+`sharing-enable`, `sharing-disable`, `recover`).
 
 [Invariants]
-- Activation occurs exclusively through this hook; MCP `status` never activates
-  a lease or enables sharing.
+- Read-only status (`status_facts`, `status_payload`) never creates SQLite state,
+  activates a lease, or enables sharing.
 - `--domain` uses only the verified native session/cwd/root-session binding; it
   activates the target Admission and never overwrites the default host token or
   consent authority.
@@ -20,7 +19,7 @@ existing configured domain through the shared domain-routing helper.
 
 [Side-Effect Policy]
 - Mutates session leases (`admission.py`), explicit consent (`entry_state.py`),
-  and community sharing settings (`sharing.py`) only on explicit slash commands.
+  and community sharing settings (`sharing.py`) only on explicit operations.
 """
 
 from __future__ import annotations
@@ -199,7 +198,7 @@ def _knowledge_status_payload(session=None):
         payload["experience"] = "needs-configuration"
         extra = configuration_required()
         payload.update(required=extra["required"], note=extra["note"])
-        payload["hint"] = "Configure the missing destination and scope through the native mindie-agent entry."
+        payload["hint"] = "Configure the missing destination and scope in your local MindIE community settings."
     else:
         from sharing import load
         settings = load()
@@ -240,15 +239,21 @@ def status_payload(session=None):
 
 def status_facts(session=None):
     """Deterministic control-plane facts, without knowledge setup guidance."""
-    payload = dict(configured=_configured(), knowledge_enabled=False)
-    if payload["configured"] and session:
-        from admission import gate
-        lease = gate().knowledge_lease(session)
-        payload["knowledge_enabled"] = lease is not None
-        payload["this_session"] = dict(bound=lease is not None, enabled=lease is not None,
-                                       status="active" if lease else "inactive",
-                                       project_root=lease["project_root"] if lease else None)
-    if payload["configured"]:
+    configured = _configured()
+    payload = dict(configured=configured, knowledge_enabled=bool(configured))
+    if configured and session:
+        from admission import is_deactivated, knowledge_lease
+
+        lease = knowledge_lease(session)
+        deactivated = is_deactivated(session)
+        payload["knowledge_enabled"] = not deactivated
+        payload["this_session"] = dict(
+            bound=lease is not None,
+            enabled=not deactivated,
+            status="active" if lease else ("inactive" if deactivated else "default-on"),
+            project_root=lease["project_root"] if lease else None,
+        )
+    if configured:
         diagnostics = _diagnostics(session)
         payload["diagnostics"] = {key: value for key, value in diagnostics.items() if key != "hints"}
         if session:
@@ -390,8 +395,8 @@ def _reporting_guidance():
     return dict(
         status="contribution_choice_required",
         detail="Knowledge sharing and sanitized fault Issues share one contribution switch.",
-        enable="/mindie-agent contribute --repository OWNER/REPO --account USER --project-root PATH --visibility public",
-        disable="/mindie-agent disabled",
+        enable="contribute --repository OWNER/REPO --account USER --project-root PATH --visibility public",
+        disable="disabled",
     )
 
 

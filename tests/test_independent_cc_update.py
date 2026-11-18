@@ -462,17 +462,10 @@ class BootstrapCommunityWriterTests(LaneCase):
 
 class HookManifestTests(LaneCase):
     def test_expansion_matchers_cover_every_accepted_command(self):
-        import identity
-
-        accepted = set(identity.COMMANDS)
         committed = json.loads((ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
-        committed_matchers = {
-            item.get("matcher")
-            for item in committed["hooks"]["UserPromptExpansion"]
-            if isinstance(item, dict)
-        }
         with self.subTest("committed hooks.json"):
-            self.assertEqual(sorted(accepted - committed_matchers), [])
+            self.assertNotIn("UserPromptExpansion", committed["hooks"])
+            self.assertEqual(set(committed["hooks"]), {"PreToolUse", "Stop", "SessionStart"})
 
 
 if __name__ == "__main__":
