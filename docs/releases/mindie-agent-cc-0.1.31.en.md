@@ -1,0 +1,7 @@
+# mindie-agent-cc 0.1.31: Pre-`0.1.30` Seamless Self-Upgrade Handoff Fix
+
+[中文](mindie-agent-cc-0.1.31.md)
+
+- **Restore seamless `v0.1.29 -> v0.1.31` native plugin self-upgrades (Issue [`mindie-agent#378`](https://github.com/mindie-agent/mindie-agent/issues/378))**: Adds a pure-stdlib `scripts/component_update.py` handoff shim so pre-`0.1.30` `bootstrap._component_override` cleanly falls back to building `v0.1.31`'s locked `pyproject.toml` baseline runtime, and adds legacy `--source <installed> --config <base_config>` staging plus `--activate <prepared_config>` atomic switching in `scripts/setup.py` (enforcing `<state_dir>/update/operation.lock`, `component_source_commands` / `domain_source_configs` compare-and-swap, and idle service retirement).
+- **Preserve complete `mindie-cc-installation/1` binding invariants**: `entry.py:initialize_profile` and `setup.py` keep `base_config`, `adapter_config`, `state_dir`, `engine_config`, `python`, `runtime_scripts`, and `community_config` consistent across legacy session teardown and new `mindie-harness` sessions.
+- **Automated `n-1 -> n` self-upgrade regression tests**: Adds `tests/test_legacy_self_upgrade.py` exercising the end-to-end `v0.1.29` handoff contract (`component_update.py` -> `setup.py --source` -> `read_binding` / `_complete_binding` -> `setup.py --activate` with `operation.lock` deferral and `component_commands` CAS -> `mindie_launch.py` active runtime resolution).

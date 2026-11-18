@@ -16,7 +16,7 @@ HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
-NATIVE_VERSION = "0.1.30"
+NATIVE_VERSION = "0.1.31"
 DEFAULT_DOMAIN = "vllm-ascend"
 STOP_TIMEOUT = 6.0
 MAX_EVENT = 1048576
@@ -80,8 +80,15 @@ def initialize_profile(profile) -> tuple[dict | None, Path | None]:
         engine = {**defaults, **prev_engine, "transcript_adapter": str(HERE / "transcript.py")}
         if engine != prev_engine or not engine_path.is_file():
             _write_json(engine_path, engine)
-        updated = {**cfg, "python": python, "engine_config": str(engine_path), "runtime_scripts": str(HERE),
-                   "state_dir": str(profile.state_dir), "community_config": engine["community_config"]}
+        base_val = cfg["base_config"] if isinstance(cfg.get("base_config"), str) and os.path.isabs(cfg["base_config"]) else str(profile.config_path)
+        adapter_val = cfg["adapter_config"] if isinstance(cfg.get("adapter_config"), str) and os.path.isabs(cfg["adapter_config"]) else str(profile.config_path)
+        if str(profile.config_path) != base_val and cfg.get("schema") == "mindie-cc-installation/1":
+            return cfg, engine_path
+        state_val = cfg["state_dir"] if isinstance(cfg.get("state_dir"), str) and os.path.isabs(cfg["state_dir"]) else str(profile.state_dir)
+        updated = {**cfg, "schema": "mindie-cc-installation/1", "facade_protocol": 1, "host": "cc",
+                   "python": python, "base_config": base_val, "adapter_config": adapter_val,
+                   "engine_config": str(engine_path), "runtime_scripts": str(HERE),
+                   "state_dir": state_val, "community_config": engine["community_config"]}
         if updated != cfg or not profile.config_path.is_file():
             _write_json(profile.config_path, updated)
         return updated, engine_path
@@ -159,7 +166,7 @@ def main(argv: list[str] | None = None) -> int:
     os.environ.setdefault("REMOTE_DEV_STATE_DIR", str(profile.state_dir / "remote"))
     os.environ.setdefault("REMOTE_DEV_HARNESS_PROFILE", "claude")
     cfg, engine_path = initialize_profile(profile)
-    if cfg is not None:
+    if cfg is not None and str(profile.config_path) == cfg.get("base_config", str(profile.config_path)) and cfg.get("adapter_config") == str(profile.config_path):
         try:
             from mindie_harness.mcp.gateway import rebind_native_plugin_if_needed
 

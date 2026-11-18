@@ -18,9 +18,9 @@ def _release_version(plugin_root: Path) -> str:
     except TimeoutError:
         raise
     except (OSError, ValueError):
-        return "0.1.30"
+        return "0.1.31"
     version = data.get("version") if isinstance(data, dict) else None
-    return version if isinstance(version, str) and version else "0.1.30"
+    return version if isinstance(version, str) and version else "0.1.31"
 
 def resolve_target(args: list[str], *, plugin_root: Path | None = None, plugin_data: Path | None = None,
                    release_version: str | None = None) -> Path:

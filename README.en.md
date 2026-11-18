@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/mindie-agent/mindie-agent-cc/releases"><img src="https://img.shields.io/badge/release-v0.1.30-0F766E.svg" alt="Release v0.1.30"></a>
+  <a href="https://github.com/mindie-agent/mindie-agent-cc/releases"><img src="https://img.shields.io/badge/release-v0.1.31-0F766E.svg" alt="Release v0.1.31"></a>
   <a href="harness-compatibility.json"><img src="https://img.shields.io/badge/Claude_Code-%3E%3D2.1.269_%3C3.0.0-D97757.svg" alt="Claude Code >=2.1.269 <3.0.0"></a>
   <a href="pyproject.toml"><img src="https://img.shields.io/badge/python-3.13-3776AB.svg" alt="Python 3.13"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-0F766E.svg" alt="License: MIT"></a>
@@ -27,7 +27,7 @@
 
 ---
 
-**MindIE Agent for Claude Code** (`mindie-agent-cc`) is the native Claude Code plugin for [MindIE Agent](https://github.com/mindie-agent/mindie-agent), supporting the **Ascend NPU AI Infra design, development, and testing lifecycle**. Release `v0.1.30` (paired with `mindie-agent 0.1.13`) delivers three core capabilities: **local and community knowledge base retrieval with privacy redaction** (covering `vLLM-Ascend`, `xLLM`, `MindIE-SD`, `AscendC` / `Triton` kernels, and `CANN`), **remote SSH / Docker development and NPU inspection**, and **unified fault diagnostics with sanitized reporting**.
+**MindIE Agent for Claude Code** (`mindie-agent-cc`) is the native Claude Code plugin for [MindIE Agent](https://github.com/mindie-agent/mindie-agent), supporting the **Ascend NPU AI Infra design, development, and testing lifecycle**. Release `v0.1.31` (paired with `mindie-agent 0.1.17`) delivers three core capabilities: **local and community knowledge base retrieval with privacy redaction** (covering `vLLM-Ascend`, `xLLM`, `MindIE-SD`, `AscendC` / `Triton` kernels, and `CANN`), **remote SSH / Docker development and NPU inspection**, and **unified fault diagnostics with sanitized reporting**.
 
 Built on the [MindIE Agent Engineering Design Principles](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.en.md), **all MCP tools are silent default-on once the plugin is enabled** with zero manual slash commands or pre-call session-binding gates, **semantic Skill guidance (`user-invocable: false`) loads automatically only on Ascend NPU engineering tasks**, and **turn-end experience capture strictly honors explicit opt-in consent and authorized project roots**—surfacing every failure or uncertain external state transparently without silent fallbacks.
 
@@ -191,7 +191,7 @@ flowchart LR
 ### Local Storage Layout
 
 - **Immutable Runtime Directory**: `${XDG_DATA_HOME:-$HOME/.local/share}/mindie-agent/runtimes/cc` on macOS/Linux/WSL, or `%LOCALAPPDATA%/mindie-agent/runtimes/cc` on Windows (indexed by source, lockfile, Python ABI, and platform).
-- **Persistent Release Entry**: `CLAUDE_PLUGIN_DATA/releases/0.1.30/entry.py` (decoupled from volatile plugin caches so long-lived sessions remain stable).
+- **Persistent Release Entry**: `CLAUDE_PLUGIN_DATA/releases/0.1.31/entry.py` (decoupled from volatile plugin caches so long-lived sessions remain stable).
 - **Adapter Configuration**: `${XDG_CONFIG_HOME:-$HOME/.config}/mindie-agent/cc.json` (records the active installation binding; user consent and contribution scope are stored separately as persistent user data).
 
 ---
@@ -215,7 +215,7 @@ uv run --locked --no-editable --group test python scripts/setup.py release-metad
 
 ### Release Benchmark
 
-- **Release Microbenchmark**: Each `0.1.30` plugin release attaches `benchmark-results.json` and `benchmark-results.md` measuring the `public-transcript` public-message parsing and hidden-reasoning filtering workload ([`benchmarks/release.json`](benchmarks/release.json)) in `us/op`. This serves as a reproducible CPU microbenchmark baseline, distinct from live A2/A3 NPU acceptance and end-to-end Agent productivity evaluation.
+- **Release Microbenchmark**: Each `0.1.31` plugin release attaches `benchmark-results.json` and `benchmark-results.md` measuring the `public-transcript` public-message parsing and hidden-reasoning filtering workload ([`benchmarks/release.json`](benchmarks/release.json)) in `us/op`. This serves as a reproducible CPU microbenchmark baseline, distinct from live A2/A3 NPU acceptance and end-to-end Agent productivity evaluation.
 
 ---
 

@@ -5,7 +5,7 @@ This repository implements the native Claude Code plugin (`.claude-plugin/plugin
 ## 1. Core Contracts & Guardrails
 
 - **Great Subtraction — 8 thin files, one substrate (`HOST-NATIVE` / `HOST-WIRE`)**:
-  - `scripts/` retains only `__init__.py`, `plugin_entry.py`, `session_start.py`, `mindie_launch.py`, `entry.py`, `host_adapter.py`, `transcript.py`, and `setup.py`; total Python LOC stays `<= 1,200` (target `<= 1,050`).
+  - `scripts/` retains `__init__.py`, `plugin_entry.py`, `session_start.py`, `mindie_launch.py`, `entry.py`, `host_adapter.py`, `transcript.py`, `setup.py`, and the thin `v0.1.29 -> v0.1.31` live-upgrade shims (`component_update.py`, `bridge.py`, `mcp_server.py`, `release_update.py`); total Python LOC stays `<= 1,500`.
   - `.mcp.json` and `hooks/hooks.json` invoke `${CLAUDE_PLUGIN_ROOT}/scripts/plugin_entry.py` directly with zero `python -c` inline blobs.
   - `skills/mindie-agent/` sets `user-invocable: false`; tools are accelerators, never roadblocks—on failure report the concrete error once (reconciling uncertain remote writes first) and continue via native `ssh`/`scp` or task-local scripts.
   - Bundle deterministic `assets/{mindie-harness-seed.pyz, seed-lock.json}` and delegate RSI, atomic writes, locking, runtime update, and MCP routing to `mindie_harness`.
