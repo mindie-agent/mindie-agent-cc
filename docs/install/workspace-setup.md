@@ -1,31 +1,66 @@
 # Development Workspace & First-Time Onboarding Setup
 
-Run this flow during initial installation (Step 5) or whenever `python <runtime_scripts>/setup.py sharing --status` reports `"needs_onboarding_prompt": true`, right after presenting [用户须知](user-notice.md):
+Run this flow during initial installation (Step 4) or whenever `python <runtime_scripts>/setup.py sharing --status` reports `"tier": "unconfigured"`, right after presenting [用户须知](user-notice.md).
 
-1. **Pop up the 3 onboarding questions via Claude Code's native `AskUserQuestion` tool in the user's language**:
-   - **Question 1 (`header: "开发工作区"` / `"Workspace"`, `multiSelect: false`)** — *本地开发工作区 `vllm-ascend-workspace`* / *Local Development Workspace `vllm-ascend-workspace`*:
-     - `初始化 vllm-ascend-workspace (Recommended)` / `Initialize vllm-ascend-workspace (Recommended)` — 新建并初始化 `vllm` + `vllm-ascend` 协同工作区 / Clone and initialize the multi-repo `vllm` + `vllm-ascend` workspace
-     - `保持当前目录` / `Keep current directory` — 直接将当前工作目录作为工作区 / Use the current working directory as the project root
-     - `使用已有工作区目录` / `Use existing workspace directory` — 绑定已有的本地工作区目录 / Bind an existing local workspace checkout
-   - **Question 2 (`header: "社区共享"` / `"Sharing"`, `multiSelect: false`)** — *社区知识共享与自动故障上报* / *Community Knowledge Sharing & Automated Fault Reporting*:
-     - `开启社区共享与故障上报 (Recommended)` / `Enable (Recommended)` — 开启脱敏经验共享 PR 与工具故障自动上报 / Enable sanitized experience sharing PRs and automatic tool fault Issue reporting
-     - `仅保持本地模式` / `Keep Local-Only Mode` — 关闭外发共享与故障上报，仅使用本地检索与工具 / Disable outgoing sharing and fault reporting; keep retrieval and tools local
-   - **Question 3 (`header: "GitHub Star"`, `multiSelect: false`)** — *顺手给 MindIE Agent 点个 GitHub Star 吗？ ⭐* / *Would you like to give mindie-agent a Star on GitHub ⭐?*:
-     - `好，点个 Star ⭐ (Recommended)` / `Sure, star it ⭐ (Recommended)` — 在 GitHub 上 star `mindie-agent/mindie-agent` 支持一下项目 / Star `mindie-agent/mindie-agent` on GitHub to support the project
-     - `先不用` / `Maybe later` — 直接开始使用 / Continue without starring
-2. **Verify GitHub authentication**: Before cloning or configuring forks, ensure GitHub authentication is ready via [GitHub Sign-In](github-authentication.md) using process-scoped `GIT_CONFIG_COUNT` (without mutating global or system-wide Git configuration).
-3. **Resolve or initialize `WORKSPACE_ROOT` first**:
-   - New directory: `git clone https://github.com/mindie-agent/vllm-ascend-workspace.git "<destination>"` and set `WORKSPACE_ROOT="<destination>"`.
-   - Existing directory: inspect the checkout, preserve local changes and configuration, and set `WORKSPACE_ROOT="<existing-path>"`.
-   - Keep current directory: set `WORKSPACE_ROOT="$(pwd)"`.
-4. **Register in the native client**:
-   - Claude Code Desktop: open the workspace root in the native folder selector (or launch `claude --desktop` from the selected directory if supported by `claude --help`).
-   - Claude Code CLI: launch the next interactive `claude` session from that directory.
-5. **Initialize repositories (when creating/reusing `vllm-ascend-workspace`)**: Read the workspace's `AGENTS.md`, `README.md`, and `.agents/scripts/README.md`, then run:
-   - `python3 .agents/scripts/repo_init.py --no-input` (reusing saved `workspace.json` fork settings), or
-   - `python3 .agents/scripts/repo_init.py --github-user <account> --no-input` (for first-time setup with the user's forks).
-6. **Persist the sharing & fault-reporting choice and optional Star**:
-   - If the user chose `开启社区共享与故障上报 (Recommended)` / `Enable (Recommended)`: run `python <runtime_scripts>/setup.py sharing --enable --project-root "$WORKSPACE_ROOT"`.
-   - If the user chose `仅保持本地模式` / `Keep Local-Only Mode`: run `python <runtime_scripts>/setup.py sharing --disable`.
-   - If the user chose `好，点个 Star ⭐ (Recommended)` / `Sure, star it ⭐ (Recommended)`: run `gh api --hostname github.com --silent -X PUT /user/starred/mindie-agent/mindie-agent && gh api --hostname github.com --silent /user/starred/mindie-agent/mindie-agent`.
-7. **Report status**: Report the plugin status, sharing & fault-reporting status, workspace path (`WORKSPACE_ROOT`), native client registration status, repository initialization status, and GitHub Star status clearly.
+## 1. Install, cold start, and readiness
+
+```sh
+uv run https://github.com/mindie-agent/mindie-agent/releases/latest/download/install.py --host cc
+UV_SYSTEM_CERTS=true UV_NATIVE_TLS=true claude --init-only
+claude mcp list
+SETUP_PY=$(python3 -c "import glob, os; p = sorted(f for f in glob.glob(os.path.expanduser('~/.claude/plugins/**/scripts/setup.py'), recursive=True) if 'mindie-agent' in f); print(p[-1] if p else '')")
+uv run --no-project --python 3.13 python "$SETUP_PY" doctor --timeout 15
+uv run --no-project --python 3.13 python "$SETUP_PY" sharing --status
+```
+
+`gh` is optional and **never blocks installation**: when it is missing or logged out, recommend `local-only` and continue. Confirm the `knowledge`, `remote`, and `components` MCP servers are `Connected`, report the `mindie_doctor` `overall_status`, then immediately present the onboarding questions.
+
+## 2. Three dynamic `gh`-aware native `AskUserQuestion` prompts
+
+1. **Question 1 (`header: "Workspace"`, `multiSelect: false`)** — *Local Development Workspace `vllm-ascend-workspace`*:
+   - `Initialize vllm-ascend-workspace (Recommended)` — clone and initialize the multi-repo `vllm` + `vllm-ascend` workspace.
+   - `Keep current directory` — use the current working directory as the project root.
+   - `Use existing workspace directory` — bind an existing local checkout.
+2. **Question 2 (`header: "Sharing"`, `multiSelect: false`)** — *Community Knowledge Sharing & Automated Fault Reporting*:
+   - `Enable (Recommended)` when `gh` is authenticated; `Keep Local-Only Mode (Recommended)` otherwise. Keep both labels fixed and switch only the Recommended marker.
+   - `Enable` authorizes sanitized experience-sharing PRs and automatic tool-fault Issue reporting; `Keep Local-Only Mode` disables outbound sharing and reporting while keeping retrieval and tools local.
+3. **Question 3 (`header: "NPU Connection"`, `multiSelect: false`)** — *One-step Ascend NPU SSH connection*:
+   - `Configure SSH NPU now (Recommended)` — collect `host`, `user`, `port`, and container (if any). In terminal mode, the final step may call `remote_auth` with `--password`, supplied only through a hidden prompt and never written to chat or shell history.
+   - `Later` — continue without a remote endpoint.
+
+Then append **one polite line** after the questions: `⭐ If MindIE Agent helps you, consider starring mindie-agent/mindie-agent on GitHub; it is entirely optional.` Run the Star call only after explicit consent.
+
+## 3. Resolve or initialize `WORKSPACE_ROOT`
+
+- New directory: `git clone https://github.com/mindie-agent/vllm-ascend-workspace.git "<destination>"` and set `WORKSPACE_ROOT="<destination>"`.
+- Existing directory: inspect the checkout, preserve local changes and configuration, and set `WORKSPACE_ROOT="<existing-path>"`.
+- Keep current directory: set `WORKSPACE_ROOT="$(pwd)"`.
+
+## 4. Register in the native client
+
+- Claude Code Desktop: open the workspace root in the native folder selector (or launch `claude --desktop` from the selected directory if supported by `claude --help`).
+- Claude Code CLI: launch the next interactive `claude` session from that directory.
+
+## 5. Initialize repositories (when creating/reusing `vllm-ascend-workspace`)
+
+Read the workspace's `AGENTS.md`, `README.md`, and `.agents/scripts/README.md`, then run:
+
+- `python3 .agents/scripts/repo_init.py --no-input` (reusing saved `workspace.json` fork settings), or
+- `python3 .agents/scripts/repo_init.py --github-user <account> --no-input` (first-time setup with the user's forks).
+
+## 6. Persist the sharing choice, NPU endpoint, and optional Star
+
+```sh
+uv run --no-project --python 3.13 python "$SETUP_PY" sharing --enable --project-root "$WORKSPACE_ROOT"
+uv run --no-project --python 3.13 python "$SETUP_PY" sharing --local-only --project-root "$WORKSPACE_ROOT"
+uv run --no-project --python 3.13 python "$SETUP_PY" sharing --disable
+```
+
+- If the user chose `Enable`: run the `--enable` line.
+- If the user chose `Keep Local-Only Mode`: run the `--local-only` line (or `--disable` for an explicit off).
+- If an NPU connection was configured, register the endpoint with `remote_auth` (terminal `--password` only in the hidden prompt).
+- If the user explicitly chose Star: run `gh api --hostname github.com --silent -X PUT /user/starred/mindie-agent/mindie-agent && gh api --hostname github.com --silent /user/starred/mindie-agent/mindie-agent`.
+
+## 7. Report status
+
+Report the plugin version, three MCP statuses, `mindie_doctor` verdict, `sharing` tier, `WORKSPACE_ROOT`, native client registration, NPU connection state, and Star state clearly. A missing `gh` channel is reported as "optional channel not configured", never as an installation failure.

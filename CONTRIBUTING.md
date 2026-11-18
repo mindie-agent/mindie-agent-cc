@@ -18,13 +18,13 @@ English version: [`CONTRIBUTING.en.md`](CONTRIBUTING.en.md)
    - 保持 `installation.json` / `cc.json` 跨版本升级与回滚兼容；主操作成功后本地记账失败必须保留 `isError=False` 并附加 `receipt_warning` + `receipt_unconfirmed=True`。
 4. **行尾与模块规范**：
    - 所有文本文件统一采用 Unix `LF`（`\n`）行尾（通过 `python3 .github/scripts/check_lf_eol.py` 校验）。
-   - 核心 Python 模块保持 `< 800` 行，并在前 30 行内包含 `[Role]` / `[Invariants]` / `[Timeouts & Locks]` / `[Side-Effect Policy]` 契约头。
+   - `scripts/` 仅保留 8 个薄文件，Python 总行数保持 `<= 1,200`（目标 `<= 1,050`），并在前 30 行内包含 `[Role]` / `[Invariants]` / `[Timeouts & Locks]` / `[Side-Effect Policy]` 契约头。
 
 ## 2. 提交前本地检查
 
 ```bash
 python3 .github/scripts/check_lf_eol.py
 pytest -q -m "not live_npu"
-python3 scripts/harness.py --source . --tests tests --revision "$(git rev-parse HEAD)"
+python3 scripts/setup.py release-metadata --source . --tests tests --revision "$(git rev-parse HEAD)"
 python3 .github/scripts/check_pr_checklist.py --profile host-plugin --body-file <pr_body.md>
 ```

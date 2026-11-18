@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/mindie-agent/mindie-agent-cc/releases"><img src="https://img.shields.io/badge/release-v0.1.29-0F766E.svg" alt="Release v0.1.29"></a>
+  <a href="https://github.com/mindie-agent/mindie-agent-cc/releases"><img src="https://img.shields.io/badge/release-v0.1.30-0F766E.svg" alt="Release v0.1.30"></a>
   <a href="harness-compatibility.json"><img src="https://img.shields.io/badge/Claude_Code-%3E%3D2.1.269_%3C3.0.0-D97757.svg" alt="Claude Code >=2.1.269 <3.0.0"></a>
   <a href="pyproject.toml"><img src="https://img.shields.io/badge/python-3.13-3776AB.svg" alt="Python 3.13"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-0F766E.svg" alt="License: MIT"></a>
@@ -27,7 +27,7 @@
 
 ---
 
-**MindIE Agent for Claude Code** (`mindie-agent-cc`) is the native Claude Code plugin for [MindIE Agent](https://github.com/mindie-agent/mindie-agent), supporting the **Ascend NPU AI Infra design, development, and testing lifecycle**. Release `v0.1.29` (paired with `mindie-agent 0.1.13`) delivers three core capabilities: **local and community knowledge base retrieval with privacy redaction** (covering `vLLM-Ascend`, `xLLM`, `MindIE-SD`, `AscendC` / `Triton` kernels, and `CANN`), **remote SSH / Docker development and NPU inspection**, and **unified fault diagnostics with sanitized reporting**.
+**MindIE Agent for Claude Code** (`mindie-agent-cc`) is the native Claude Code plugin for [MindIE Agent](https://github.com/mindie-agent/mindie-agent), supporting the **Ascend NPU AI Infra design, development, and testing lifecycle**. Release `v0.1.30` (paired with `mindie-agent 0.1.13`) delivers three core capabilities: **local and community knowledge base retrieval with privacy redaction** (covering `vLLM-Ascend`, `xLLM`, `MindIE-SD`, `AscendC` / `Triton` kernels, and `CANN`), **remote SSH / Docker development and NPU inspection**, and **unified fault diagnostics with sanitized reporting**.
 
 Built on the [MindIE Agent Engineering Design Principles](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.en.md), **all MCP tools are silent default-on once the plugin is enabled** with zero manual slash commands or pre-call session-binding gates, **semantic Skill guidance (`user-invocable: false`) loads automatically only on Ascend NPU engineering tasks**, and **turn-end experience capture strictly honors explicit opt-in consent and authorized project roots**—surfacing every failure or uncertain external state transparently without silent fallbacks.
 
@@ -96,72 +96,51 @@ Please install https://github.com/mindie-agent/mindie-agent-cc for me
 
 If you are an AI Agent asked by the user to install this plugin, run the following deterministic steps directly in the terminal **without asking the user to read the documentation manually**:
 
-1. **Check prerequisites, host version, and the `gh` GitHub channel (Hard Requirement)**:
-   **A stable, authenticated GitHub CLI (`gh`) channel is a hard requirement**—it powers plugin fetches, locked release verification, `knowledge-vllm-ascend` sync, automated PR publication (via `gh api` and `!gh auth git-credential`), and opt-in fault reporting:
+1. **Install and warm the runtime with one command (`gh` optional, never a blocker)**:
    ```sh
-   git --version
-   uv --version
-   gh --version
-   GH_USER=$(gh api --hostname github.com user --jq .login) && echo "GitHub channel verified for account: $GH_USER"
-   GIT_CONFIG_COUNT=2 \
-     GIT_CONFIG_KEY_0=credential.https://github.com.helper \
-     GIT_CONFIG_VALUE_0='!gh auth git-credential' \
-     GIT_CONFIG_KEY_1=credential.interactive \
-     GIT_CONFIG_VALUE_1=never \
-     git ls-remote https://github.com/mindie-agent/mindie-agent-cc.git HEAD
-   claude --version
+   uv run https://github.com/mindie-agent/mindie-agent/releases/latest/download/install.py --host cc
    ```
-   - **Hard Gate (Never skip or silently ignore, and never mutate global or system-wide host Git config)**: If `gh` is missing, assist the user in installing it first (macOS: `brew install gh`; Windows: `winget install --id GitHub.cli`; Ubuntu / WSL: `sudo apt update && sudo apt install -y gh`). Reuse a working account. Otherwise follow [GitHub Sign-In](docs/install/github-authentication.md): browser login on ordinary networks, or token login on enterprise networks / blocked browser authorization. Use an existing token in the hidden `gh` prompt (or a supplied private file), or guide token creation. Verify transport strictly with process-scoped `GIT_CONFIG_COUNT` (and `UV_SYSTEM_CERTS=true UV_NATIVE_TLS=true` on enterprise TLS networks) without mutating global host Git config.
-   - Verify `claude --version` satisfies the compatible range supported by release `v0.1.29`: `>= 2.1.269 < 3.0.0` (declared in [`harness-compatibility.json`](harness-compatibility.json)).
-   - On **Linux or Windows WSL**, if the background knowledge service will be used, also run `systemctl --user show --property=Version` to verify `systemd >= 254` is reachable (inside WSL, use Linux-native `claude`, `git`, `uv`, and `gh`).
+   - `uv` and an authenticated Claude Code are the only hard requirements. `gh` is used only for optional community contribution and Star; when missing or logged out, fall back to `local-only` without blocking installation.
+   - For GitHub credentials, follow [GitHub Sign-In](docs/install/github-authentication.md) with browser or token login; use process-scoped `GIT_CONFIG_COUNT` only and never mutate global host Git config.
+   - Verify `claude --version` satisfies `>= 2.1.269 < 3.0.0` (declared in [`harness-compatibility.json`](harness-compatibility.json)).
+   - On Linux / WSL, the background knowledge service needs `systemd >= 254` with `systemd --user`; a missing service reports clearly and never blocks independent `remote-dev`.
 
-2. **Optional project support and contribution setup**:
-   Installing the plugin requires no unprompted Star or Fork of the product repository. Step 5 presents a native interactive popup for workspace initialization, community sharing, and optionally giving `mindie-agent/mindie-agent` a Star ⭐. A target knowledge-repository fork is resolved or created only after the user explicitly enables contribution.
-
-3. **Add the marketplace, install the plugin, and initialize the locked runtime**:
+2. **Cold start and MCP self-check**:
    ```sh
-   claude plugin marketplace add "https://github.com/mindie-agent/mindie-agent-cc.git#v0.1.29"
-   claude plugin install mindie-agent@mindie-agent-cc --scope user
    UV_SYSTEM_CERTS=true UV_NATIVE_TLS=true claude --init-only
-   ```
-   > Note: `claude --init-only` runs `SessionStart` without starting a conversation or calling a model, allowing `uv` to provision Python 3.13 and install the locked runtime ahead of time.
-
-4. **Verify plugin installation and sharing status**:
-   ```sh
-   claude plugin list --json
    claude mcp list
+   ```
+   Confirm the `knowledge`, `remote`, and `components` MCP servers are all `Connected`.
+
+3. **Read-only readiness check**:
+   ```sh
    SETUP_PY=$(python3 -c "import glob, os; p = sorted(f for f in glob.glob(os.path.expanduser('~/.claude/plugins/**/scripts/setup.py'), recursive=True) if 'mindie-agent' in f); print(p[-1] if p else '')")
+   uv run --no-project --python 3.13 python "$SETUP_PY" doctor --timeout 15
    uv run --no-project --python 3.13 python "$SETUP_PY" sharing --status
    ```
-   - Confirm `claude plugin list --json` shows `mindie-agent@mindie-agent-cc` (`0.1.29`) enabled with `user` scope, and inspect the JSON returned by `setup.py sharing --status` (including `needs_onboarding_prompt`).
-   - Confirm `claude mcp list` reports the plugin's `knowledge`, `remote`, and `components` MCP servers as `Connected`. Then report the verified GitHub account (`$GH_USER`) and plugin readiness to the user.
+   Report `mindie_doctor`'s `overall_status` together with `sharing --status`'s `tier`. On any failure, report the concrete error once and continue with native `ssh`/`scp` or task-local scripts.
 
-   Continue immediately with Step 5 after verification, then report the complete setup result.
+4. **Three dynamic `gh`-aware native `AskUserQuestion` onboarding prompts**:
+   Briefly summarize the [User & Contribution Notice](docs/install/user-notice.md), then immediately invoke Claude Code's native `AskUserQuestion` tool with all three questions:
+   1. **Development workspace** (`header: "Workspace"`): initialize `vllm-ascend-workspace` / keep the current directory / use an existing workspace directory.
+   2. **Community sharing and fault reporting** (`header: "Sharing"`, **dynamic recommendation**): recommend `Enable (Recommended)` when `gh` is authenticated, otherwise recommend `Keep Local-Only Mode (Recommended)`. Keep both option labels fixed and switch only the Recommended marker.
+   3. **One-step Ascend NPU connection** (`header: "NPU Connection"`): `Configure SSH NPU now (Recommended)` / `Later`. When chosen, collect `host`, `user`, `port`, and container (if any); in terminal mode the final step may use `remote_auth` with `--password` for one login, with the password supplied only through a hidden prompt and never written to chat or shell history.
+   Then append **one polite line**: `⭐ If MindIE Agent helps you, consider starring mindie-agent/mindie-agent on GitHub; it is entirely optional.` — run the Star call only after explicit consent, never silently.
 
-5. **Present the Native Interactive Onboarding Popup (Step 5) and apply choices**:
-   - Right after installation or whenever `setup.py sharing --status` reports `"needs_onboarding_prompt": true`, summarize the [User & Contribution Notice](docs/install/user-notice.md) and **immediately invoke Claude Code's native `AskUserQuestion` tool** to ask the 3 onboarding questions in a single popup:
-     1. **Local Development Workspace `vllm-ascend-workspace`** (`header: "Workspace"`, `multiSelect: false`): `Initialize vllm-ascend-workspace (Recommended)` vs `Keep current directory` vs `Use existing workspace directory`
-     2. **Community Knowledge Sharing & Automated Fault Reporting** (`header: "Sharing"`, `multiSelect: false`): `Enable (Recommended)` vs `Keep Local-Only Mode`
-     3. **Would you like to give mindie-agent a Star on GitHub ⭐?** (`header: "GitHub Star"`, `multiSelect: false`): `Sure, star it ⭐ (Recommended)` (Star `mindie-agent/mindie-agent` on GitHub to support the project) vs `Maybe later` (Continue without starring)
-   - Once the user responds, execute in this exact order:
-     1. **Resolve `WORKSPACE_ROOT` first**: If the user chose to initialize or use an existing workspace, follow [Workspace Setup](docs/install/workspace-setup.md) to initialize/resolve the directory and store it in `WORKSPACE_ROOT` (or `WORKSPACE_ROOT="$(pwd)"` if keeping the current directory), then register the path in the host client and run `repo_init.py`.
-     2. **Persist the unified contribution & sharing choice**:
-        ```sh
-        # If the user chose Enable (Recommended):
-        uv run --no-project --python 3.13 python "$SETUP_PY" sharing --enable --project-root "$WORKSPACE_ROOT"
-        # If the user chose Keep Local-Only Mode:
-        uv run --no-project --python 3.13 python "$SETUP_PY" sharing --disable
-        ```
-     3. **Apply GitHub Star ⭐ only if authorized** (run only when the user explicitly selected `Sure, star it ⭐ (Recommended)`):
-        ```sh
-        gh api --hostname github.com --silent -X PUT /user/starred/mindie-agent/mindie-agent && gh api --hostname github.com --silent /user/starred/mindie-agent/mindie-agent
-        ```
-   - Report the plugin installation status, workspace path, sharing & fault reporting state, and GitHub Star status together.
+5. **Persist sharing and workspace choices**:
+   ```sh
+   uv run --no-project --python 3.13 python "$SETUP_PY" sharing --enable --project-root "$WORKSPACE_ROOT"   # or
+   uv run --no-project --python 3.13 python "$SETUP_PY" sharing --local-only --project-root "$WORKSPACE_ROOT"
+   uv run --no-project --python 3.13 python "$SETUP_PY" sharing --disable
+   ```
+   - `contribute` authorizes sanitized knowledge PRs and fault Issues; `local-only` keeps capture local; `disabled` explicitly turns outbound sharing off. Reuse an existing valid choice without re-prompting.
+   - If an NPU connection was configured, follow [Workspace Setup](docs/install/workspace-setup.md) to register the `remote-dev` endpoint; if the user chose Star, run `gh api --hostname github.com --silent -X PUT /user/starred/mindie-agent/mindie-agent`.
 
+6. **Report**: plugin version, three MCP statuses, `mindie_doctor` verdict, `sharing` tier, workspace path, NPU connection status, and Star status. When `gh` is unavailable, state "optional channel not configured" and never treat it as an install failure.
 </details>
 
 #### Environment Notes
-- **Prerequisites (Hard Requirements)**: `git`, `uv`, an authenticated **`gh` (GitHub CLI)**, and an authenticated Claude Code (the compatibility contract supports Claude Code `>= 2.1.269 < 3.0.0`; see [`harness-compatibility.json`](harness-compatibility.json)).
+- **Prerequisites (Hard Requirements)**: `git`, `uv`, and an authenticated Claude Code (the compatibility contract supports Claude Code `>= 2.1.269 < 3.0.0`; see [`harness-compatibility.json`](harness-compatibility.json)). **`gh` (GitHub CLI) is optional** and used only for community contribution and Star; when missing or logged out, installation falls back to `local-only` and never blocks.
 - **Native Windows**: Git for Windows provides the SSH client used by `remote-dev`, preserving your existing SSH and model settings.
 - **Linux & WSL**: Inside WSL, use Linux-native `claude`, `git`, `uv`, and `gh` with your profile and runtime stored on the Linux filesystem. Service-backed knowledge operations on Linux/WSL require a reachable `systemd --user` manager (`systemd >= 254` with unified cgroup v2); if unavailable, the knowledge service reports an explicit error rather than running unprotected, while `remote-dev` continues to work normally.
 
@@ -212,7 +191,7 @@ flowchart LR
 ### Local Storage Layout
 
 - **Immutable Runtime Directory**: `${XDG_DATA_HOME:-$HOME/.local/share}/mindie-agent/runtimes/cc` on macOS/Linux/WSL, or `%LOCALAPPDATA%/mindie-agent/runtimes/cc` on Windows (indexed by source, lockfile, Python ABI, and platform).
-- **Persistent Release Entry**: `CLAUDE_PLUGIN_DATA/releases/0.1.29/entry.py` (decoupled from volatile plugin caches so long-lived sessions remain stable).
+- **Persistent Release Entry**: `CLAUDE_PLUGIN_DATA/releases/0.1.30/entry.py` (decoupled from volatile plugin caches so long-lived sessions remain stable).
 - **Adapter Configuration**: `${XDG_CONFIG_HOME:-$HOME/.config}/mindie-agent/cc.json` (records the active installation binding; user consent and contribution scope are stored separately as persistent user data).
 
 ---
@@ -231,13 +210,12 @@ uv run --locked --no-editable --group test python -m pytest -q
 Validate the product contract and Harness interface registry:
 
 ```sh
-uv run --locked --no-editable --group test python scripts/product_contract.py --source .
-uv run --locked --no-editable --group test python scripts/harness.py --source . --tests tests --revision "$(git rev-parse HEAD)"
+uv run --locked --no-editable --group test python scripts/setup.py release-metadata --source . --tests tests --revision "$(git rev-parse HEAD)"
 ```
 
 ### Release Benchmark
 
-- **Release Microbenchmark**: Each `0.1.29` plugin release attaches `benchmark-results.json` and `benchmark-results.md` measuring the `public-transcript` public-message parsing and hidden-reasoning filtering workload ([`benchmarks/release.json`](benchmarks/release.json)) in `us/op`. This serves as a reproducible CPU microbenchmark baseline, distinct from live A2/A3 NPU acceptance and end-to-end Agent productivity evaluation.
+- **Release Microbenchmark**: Each `0.1.30` plugin release attaches `benchmark-results.json` and `benchmark-results.md` measuring the `public-transcript` public-message parsing and hidden-reasoning filtering workload ([`benchmarks/release.json`](benchmarks/release.json)) in `us/op`. This serves as a reproducible CPU microbenchmark baseline, distinct from live A2/A3 NPU acceptance and end-to-end Agent productivity evaluation.
 
 ---
 

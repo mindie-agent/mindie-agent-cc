@@ -15,8 +15,8 @@
 
 ### 可选 `PreToolUse` 身份提示与连接级回退
 在主会话工具调用前，被动的 `PreToolUse` Hook 记录原生 `tool_use_id`、会话 ID、工具名称与参数摘要，紧随其后的 MCP 请求携带 `_meta["claudecode/toolUseId"]`：
-- 若存在匹配的 `PreToolUse` 绑定记录，`mcp_server.py` 单次消费并严格校验工具名与参数摘要（拒绝重放或篡改绑定）。
-- 若未触发 `PreToolUse`（如 `Task` 子智能体或直接 MCP 调用），`mcp_server.py` 平滑回退至已验证的 `_meta`/环境会话 ID 或连接级 `_CONNECTION_SESSION_ID`。
+- 若存在匹配的 `PreToolUse` 绑定记录，`scripts/entry.py` 的 `ManagedMCPAdapter("cc")` 单次消费并严格校验工具名与参数摘要（拒绝重放或篡改绑定）。
+- 若未触发 `PreToolUse`（如 `Task` 子智能体或直接 MCP 调用），`scripts/entry.py` 的 `ManagedMCPAdapter("cc")` 平滑回退至已验证的 `_meta`/环境会话 ID 或连接级 `_CONNECTION_SESSION_ID`。
 - 新建会话与 `--fork-session` 分支会话各自拥有独立会话身份，同时共享 `REMOTE_DEV_STATE_DIR`（`state_dir() / "remote"`）以支持子智能体轮询或停止父会话 `job_id`。
 
 ---

@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/mindie-agent/mindie-agent-cc/releases"><img src="https://img.shields.io/badge/release-v0.1.29-0F766E.svg" alt="Release v0.1.29"></a>
+  <a href="https://github.com/mindie-agent/mindie-agent-cc/releases"><img src="https://img.shields.io/badge/release-v0.1.30-0F766E.svg" alt="Release v0.1.30"></a>
   <a href="harness-compatibility.json"><img src="https://img.shields.io/badge/Claude_Code-%3E%3D2.1.269_%3C3.0.0-D97757.svg" alt="Claude Code >=2.1.269 <3.0.0"></a>
   <a href="pyproject.toml"><img src="https://img.shields.io/badge/python-3.13-3776AB.svg" alt="Python 3.13"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-0F766E.svg" alt="License: MIT"></a>
@@ -27,7 +27,7 @@
 
 ---
 
-**MindIE Agent for Claude Code**（`mindie-agent-cc`）是 [MindIE Agent](https://github.com/mindie-agent/mindie-agent) 面向 Claude Code 的原生插件，服务于**昇腾（Ascend）NPU 上的 AI Infra 设计、开发与测试全流程**。当前 `v0.1.29`（配套主产品 `0.1.13`）已交付三大核心能力：**本地与社区知识库检索及隐私脱敏**（覆盖 `vLLM-Ascend`、`xLLM`、`MindIE-SD`、`AscendC` / `Triton` 算子与 `CANN` 工程）、**远端 SSH / Docker 开发与 NPU 状态巡检**，以及**统一故障诊断与脱敏上报**。
+**MindIE Agent for Claude Code**（`mindie-agent-cc`）是 [MindIE Agent](https://github.com/mindie-agent/mindie-agent) 面向 Claude Code 的原生插件，服务于**昇腾（Ascend）NPU 上的 AI Infra 设计、开发与测试全流程**。当前 `v0.1.30`（配套主产品 `0.1.13`）已交付三大核心能力：**本地与社区知识库检索及隐私脱敏**（覆盖 `vLLM-Ascend`、`xLLM`、`MindIE-SD`、`AscendC` / `Triton` 算子与 `CANN` 工程）、**远端 SSH / Docker 开发与 NPU 状态巡检**，以及**统一故障诊断与脱敏上报**。
 
 项目设计遵循 [MindIE Agent 工程设计原则](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.md)：**插件启用后全量工具静默默认就绪（Silent Default-On）**，无需输入任何斜杠命令或前置会话绑定；语义 Skill（`user-invocable: false`）仅在涉及昇腾 NPU 研发任务时由 Claude 按需加载；社区经验采集严格遵循显式 Opt-In 与授权目录边界，所有状态与报错真实透明，不做静默降级或盲目重试。
 
@@ -96,72 +96,51 @@ MindIE Agent 采用**「全量 MCP 工具默认就绪 + 昇腾语义 Skill 按�
 
 如果你是收到用户安装请求的 AI Agent，请直接按顺序在终端执行以下步骤完成安装与自检，**无需让用户手动翻阅文档**：
 
-1. **检查基础依赖、宿主版本与 `gh` GitHub 交互通道（硬性指标）**：
-   **稳定的 GitHub 交互通道（已安装并登录 `gh` CLI）是硬性前置指标**——插件拉取、锁定发行版校验、`knowledge-vllm-ascend` 同步、经验闭环自动提交 PR（底层通过 `gh api` 与 `!gh auth git-credential` 驱动）及组件故障上报均依赖该通道：
+1. **一条命令安装并预热运行时（`gh` 可选，永不阻塞）**：
    ```sh
-   git --version
-   uv --version
-   gh --version
-   GH_USER=$(gh api --hostname github.com user --jq .login) && echo "GitHub channel verified for account: $GH_USER"
-   GIT_CONFIG_COUNT=2 \
-     GIT_CONFIG_KEY_0=credential.https://github.com.helper \
-     GIT_CONFIG_VALUE_0='!gh auth git-credential' \
-     GIT_CONFIG_KEY_1=credential.interactive \
-     GIT_CONFIG_VALUE_1=never \
-     git ls-remote https://github.com/mindie-agent/mindie-agent-cc.git HEAD
-   claude --version
+   uv run https://github.com/mindie-agent/mindie-agent/releases/latest/download/install.py --host cc
    ```
-   - **硬性门禁（严禁跳过或静默忽略，且严禁修改宿主机全局或系统级 Git 配置）**：若未安装 `gh`，请先协助安装（macOS：`brew install gh`；Windows：`winget install --id GitHub.cli`；Ubuntu / WSL：`sudo apt update && sudo apt install -y gh`）。账号读取成功时复用已有认证；需要登录时按 [GitHub 登录引导](docs/install/github-authentication.md) 选择方式：普通网络使用浏览器，企业网络或浏览器授权受阻时优先 Token。已有 Token 就在 `gh` 隐藏输入提示中粘贴（或使用已提供的私有文件），没有则引导创建。仅使用进程级 `GIT_CONFIG_COUNT`（及企业证书场景下的 `UV_SYSTEM_CERTS=true UV_NATIVE_TLS=true`）验证传输通道，切勿污染宿主机全局 Git 配置。
-   - 确认 `claude --version` 满足当前发行版 `v0.1.29` 声明支持的兼容版本范围：`>= 2.1.269 < 3.0.0`（定义于 [`harness-compatibility.json`](harness-compatibility.json)）。
-   - 若在 **Linux 或 Windows WSL** 下使用后台知识服务，请额外执行 `systemctl --user show --property=Version` 确认 `systemd >= 254` 且可访问（WSL 内须使用 Linux 原生 `claude`、`git`、`uv` 与 `gh`）。
+   - `uv` 与已登录的 Claude Code 是唯一硬性依赖；`gh` 仅用于可选的社区贡献与 Star，未安装或未登录时直接降级为 `local-only`，**不阻断安装**。
+   - 需要 GitHub 凭据时按 [GitHub 登录引导](docs/install/github-authentication.md) 使用浏览器或 Token 完成；仅使用进程级 `GIT_CONFIG_COUNT`，切勿污染宿主机全局 Git 配置。
+   - 确认 `claude --version` 满足 `>= 2.1.269 < 3.0.0`（定义于 [`harness-compatibility.json`](harness-compatibility.json)）。
+   - Linux / WSL 后台知识服务需 `systemd >= 254` 且 `systemd --user` 可用；缺失时明确报错但不影响独立 `remote-dev`。
 
-2. **可选支持与贡献准备**：
-   安装过程不未经询问静默执行 Star 或 Fork；第 5 步通过原生交互弹窗询问用户工作区初始化选项、是否开启社区贡献，以及是否顺手给项目点个 Star ⭐。只有用户明确开启知识贡献后，才按需自动解析或创建目标知识仓的 Fork 并绑定到贡献配置。
-
-3. **添加插件源、安装并完成无模型冷启动初始化**：
+2. **冷启动与 MCP 自检**：
    ```sh
-   claude plugin marketplace add "https://github.com/mindie-agent/mindie-agent-cc.git#v0.1.29"
-   claude plugin install mindie-agent@mindie-agent-cc --scope user
    UV_SYSTEM_CERTS=true UV_NATIVE_TLS=true claude --init-only
-   ```
-   > 说明：`claude --init-only` 会在不发起对话、不消耗模型 Token 的情况下触发 `SessionStart`，通过 `uv` 自动准备 Python 3.13 并安装完整锁定的运行时环境。
-
-4. **核对插件安装与共享授权状态**：
-   ```sh
-   claude plugin list --json
    claude mcp list
+   ```
+   确认 `knowledge`、`remote`、`components` 三个 MCP 服务均为 `Connected`。
+
+3. **只读就绪检查**：
+   ```sh
    SETUP_PY=$(python3 -c "import glob, os; p = sorted(f for f in glob.glob(os.path.expanduser('~/.claude/plugins/**/scripts/setup.py'), recursive=True) if 'mindie-agent' in f); print(p[-1] if p else '')")
+   uv run --no-project --python 3.13 python "$SETUP_PY" doctor --timeout 15
    uv run --no-project --python 3.13 python "$SETUP_PY" sharing --status
    ```
-   - 确认 `claude plugin list --json` 中包含 `mindie-agent@mindie-agent-cc`（版本 `0.1.29`，状态已启用），并检查 `setup.py sharing --status` 返回的 JSON（含 `needs_onboarding_prompt` 状态）。
-   - 确认 `claude mcp list` 中插件的 `knowledge`、`remote`、`components` 三个 MCP 服务均显示 `Connected`。验证通过后，向用户汇报已验证的 GitHub 账号（`$GH_USER`）及插件就绪状态。
+   将 `mindie_doctor` 的 `overall_status` 与 `sharing --status` 的 `tier` 一并汇报；任何失败只报告一次具体错误，继续使用原生 `ssh`/`scp` 或任务脚本完成任务。
 
-   验证成功后立即继续第 5 步，完成首次交互式配置后一起汇报安装结果。
+4. **3 个动态 `gh` 感知的 `AskUserQuestion` 首次配置问题**：
+   先简要说明 [用户须知](docs/install/user-notice.md)，随后立即调用 Claude Code 原生 `AskUserQuestion` 一次性弹出：
+   1. **开发工作区**（`header: "开发工作区"`）：初始化 `vllm-ascend-workspace` / 保持当前目录 / 使用已有工作区目录。
+   2. **社区共享与故障上报**（`header: "社区共享"`，**动态推荐**）：若 `gh` 已登录则推荐 `开启社区共享与故障上报 (Recommended)`，否则推荐 `仅保持本地模式 (Recommended)`；两项文案保持固定，仅 Recommended 标记随 `gh` 状态切换。
+   3. **一步连接昇腾 NPU 服务器**（`header: "NPU 连接"`）：`现在配置 SSH 远端 NPU (Recommended)` / `稍后配置`。选择“现在配置”时，引导用户提供 `host`、`user`、`port` 与容器名（如有）；在终端模式下可在最后一步通过 `remote_auth` 的 `--password` 完成一次登录，密码只经由隐藏输入传递，不写入对话或命令行历史。
+   随后在**一行**末尾礼貌补充：`⭐ 如果 MindIE Agent 对你有帮助，欢迎在 GitHub 给 mindie-agent/mindie-agent 点个 Star；不点也完全不影响使用。` —— 仅当用户明确同意时才执行 Star，严禁静默 Star。
 
-5. **弹出原生交互式配置提问框（Step 5 Onboarding Popup）并执行绑定**：
-   - 当刚刚完成安装或 `setup.py sharing --status` 显示 `"needs_onboarding_prompt": true` 时，先简要说明 [用户须知](docs/install/user-notice.md)，随后**立即调用 Claude Code 原生 `AskUserQuestion` 工具**，一次性弹出以下 3 个首次配置问题：
-     1. **本地开发工作区 `vllm-ascend-workspace`**（`header: "开发工作区"`，`multiSelect: false`）：`初始化 vllm-ascend-workspace (Recommended)`（新建并初始化协同工作区） vs `保持当前目录`（直接以当前目录作为工作区） vs `使用已有工作区目录`（绑定已有本地工作区目录）
-     2. **社区知识共享与自动故障上报**（`header: "社区共享"`，`multiSelect: false`）：`开启社区共享与故障上报 (Recommended)`（开启经验脱敏共享 PR 与故障自动上报） vs `仅保持本地模式`（关闭外发共享与故障上报）
-     3. **顺手给 MindIE Agent 点个 GitHub Star 吗？ ⭐**（`header: "GitHub Star"`，`multiSelect: false`）：`好，点个 Star ⭐ (Recommended)`（在 GitHub 上 star `mindie-agent/mindie-agent` 支持一下项目） vs `先不用`（直接开始使用）
-   - 收到用户选择后，严格按以下顺序执行：
-     1. **先确定工作区路径 `WORKSPACE_ROOT`**：若用户选择新建或复用工作区，按 [工作区配置指南](docs/install/workspace-setup.md) 初始化或解析路径并记录为 `WORKSPACE_ROOT`（保持当前目录则 `WORKSPACE_ROOT="$(pwd)"`），并通过宿主的原生项目/工作区入口完成路径登记与 `repo_init.py` 源码初始化。
-     2. **持久化统一贡献与共享设置**：
-        ```sh
-        # 若用户选择开启社区共享与故障上报：
-        uv run --no-project --python 3.13 python "$SETUP_PY" sharing --enable --project-root "$WORKSPACE_ROOT"
-        # 若用户选择仅保持本地模式：
-        uv run --no-project --python 3.13 python "$SETUP_PY" sharing --disable
-        ```
-     3. **按用户意愿点上 GitHub Star ⭐**（仅当用户明确选择了点个 Star 时执行，严禁未经同意静默执行）：
-        ```sh
-        gh api --hostname github.com --silent -X PUT /user/starred/mindie-agent/mindie-agent && gh api --hostname github.com --silent /user/starred/mindie-agent/mindie-agent
-        ```
-   - 汇总汇报插件安装状态、工作区路径、共享与故障上报开关状态及 Star 状态。
+5. **持久化授权与工作区**：
+   ```sh
+   uv run --no-project --python 3.13 python "$SETUP_PY" sharing --enable --project-root "$WORKSPACE_ROOT"   # 或
+   uv run --no-project --python 3.13 python "$SETUP_PY" sharing --local-only --project-root "$WORKSPACE_ROOT"
+   uv run --no-project --python 3.13 python "$SETUP_PY" sharing --disable
+   ```
+   - `contribute` 同时授权脱敏知识 PR 与故障 Issue；`local-only` 仅本地采集；`disabled` 显式关闭外发。已有有效选择直接复用，不重复弹窗。
+   - 若启用了 NPU 连接，按 [工作区配置指南](docs/install/workspace-setup.md) 完成 `remote-dev` 端点登记；如选择 Star，再执行 `gh api --hostname github.com --silent -X PUT /user/starred/mindie-agent/mindie-agent`。
 
+6. **汇报**：插件版本、三个 MCP 状态、`mindie_doctor` 结论、`sharing` tier、工作区路径、NPU 连接状态与 Star 状态；`gh` 不可用时明确标注“可选通道未配置”，不视为安装失败。
 </details>
 
 #### 环境要求说明
-- **基础工具与硬性指标**：已安装 `git`、`uv`、已登录认证的 **`gh`（GitHub CLI）**，以及已登录的 Claude Code（兼容接口声明支持 Claude Code `>= 2.1.269 < 3.0.0`，详见 [`harness-compatibility.json`](harness-compatibility.json)）。
+- **基础工具与硬性指标**：已安装 `git`、`uv` 与已登录的 Claude Code（兼容接口声明支持 Claude Code `>= 2.1.269 < 3.0.0`，详见 [`harness-compatibility.json`](harness-compatibility.json)）。**`gh`（GitHub CLI）为可选项**，仅用于社区贡献与 Star；未安装或未登录时自动选择 `local-only`，不阻断安装。
 - **Windows 原生环境**：由 Git for Windows 提供远端开发所需的 SSH 客户端，完全保留你现有的 SSH 与模型配置。
 - **Linux 与 WSL 环境**：在 WSL 中请使用 Linux 原生 `claude`、`git`、`uv` 与 `gh`，并将配置与数据保存在 Linux 文件系统内。Linux / WSL 下的后台知识服务依赖用户态 `systemd`（`systemd >= 254` 且启用统一 cgroup v2 层级）；若环境缺少 `systemd --user`，知识服务会明确报告错误而不做静默降级，但独立的 `remote-dev` 远端开发仍可正常使用。
 
@@ -212,7 +191,7 @@ flowchart LR
 ### 本地目录说明
 
 - **锁定运行时目录**：macOS / Linux / WSL 下位于 `${XDG_DATA_HOME:-$HOME/.local/share}/mindie-agent/runtimes/cc`，Windows 下位于 `%LOCALAPPDATA%/mindie-agent/runtimes/cc`（按源码、锁文件与平台哈希隔离存储，构建后不可变）。
-- **持久化发行版入口**：`CLAUDE_PLUGIN_DATA/releases/0.1.29/entry.py`（脱离宿主易失缓存，确保长会话期间入口稳定可用）。
+- **持久化发行版入口**：`CLAUDE_PLUGIN_DATA/releases/0.1.30/entry.py`（脱离宿主易失缓存，确保长会话期间入口稳定可用）。
 - **适配器配置文件**：`${XDG_CONFIG_HOME:-$HOME/.config}/mindie-agent/cc.json`（记录当前安装绑定；用户的贡献授权与范围作为持久数据独立保存）。
 
 ---
@@ -231,13 +210,12 @@ uv run --locked --no-editable --group test python -m pytest -q
 校验产品契约与宿主接口注册表完整性：
 
 ```sh
-uv run --locked --no-editable --group test python scripts/product_contract.py --source .
-uv run --locked --no-editable --group test python scripts/harness.py --source . --tests tests --revision "$(git rev-parse HEAD)"
+uv run --locked --no-editable --group test python scripts/setup.py release-metadata --source . --tests tests --revision "$(git rev-parse HEAD)"
 ```
 
 ### 发布基准测试（Release Benchmark）
 
-- **发行版微基准测试（Release Microbenchmark）**：每个 `0.1.29` 插件 Release 均随附 `benchmark-results.json` 和 `benchmark-results.md`，按 [`benchmarks/release.json`](benchmarks/release.json) 测量 `public-transcript` 公开消息解析与隐藏推理过滤的耗时（单位 `us/op`）。该指标作为可复现的本地 CPU 微基准基线，与远端 A2/A3 NPU 实机集成验收及端到端 Agent 研发效率评估相互独立。
+- **发行版微基准测试（Release Microbenchmark）**：每个 `0.1.30` 插件 Release 均随附 `benchmark-results.json` 和 `benchmark-results.md`，按 [`benchmarks/release.json`](benchmarks/release.json) 测量 `public-transcript` 公开消息解析与隐藏推理过滤的耗时（单位 `us/op`）。该指标作为可复现的本地 CPU 微基准基线，与远端 A2/A3 NPU 实机集成验收及端到端 Agent 研发效率评估相互独立。
 
 ---
 
