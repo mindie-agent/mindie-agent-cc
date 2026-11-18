@@ -135,7 +135,11 @@ def _quiet() -> int:
     return 0
 
 def _run(cmd: list[str], stdin_buf: bytes | None, *, timeout: float | None = None, capture: bool = False) -> int:
-    return subprocess.run(cmd, input=stdin_buf, capture_output=capture, timeout=timeout, creationflags=_NO_WIN).returncode
+    if stdin_buf is not None or capture:
+        return subprocess.run(cmd, input=stdin_buf, capture_output=capture, timeout=timeout, creationflags=_NO_WIN).returncode
+    try: sys.stdin.fileno(); sys.stdout.fileno(); sys.stderr.fileno(); io_kw = {"stdin": sys.stdin, "stdout": sys.stdout, "stderr": sys.stderr}
+    except Exception: io_kw = {}
+    return subprocess.run(cmd, **io_kw, timeout=timeout, creationflags=_NO_WIN).returncode
 
 def _cold(args: list[str], cfg_path: Path) -> int:
     from host_adapter import verify_bundled_seed

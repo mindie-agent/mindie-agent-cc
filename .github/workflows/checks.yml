@@ -37,12 +37,7 @@ jobs:
         run: uv sync --locked --no-editable --group test
       - name: Read the locked knowledge commit
         id: pins
-        shell: python
-        run: |
-          import importlib.metadata as metadata, json, os
-          direct = json.loads(metadata.distribution("mindie-knowledge").read_text("direct_url.json"))
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-              output.write("knowledge=" + direct["vcs_info"]["commit_id"] + "\n")
+        run: uv run --no-sync python -c 'import importlib.metadata as m, json, os; d = json.loads(m.distribution("mindie-knowledge").read_text("direct_url.json")); open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8").write("knowledge=" + d["vcs_info"]["commit_id"] + "\n")'
       - name: Validate Harness interfaces and immutable release metadata
         run: uv run --locked --no-editable --group test python scripts/setup.py release-metadata --source . --tests tests --revision ${{ github.sha }}
       - name: Out-of-tree wheel build and seed verification smoke check

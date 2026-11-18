@@ -8,7 +8,7 @@ version = "0.1.30"
 description = "Native Claude Code adapter for MindIE Agent"
 requires-python = ">=3.11,<3.15"
 dependencies = [
-  "mindie-harness @ git+https://github.com/mindie-agent/harness@ee77300887debb0b769794eb3ee0c2b45eab87ed",
+  "mindie-harness @ git+https://github.com/mindie-agent/harness@14313b8ba58c888b20c9c216ec41d14f5e62f4f7",
   "mindie-knowledge @ git+https://github.com/mindie-agent/knowledge@9f48272a3ba87248bfda0e4068692511aac4dfa4",
   "remote-dev @ git+https://github.com/mindie-agent/remote-dev@b33ca60baac81c237dd1bd6e7a8068945820727b",
   "mindie-diagnostics @ git+https://github.com/mindie-agent/diagnostics@7464cbb4381e9dc996871d192eb3f05f61dfdb28",
@@ -51,7 +51,7 @@ scripts = "mindie_cc"
 [tool.uv]
 # The reviewed plugin selection also replaces older transitive component pins.
 override-dependencies = [
-  "mindie-harness @ git+https://github.com/mindie-agent/harness@ee77300887debb0b769794eb3ee0c2b45eab87ed",
+  "mindie-harness @ git+https://github.com/mindie-agent/harness@14313b8ba58c888b20c9c216ec41d14f5e62f4f7",
   "mindie-knowledge @ git+https://github.com/mindie-agent/knowledge@9f48272a3ba87248bfda0e4068692511aac4dfa4",
   "mindie-diagnostics @ git+https://github.com/mindie-agent/diagnostics@7464cbb4381e9dc996871d192eb3f05f61dfdb28",
   "mindie-debugger @ git+https://github.com/mindie-agent/debugger@e15c2ed38d8f928db67c5bb1a94269f62207227c",
