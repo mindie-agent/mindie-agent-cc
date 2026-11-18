@@ -9,6 +9,15 @@ Load this reference when routing across knowledge domains, inspecting session/re
   - `base_config.parent / "mindie-consent.json"` and `community_config` store the persistent opt-in policy governing both scoped knowledge PRs and sanitized product fault Issues (`mindie_status` and `diagnostics_status` inspect factual local state without mutating it).
   - The `Stop` hook checks `mindie-consent.json` and authorized `project_roots` before opening `admission.sqlite3` or spawning capture workers: when sharing is unconfigured, disabled, or `cwd` is outside authorized `project_roots`, `Stop` exits immediately with zero SQLite files created; when sharing is enabled and `cwd` is inside authorized `project_roots`, `Stop` auto-ensures the session lease (`not_before=0.0`) and hands off redacted transcript capture.
   - Keep three states distinct when reporting status: (1) local consent config written, (2) background reporter running (`reporting.status == "running"`), and (3) external GitHub Issue/PR created.
+- **Sharing & readiness commands**:
+  ```sh
+  python scripts/setup.py sharing --enable --project-root "$PWD"     # opt-in community PRs + fault reporting
+  python scripts/setup.py sharing --local-only --project-root "$PWD" # local capture only, no outbound reporting
+  python scripts/setup.py sharing --disable                          # explicit off
+  python scripts/setup.py sharing --status                           # read-only tier / gh / cwd scope
+  python scripts/setup.py doctor [--probe-remote] [--cwd DIR] [--timeout SEC]
+  ```
+  `mindie_doctor` (also exposed on the `components` MCP surface) is the read-only readiness check and never writes state. If it fails, report the concrete error once and continue via native `ssh`/`scp` or task-local scripts.
 
 ## 2. Multi-Domain Routing
 
@@ -29,5 +38,5 @@ Load this reference when routing across knowledge domains, inspecting session/re
 ## 4. Handle Continuation, Optional RSI Helpers & Profiler Discipline
 
 - **Shared Handle Visibility (`coordinator` & `remote-dev`)**: `coordinator` (`execution_id`) and `remote-dev` (`job_id`) persist authoritative run state under shared profile state directories so parent sessions, Subagents, and reconnected turns can inspect (`remote_job_status`, `coordinator` status) or stop (`remote_job_stop`, `coordinator` cancel) active jobs directly. Always inspect existing handles after compaction or interruption before submitting new runs.
-- **Optional Experiment Ledger (`experiment_ledger.py` / `rsi_loop.py`)**: Both helpers delegate to `mindie_harness.rsi` and remain optional for multi-round optimization sweeps. Record `experiment-ledger.jsonl` entries (`supported` | `refuted` | `inconclusive`) and verify multi-factor candidates via sequential leave-one-out pruning where the retained combination passes both correctness and performance checks.
+- **Optional Experiment Ledger (`rsi_loop` / `experiment_ledger` component tools)**: Both helpers delegate to `mindie_harness.rsi` and remain optional for multi-round optimization sweeps. Record `experiment-ledger.jsonl` entries (`supported` | `refuted` | `inconclusive`) and verify multi-factor candidates via sequential leave-one-out pruning where the retained combination passes both correctness and performance checks.
 - **Exclusive Physical NPU Lease & `mindie_profiler`**: Use `npu_count=0` only for confirmed device-free steps. Benchmarks, attribution checks, and `mindie_profiler` runs on the same physical NPU (or same A3 dual-Die package, `Phy-ID 0..15`) require an exclusive `coordinator` lease or an equivalent verified host reservation. Pass explicit `--time-window START:END`, `--step-window STEP=START:END` / `--steps-file`, or `--full-range` (`--unit us|ns|ms`) and explicit scene/`--clock-domain` annotations to `mindie_profiler`. Keep `ideal_hardware_lower_bound_ms`, `model_predicted_ms`, and `measured_device_ms` distinct, and rely on hardware throttle signal bits rather than a static `85°C` threshold.

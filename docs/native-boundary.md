@@ -15,8 +15,8 @@
 
 ### Optional `PreToolUse` → MCP Call Hint & Fallback Identity
 Before a main-session tool call executes, Claude Code triggers the passive `PreToolUse` hook with the native `tool_use_id`, session identity, tool name, and arguments, and passes `_meta["claudecode/toolUseId"]` in the MCP call:
-- When a matching `PreToolUse` bind exists, `mcp_server.py` consumes it at most once (verifying exact tool name and argument digest and rejecting duplicate replay or tampered binds).
-- When `PreToolUse` did not run (such as inside `Task` subagents or direct MCP calls), `mcp_server.py` falls back cleanly to verified `_meta`/environment session IDs or the connection-scoped `_CONNECTION_SESSION_ID`.
+- When a matching `PreToolUse` bind exists, `scripts/entry.py`'s `ManagedMCPAdapter("cc")` consumes it at most once (verifying exact tool name and argument digest and rejecting duplicate replay or tampered binds).
+- When `PreToolUse` did not run (such as inside `Task` subagents or direct MCP calls), `scripts/entry.py`'s `ManagedMCPAdapter("cc")` falls back cleanly to verified `_meta`/environment session IDs or the connection-scoped `_CONNECTION_SESSION_ID`.
 - New sessions and `--fork-session` branches receive independent session identities while sharing `REMOTE_DEV_STATE_DIR` (`state_dir() / "remote"`) so subagents can poll or stop parent `job_id`s.
 
 ---

@@ -1,772 +1,213 @@
 #!/usr/bin/env python3
-"""Prepare this native release's fixed runtime binding and existing shared state.
+"""Thin Claude Code setup CLI delegating shared behavior to `mindie_harness`.
 
-[Role]
-Validates the candidate runtime, prepares the knowledge store and capture
-configuration, and records the atomic `installation.json` binding for
-`mindie-agent-cc`.
-
-[Invariants]
-- Plugin installation, update, and removal belong to Claude Code's Git
-  marketplace; no mutable code-selection registry lives here.
-- Preserves existing user consent and community sharing settings across setups.
-
-[Timeouts & Locks]
-- Serializes cold preparation separately from short profile admission locks.
-- SessionStart `--source` children inherit `MINDIE_MAINTENANCE_GROUP` so nested
-  `prepare_domains` workers die with the setup process group.
-
-[Side-Effect Policy]
-- Writes MindIE-owned adapter, engine, community, and `installation.json` files;
-  never touches `~/.claude`.
+[Role] Initializes `cc.json`/`cc.engine.json`, configures sharing, runs doctor and runtime update, and emits validated `mindie-plugin-release/1` metadata.
+[Invariants] `release-metadata` validates compatibility, AST `code_paths`, `test_ids`, and local evidence; version selection reads `pyproject.toml`; sharing delegates verbatim.
+[Timeouts & Locks] Doctor/update delegates own their bounded deadlines and locks.
+[Side-Effect Policy] Profile writes stay inside MindIE-owned documents.
 """
-from __future__ import annotations
-
 import argparse
-import hashlib
+import ast
+import importlib.util
 import json
 import os
 from pathlib import Path
-import re
-import secrets
-import shutil
+import subprocess
 import sys
-import time
-import tempfile
+import tomllib
 
 HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
+PLUGIN_ROOT = HERE.parent
+_NO_WIN = 0x08000000 if os.name == "nt" else 0
+REPOSITORY = "mindie-agent/mindie-agent-cc"
+HARNESS = "claude-code"
+DECLARATION = "harness-compatibility.json"
+DEFAULT_DOMAIN = "vllm-ascend"
 
-from install_state import (
-    FACADE_PROTOCOL, INSTALLATION_SCHEMA, InstallationUnavailable, LockTimeout,
-    OperationLock, atomic_write, read_binding,
-)
-from maintenance import sync_public_feed
-from paths import config_path as default_config_path, service_launch_context, which_host_binary
-from product_contract import identity, official_feeds, publication_feed
-from setup_diagnostics import (
-    consent_snapshot, emit_deferred, emit_failure, enabled as envelope_enabled,
-)
-from storage_lifecycle import (
-    attach_cleanup, cleanup_fields, post_switch, refresh_release_entry,
-    render_entry, silent_tick,
-)
-
-def community_settings(args, parser):
-    selected = any(
-        getattr(args, key)
-        for key in (
-            "community_repository",
-            "community_project_root",
-            "community_account",
-            "community_fork",
-            "community_visibility",
-        )
-    )
-    if not selected:
-        if args.community_branch is not None:
-            parser.error("--community-branch requires --community-repository")
-        return None
-    if not args.community_repository:
-        parser.error("community sharing requires --community-repository owner/repo")
-    if not args.community_project_root:
-        parser.error("community sharing requires at least one --community-project-root")
-    if args.community_visibility != "public":
-        parser.error("community sharing requires --community-visibility public")
-    roots = []
-    for root in args.community_project_root:
-        canonical = str(Path(root).expanduser().resolve())
-        if not Path(canonical).is_dir():
-            parser.error("community project root does not exist: " + canonical)
-        if canonical not in roots:
-            roots.append(canonical)
-    data = dict(
-        schema="mindie-community-config/1",
-        enabled=True,
-        generation=secrets.token_hex(16),
-        enabled_at=time.time(),
-        repository=args.community_repository,
-        branch=args.community_branch or "main",
-        project_roots=roots,
-        idle_seconds=300,
-        visibility="public",
-    )
-    if args.community_account:
-        data["account"] = args.community_account
-    if args.community_fork:
-        data["fork"] = args.community_fork
-    return data
-
-def write_community(path, community, consent_config=None, python=None):
-    from community_config import configure
-    request = dict(community) if community is not None else None
-    if request is not None:
-        request['consent_config'] = consent_config or str(Path(path).with_name('mindie-consent.json').resolve())
-    result = configure(path, request, python)
-    if community is None and 'consent_config' not in result:
-        result = configure(path, dict(consent_config=consent_config or str(Path(path).with_name('mindie-consent.json').resolve())), python)
-    return 'enabled' if result['enabled'] else 'off'
-
-
-def _read(path):
-    value = json.loads(Path(path).read_text(encoding="utf-8"))
-    if not isinstance(value, dict):
-        raise ValueError("installation configuration must be one object")
-    return value
-
-
-def component_manifest():
-    path = Path(sys.prefix).parent.parent / "components.json"
-    return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
-
-
-def candidate_identity(source):
-    return identity(source, components=component_manifest())
-
-
-def validate_candidate(source, *, verified_publication=None):
-    from candidate_validate import validate
-    return validate(source, candidate_identity(source),
-                    verified_publication=verified_publication)
-
-
-def prepare_binding(source, config=None, *, root=None, domain="vllm-ascend",
-                    no_public_feed=False, claude_config_dir=None, community=None):
-    """Prepare immutable candidate bytes; only an empty profile is activated here."""
-    from bootstrap import runtime_key
-    from capture_config import prepare, prepare_store
-    from harness import require_engine_support
-    from importlib.metadata import version
-    from mindie_knowledge.component_bindings import managed_commands, rebind_commands, validate_command_floor
-
-    source = Path(source).resolve()
-    config = Path(config or default_config_path()).expanduser().resolve()
-    os.environ["MINDIE_CC_CONFIG"] = str(config)
-    key = runtime_key(source)
-    components = component_manifest()
-    if components:
-        key = hashlib.sha256((key + components["lock_sha256"]).encode()).hexdigest()
-    domain_root = Path(root or Path(os.environ.get("XDG_DATA_HOME")
-                                  or Path.home() / ".local/share") / "mindie-agent/cc")
-    domain_root = domain_root.expanduser().resolve()
-    initial = dict(schema=INSTALLATION_SCHEMA, facade_protocol=FACADE_PROTOCOL,
-                   state_dir=str(domain_root / "adapter-state"),
-                   community_config=str(config.with_name("mindie-community.json")),
-                   base_config=str(config))
-    selected = read_binding(config) if config.exists() else None
-    adapter = selected or initial
-    if adapter["base_config"] != str(config):
-        raise InstallationUnavailable("installation profile identity differs")
-    # Native SessionStart and both MCP processes can arrive together. A
-    # candidate is prepared once; no reader sees its store half initialized.
-    with OperationLock(adapter).preparation(timeout=30):
-        selected = read_binding(config) if config.exists() else None
-        adapter = selected or initial
-        commands = dict(adapter.get("component_commands", {}))
-        command_versions = {name: {"version": version(name)}
-                            for name, _python, _module in managed_commands(adapter).values()}
-        validate_command_floor(adapter, command_versions)
-        candidate_commands = rebind_commands(adapter, sys.executable, command_versions)
-        binding = Path(adapter["state_dir"]) / "installations" / key
-        adapter_file, engine_file = binding / "cc.adapter.json", binding / "cc.engine.json"
-        if adapter_file.exists() and selected is not None:
-            prepared = read_binding(adapter_file)
-            if (prepared != selected and (
-                    prepared.get('domain_source_configs') != (selected.get('domain_configs') or {})
-                    or prepared.get('component_source_commands', {}) != commands)):
-                routes = json.dumps(dict(domains=selected.get('domain_configs') or {},
-                                         commands=commands), sort_keys=True).encode()
-                binding = binding.with_name(key + '-' + hashlib.sha256(routes).hexdigest()[:16])
-                adapter_file, engine_file = binding / 'cc.adapter.json', binding / 'cc.engine.json'
-        if adapter_file.exists():
-            value = read_binding(adapter_file)
-            from candidate_validate import validate
-            validate(source, candidate_identity(source), value["product_validation"])
-            if (value["python"] != sys.executable or value["runtime_scripts"] != str(HERE)
-                    or value["base_config"] != str(config)):
-                raise InstallationUnavailable("prepared candidate identity differs")
-            engine = _read(value["engine_config"])
-            require_engine_support(engine, source=source)
-        else:
-            validation = validate_candidate(
-                source,
-                verified_publication=(selected.get("product_validation")
-                                      if isinstance(selected, dict) else None))
-            if selected is None:
-                engine = dict(root=str(domain_root), domain=domain,
-                              admission_path=str(domain_root / "admission.sqlite3"))
-            else:
-                engine = _read(selected["engine_config"])
-            engine.update(transcript_adapter=str(HERE / "transcript.py"),
-                          **prepare(sys.executable, HERE),
-                          community_config=adapter["community_config"],
-                          product_validation=validation,
-                         component_source=str(source) if components else None)
-            feed = publication_feed(validation, domain=domain)
-            if selected is None and feed is not None and not no_public_feed:
-                engine["feeds"] = [feed]
-            value = dict(adapter, python=sys.executable, runtime_scripts=str(HERE),
-                         adapter_config=str(adapter_file), engine_config=str(engine_file),
-                         product_validation=validation,
-                         component_source=str(source) if components else None)
-            value['domain_source_configs'] = dict(adapter.get('domain_configs') or {})
-            value["component_source_commands"] = commands
-            if commands:
-                value["component_commands"] = candidate_commands
-            from diagnostic_support import reporting_config_path
-            value["diagnostics_context"] = {
-                "MINDIE_DIAGNOSTICS_CONFIG": str(reporting_config_path(config)),
-            }
-            if claude_config_dir:
-                value["claude_config_dir"] = str(Path(claude_config_dir).expanduser().resolve())
-            engine["service_launch_context"] = service_launch_context(adapter_file, value)
-            value["claude_config_dir"] = engine["service_launch_context"]["paths"]["CLAUDE_CONFIG_DIR"]
-            value["diagnostics_context"]["MINDIE_DIAGNOSTICS_ROOT"] = (
-                engine["service_launch_context"]["paths"]["MINDIE_DIAGNOSTICS_ROOT"])
-            require_engine_support(engine, source=source)
-            if selected is None:
-                prepare_store(sys.executable, HERE, engine)
-            from capture_config import prepare_domains
-            from consent import consent_path
-            value['domain_configs'] = prepare_domains(
-                sys.executable, value, engine, config_directory=str(binding / 'domains'),
-                authority_directory=str(config.parent / 'knowledge-domains'),
-                consent_config=str(consent_path(config)),
-                public_feeds=not no_public_feed if selected is None else bool(engine.get('feeds')),
-                domains=official_feeds())
-            _publish_bytes(engine_file, (json.dumps(engine, indent=2) + "\n").encode())
-            _publish_bytes(adapter_file, (json.dumps(value, indent=2) + "\n").encode())
-
-        # Only publication changes take exclusive admission. SessionStart holds
-        # shared admission during maintenance, so already prepared MCP entries
-        # must not wait for that maintenance to finish.
-        current = read_binding(config) if config.exists() else None
-        if current is None or community is not None:
-            with OperationLock(adapter).exclusive(timeout=30):
-                current = read_binding(config) if config.exists() else None
-                if current is None:
-                    from release_update import disable_unfiltered_updates
-                    disable_unfiltered_updates(value)
-                    write_community(Path(value["community_config"]), community, python=sys.executable)
-                    atomic_write(config, value)
-                    current = value
-                elif community is not None:
-                    write_community(Path(current["community_config"]), community, python=sys.executable)
-        status = "ready" if current == value else "prepared"
-    os.environ["MINDIE_CC_CONFIG"] = str(adapter_file)
-    result = dict(config=str(adapter_file), base_config=str(config), status=status)
-    if selected is None:
-        # First binding: reclaim generations left by earlier plugin versions
-        # before they accumulate another full runtime copy. Bounded and silent.
-        attach_cleanup(result, silent_tick(value, budget_seconds=1.2))
-    elif status == "ready":
-        # Self-heal a jump script left behind by a crash between the canonical
-        # publish and post-switch refresh. A byte-identical entry is a no-op.
-        refresh_release_entry(value, previous_python=selected.get("python"))
-    if community is not None:
-        from consent import record_choice
-        from diagnostic_support import activate_reporting
-        record_choice("contribute", config)
-        result["reporting"] = activate_reporting(config)
-        if result["reporting"]["status"] != "running":
-            result["configuration_status"] = result["status"]
-            result["status"] = "degraded"
-    return result
-
-
-def prepare_binding_within(source, deadline_at):
-    """Run `--source` setup as a child killed when the shared deadline elapses."""
-    import bounded
-    remaining = deadline_at - time.monotonic()
-    if remaining <= 0:
-        raise TimeoutError("session-start budget exhausted before binding setup")
-    env = dict(os.environ)
-    env["MINDIE_MAINTENANCE_GROUP"] = "1"
-    env["MINDIE_SESSION_START_DEADLINE_MONOTONIC"] = str(deadline_at)
+def _write_json(path: Path, document: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     try:
-        payload = bounded.run(
-            [sys.executable, str(HERE / "setup.py"), "--source", str(source)],
-            timeout=remaining, cwd=str(HERE), check=False, env=env)
-    except bounded.CommandTimedOut as exc:
-        raise TimeoutError("session-start budget exhausted during binding setup") from exc
-    return json.loads(payload)
-
-
-def activate_binding(candidate_file, *, observation_seconds=30.0):
-    """Switch a native-installed candidate only after idle retirement and readiness.
-
-    The caller verifies native installation facts. This operation never downloads,
-    retries a native mutation, cancels business work, or rewrites saved choices.
-    """
-    from mindie_knowledge.loop.cli import config_at
-    from mindie_knowledge.loop.handoff import _probe
-    from mindie_knowledge.loop.lifecycle import inspect_retirement, retire_service
-
-    candidate = read_binding(candidate_file)
-    config = Path(candidate["base_config"])
-    started = time.monotonic()
-    deadline = started + observation_seconds
-
-    def remaining():
-        return max(0.0, deadline - time.monotonic())
-
-    def incomplete(stage, **facts):
-        return dict(status="incomplete", stage=stage, switched=False,
-                    seconds=time.monotonic() - started, **facts)
-
-    try:
-        with OperationLock(candidate).exclusive(timeout=0):
-            previous = read_binding(config)
-            if previous == candidate:
-                return dict(status="current", switched=False)
-            if ('domain_source_configs' in candidate
-                    and (previous.get('domain_configs') or {}) != candidate['domain_source_configs']):
-                return dict(status='deferred', stage='domain_routes_changed', switched=False)
-            if ('component_source_commands' in candidate
-                    and previous.get('component_commands', {}) != candidate['component_source_commands']):
-                return dict(status='deferred', stage='component_commands_changed', switched=False)
-            for key in ("base_config", "state_dir", "community_config"):
-                if previous[key] != candidate[key]:
-                    raise InstallationUnavailable("candidate changes installation data identity")
-            engine = config_at(candidate["engine_config"])
-            if remaining() <= 0:
-                return incomplete("new_readiness", service="not_observed")
-            state = _probe(engine, remaining(), config_path=candidate["engine_config"])
-            if remaining() <= 0:
-                return incomplete("new_readiness", service=state)
-            recorded = inspect_retirement(previous["engine_config"])
-            if state == "ready" and recorded is not None and recorded["status"] == "retired":
-                # A previous switch may have started this exact owner before
-                # the canonical write failed. Its consumer is not the old one.
-                retirement = dict(idle=True, retirement=recorded)
-            else:
-                retirement = retire_service(
-                    previous["engine_config"],
-                    control_timeout=remaining(),
-                )
-                if retirement.get("idle") is not True:
-                    return dict(status="deferred", stage="old_owner", retirement=retirement)
-                if retirement.get("cleanup_failed"):
-                    return dict(status="incomplete", stage="old_retirement", retirement=retirement)
-                if remaining() <= 0:
-                    return incomplete("new_readiness", retirement=retirement)
-                state = _probe(engine, remaining(), config_path=candidate["engine_config"])
-            if remaining() <= 0:
-                return incomplete("new_readiness", service=state, retirement=retirement)
-            while True:
-                if remaining() <= 0:
-                    return incomplete("new_readiness", service=state, retirement=retirement)
-                state = _probe(engine, remaining(), config_path=candidate["engine_config"])
-                if remaining() <= 0:
-                    return incomplete("new_readiness", service=state, retirement=retirement)
-                if state in {"ready", "absent"}:
-                    from mindie_knowledge.loop.domain_catalog import retire_changed, restore_changed
-                    domains = retire_changed(previous, candidate, timeout=remaining())
-                    if domains['status'] != 'retired':
-                        return dict(status=domains['status'], stage='domain_retirement',
-                                    domains=domains, switched=False)
-                    try:
-                        atomic_write(config, candidate)
-                    except TimeoutError:
-                        raise
-                    except OSError as exc:
-                        return dict(status="incomplete", stage="canonical_publish",
-                                    service="ready", retirement=retirement,
-                                    domain_restoration=restore_changed(domains, timeout=remaining()),
-                                    error_type=type(exc).__name__, switched=False)
-                    cleanup = post_switch(candidate, previous_python=previous.get("python"))
-                    return dict(status="activated", switched=True,
-                                seconds=time.monotonic() - started, retirement=retirement,
-                                **cleanup_fields(cleanup))
-                if state not in {"absent", "starting"}:
-                    return dict(status="incomplete", stage="new_owner", service=state,
-                                retirement=retirement)
-                time.sleep(min(0.05, remaining()))
-    except LockTimeout:
-        return dict(status="deferred", stage="active_operation", switched=False)
-
-
-def _publish_bytes(path, value):
-    """Publish complete immutable bytes without replacing an existing entry."""
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-        if path.read_bytes() != value:
-            raise ValueError("immutable installation entry already binds different bytes")
-        return
-    descriptor, temporary = tempfile.mkstemp(prefix=".entry-", dir=path.parent)
-    try:
-        with os.fdopen(descriptor, "wb") as stream:
-            stream.write(value)
-            stream.flush()
-            os.fsync(stream.fileno())
-        try:
-            os.link(temporary, path)
-        except FileExistsError:
-            if path.read_bytes() != value:
-                raise ValueError("immutable installation entry already binds different bytes")
+        tmp.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        os.replace(tmp, path)
     finally:
-        Path(temporary).unlink()
+        tmp.unlink(missing_ok=True)
 
+def _profile():
+    from mindie_harness.paths import ProfileRef
 
-def publish_entry(path, adapter_file):
-    """Write once: the native version in the Hook binds this exact runtime."""
-    adapter = _read(adapter_file)
-    diagnostics = dict(adapter.get("diagnostics_context", {}))
-    diagnostics.setdefault("MINDIE_DIAGNOSTICS_CONFIG",
-                           str(Path(adapter["base_config"]).parent / "diagnostics.json"))
-    value = render_entry(adapter_file, sys.executable, HERE, diagnostics)
-    _publish_bytes(Path(path), value.encode("utf-8"))
+    return ProfileRef.resolve("cc", plugin_root=PLUGIN_ROOT, config_path=os.environ.get("MINDIE_CC_CONFIG"))
 
+def _emit(document: dict) -> None:
+    sys.stdout.write(json.dumps(document, sort_keys=True) + "\n")
+    sys.stdout.flush()
 
-_REPOSITORY_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]{1,128}\Z")
-_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,255}\Z")
+def initialize_profile(root: str | None = None, domain: str = DEFAULT_DOMAIN) -> dict:
+    """Create the `cc` profile documents and return the resolved profile facts."""
+    from mindie_harness.locks import FileLock
 
-
-def resolve_github_identity(repository, *, account=None, fork=None):
-    """Best-effort GitHub login and fork resolution via `gh` when not explicitly passed."""
-    gh = None if fork else which_host_binary("gh", which_fn=shutil.which)
-    if fork or not gh:
-        return account, fork
-    import bounded
-
-    repo_name = repository.split("/", 1)[1]
+    profile = _profile()
+    lock = FileLock(profile.config_path.with_name(f".{profile.config_path.name}.update.lock"), exclusive=True, timeout=5.0)
+    lock.acquire()
     try:
-        if not account:
-            login = bounded.run(
-                [gh, "api", "--hostname", "github.com", "user", "--jq", ".login"],
-                timeout=5.0,
-            ).strip()
-            if login and "/" not in login and _NAME_RE.fullmatch(login):
-                account = login
-        if account and not fork:
-            try:
-                found = bounded.run(
-                    [gh, "api", "--hostname", "github.com", f"repos/{account}/{repo_name}", "--jq", ".full_name"],
-                    timeout=5.0,
-                ).strip()
-                if _REPOSITORY_RE.fullmatch(found):
-                    fork = found
-            except Exception:
-                bounded.run([gh, "repo", "fork", repository, "--clone=false"], timeout=10.0)
-                fork = f"{account}/{repo_name}"
-    except Exception:
-        pass
-    return account, fork
-
-
-def sharing_status(config=None):
-    """Read-only fast path for `setup.py sharing --status`."""
-    config = Path(config or default_config_path()).expanduser().resolve()
-    try:
-        import consent
-
-        saved = consent.load(config)
-    except ModuleNotFoundError:
-        saved = consent_snapshot(config.parent / "mindie-consent.json")
-    consent_state = saved.get("state") or "missing"
-    consent_choice = saved.get("choice") if consent_state == "ok" else None
-    choice_revision = saved.get("choice_revision") if consent_state == "ok" else None
-    comm_path = config.with_name("mindie-community.json")
-    if config.is_file():
+        engine_path = profile.config_path.with_name("cc.engine.json")
+        community = str(profile.config_path.with_name("mindie-community.json"))
         try:
-            bound = _read(config)
-            if isinstance(bound.get("community_config"), str):
-                comm_path = Path(bound["community_config"])
-        except Exception:
-            pass
-    comm_state = "missing"
-    comm = {}
-    try:
-        raw = comm_path.read_text(encoding="utf-8")
-        parsed = json.loads(raw)
-        if not isinstance(parsed, dict) or parsed.get("schema") != "mindie-community-config/1":
-            raise ValueError("community settings schema mismatch")
-        if not isinstance(parsed.get("enabled"), bool):
-            raise ValueError("community enabled flag must be boolean")
-        comm = parsed
-        comm_state = "ok"
-    except FileNotFoundError:
-        comm_state = "missing"
-    except TimeoutError:
-        raise
-    except ValueError:
-        comm_state = "corrupt"
-    except OSError:
-        comm_state = "unreadable"
-    try:
-        from diagnostic_support import reporting_config_path
-
-        diag_path = reporting_config_path(config)
-    except Exception:
-        diag_path = config.parent / "diagnostics.json"
-    diag_enabled = False
-    try:
-        diag_raw = json.loads(diag_path.read_text(encoding="utf-8"))
-        if isinstance(diag_raw, dict):
-            diag_enabled = bool(
-                diag_raw.get("decision") == "enabled" or diag_raw.get("enabled") is True
-            )
-    except TimeoutError:
-        raise
-    except (OSError, ValueError):
-        diag_enabled = False
-    repair_required = (
-        consent_state in {"corrupt", "unreadable"}
-        or comm_state in {"corrupt", "unreadable"}
-    )
-    sharing_enabled = bool(
-        comm_state == "ok"
-        and comm.get("enabled") is True
-        and consent_state == "ok"
-        and consent_choice == "contribute"
-    )
-    reporting_enabled = bool(
-        diag_enabled
-        and consent_state == "ok"
-        and consent_choice == "contribute"
-        and bool(choice_revision)
-    )
-    if repair_required:
-        needs_onboarding_prompt = False
-    else:
-        needs_onboarding_prompt = bool(
-            consent_state == "missing"
-            or (
-                consent_state == "ok"
-                and (
-                    consent_choice not in {"contribute", "disabled"}
-                    or (consent_choice == "contribute" and not choice_revision)
-                )
-            )
-        )
-    return dict(
-        schema="mindie-sharing-status/1",
-        harness="claude-code",
-        consent_state=consent_state,
-        consent_choice=consent_choice,
-        choice_revision=choice_revision,
-        sharing_enabled=sharing_enabled,
-        community_enabled=sharing_enabled,
-        reporting_enabled=reporting_enabled,
-        repository=comm.get("repository") or "mindie-agent/knowledge-vllm-ascend",
-        fork=comm.get("fork"),
-        account=comm.get("account"),
-        project_roots=list(comm.get("project_roots") or []),
-        needs_onboarding_prompt=needs_onboarding_prompt,
-        repair_required=repair_required,
-    )
-
-
-def sharing_main(argv):
-    parser = argparse.ArgumentParser(prog="setup.py sharing", description="Manage community sharing and fault reporting.")
-    mode = parser.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--status", action="store_true")
-    mode.add_argument("--enable", action="store_true")
-    mode.add_argument("--disable", action="store_true")
-    parser.add_argument("--config", type=Path, default=default_config_path())
-    parser.add_argument("--project-root", action="append", dest="project_root")
-    parser.add_argument("--community-project-root", action="append", dest="community_project_root")
-    parser.add_argument("--fork", dest="fork")
-    parser.add_argument("--community-fork", dest="community_fork")
-    parser.add_argument("--account", dest="account")
-    parser.add_argument("--community-account", dest="community_account")
-    parser.add_argument("--repository", dest="repository")
-    parser.add_argument("--community-repository", dest="community_repository")
-    parser.add_argument("--branch", dest="branch")
-    parser.add_argument("--community-branch", dest="community_branch")
-    parser.add_argument("--visibility", dest="visibility")
-    parser.add_argument("--community-visibility", dest="community_visibility")
-    args = parser.parse_args(argv)
-    config = Path(args.config).expanduser().resolve()
-    if args.status:
-        print(json.dumps(sharing_status(config), indent=2))
-        return
-    import consent
-    from community_config import configure as configure_community
-    from diagnostic_support import activate_reporting
-
-    saved = consent.load(config)
-    if saved["state"] in {"corrupt", "unreadable"}:
-        parser.error("saved setup state is damaged; configuration was not changed")
-    selected = read_binding(config) if config.exists() else None
-    python = (selected.get("python") if selected else None) or sys.executable
-    comm_path = Path(selected["community_config"]) if selected and selected.get("community_config") else config.with_name("mindie-community.json")
-    old = {}
-    if comm_path.exists():
-        try:
-            old = json.loads(comm_path.read_text(encoding="utf-8"))
+            prev_engine = json.loads(engine_path.read_bytes().decode("utf-8-sig")) if engine_path.is_file() else {}
         except TimeoutError:
             raise
         except (OSError, ValueError):
-            parser.error("community settings file is damaged or unreadable; bytes preserved")
-        if not isinstance(old, dict) or old.get("schema") != "mindie-community-config/1":
-            parser.error("community settings file is not a valid mindie-community-config/1 document")
-    consent_file = str(consent.consent_path(config).resolve())
-    if args.disable:
-        consent.record_choice("disabled", config)
-        disabled_req = dict(
-            schema="mindie-community-config/1",
-            enabled=False,
-            repository=old.get("repository"),
-            branch=old.get("branch") or "main",
-            project_roots=list(old.get("project_roots") or []),
-            idle_seconds=old.get("idle_seconds", 300),
-            consent_config=consent_file,
-        )
-        comm_path.parent.mkdir(parents=True, exist_ok=True)
-        merged = configure_community(comm_path, disabled_req, python=python)
-        reporting = activate_reporting(config)
-        print(
-            json.dumps(
-                dict(
-                    status="configured" if reporting["status"] in {"running", "disabled"} else "degraded",
-                    configuration_status="configured",
-                    reporting=reporting,
-                    community_config=str(comm_path),
-                    sharing="disabled",
-                    sharing_choice="disabled",
-                    repository=merged.get("repository"),
-                    project_roots=merged.get("project_roots", []),
-                ),
-                indent=2,
-            )
-        )
-        if reporting["status"] not in {"running", "disabled"}:
-            raise SystemExit(1)
-        return
-    repository = (
-        args.repository
-        or args.community_repository
-        or old.get("repository")
-        or "mindie-agent/knowledge-vllm-ascend"
-    )
-    if not isinstance(repository, str) or not _REPOSITORY_RE.fullmatch(repository):
-        parser.error("community repository must be owner/repo")
-    visibility = (
-        args.visibility
-        if args.visibility is not None
-        else (args.community_visibility if args.community_visibility is not None else "public")
-    )
-    if visibility != "public":
-        parser.error("community sharing requires --visibility public")
-    branch = args.branch or args.community_branch or old.get("branch") or "main"
-    if not isinstance(branch, str) or not _NAME_RE.fullmatch(branch) or ".." in branch:
-        parser.error("community branch is invalid")
-    raw_roots = (args.project_root or []) + (args.community_project_root or [])
-    if not raw_roots:
-        raw_roots = list(old.get("project_roots") or [str(Path.cwd().resolve())])
-    roots = []
-    for root in raw_roots:
-        canonical = str(Path(root).expanduser().resolve())
-        if not Path(canonical).is_dir():
-            parser.error("community project root does not exist: " + canonical)
-        if canonical not in roots:
-            roots.append(canonical)
-    if not roots:
-        parser.error("community sharing requires at least one --project-root")
-    account = args.account or args.community_account or old.get("account")
-    fork = args.fork or args.community_fork or old.get("fork")
-    if account is not None and (
-        not isinstance(account, str) or "/" in account or not _NAME_RE.fullmatch(account)
-    ):
-        parser.error("community account is invalid")
-    if fork is not None and (
-        not isinstance(fork, str) or not _REPOSITORY_RE.fullmatch(fork)
-    ):
-        parser.error("community fork must be owner/repo")
-    if not fork:
-        account, fork = resolve_github_identity(repository, account=account, fork=fork)
-    enabled_req = dict(
-        schema="mindie-community-config/1",
-        enabled=True,
-        generation=secrets.token_hex(16),
-        enabled_at=time.time(),
-        repository=repository,
-        branch=branch,
-        project_roots=roots,
-        idle_seconds=old.get("idle_seconds", 300),
-        visibility="public",
-        consent_config=consent_file,
-    )
-    if account:
-        enabled_req["account"] = account
-    if fork:
-        enabled_req["fork"] = fork
-    comm_path.parent.mkdir(parents=True, exist_ok=True)
-    merged = configure_community(comm_path, enabled_req, python=python)
-    consent.record_choice("contribute", config)
-    reporting = activate_reporting(config)
-    print(
-        json.dumps(
-            dict(
-                status="configured" if reporting["status"] == "running" else "degraded",
-                configuration_status="configured",
-                reporting=reporting,
-                community_config=str(comm_path),
-                sharing="enabled",
-                sharing_choice="contribute",
-                repository=merged["repository"],
-                fork=merged.get("fork"),
-                account=merged.get("account"),
-                project_roots=merged["project_roots"],
-                enabled_at=merged["enabled_at"],
-            ),
-            indent=2,
-        )
-    )
-    if reporting["status"] != "running":
-        raise SystemExit(1)
-
-
-def main(argv=None):
-    raw_argv = list(sys.argv[1:] if argv is None else argv)
-    if raw_argv[:1] == ["sharing"]:
-        sharing_main(raw_argv[1:])
-        return
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source", type=Path)
-    parser.add_argument("--activate", type=Path)
-    parser.add_argument("--config", type=Path, default=default_config_path())
-    parser.add_argument("--root", type=Path)
-    parser.add_argument("--domain", default="vllm-ascend")
-    parser.add_argument("--no-public-feed", action="store_true")
-    parser.add_argument("--claude-config-dir", type=Path)
-    parser.add_argument("--community-repository")
-    parser.add_argument("--community-project-root", action="append")
-    parser.add_argument("--community-branch")
-    parser.add_argument("--community-account")
-    parser.add_argument("--community-fork")
-    parser.add_argument("--community-visibility", choices=["public"])
-    args = parser.parse_args(argv)
-    try:
-        if args.activate:
-            if args.source:
-                parser.error("--activate does not accept --source")
-            print(json.dumps(activate_binding(args.activate)))
-            return
-        if not args.source:
-            parser.error("--source is required for preparation")
-        result = prepare_binding(
-            args.source, args.config, root=args.root, domain=args.domain,
-            no_public_feed=args.no_public_feed, claude_config_dir=args.claude_config_dir,
-            community=community_settings(args, parser),
-        )
-    except LockTimeout:
-        if not envelope_enabled():
+            prev_engine = {}
+        knowledge_root = str(Path(root).expanduser().resolve()) if root else str(prev_engine.get("root") or (profile.data_dir / "knowledge").resolve())
+        _write_json(engine_path, {**prev_engine, "root": knowledge_root, "domain": domain,
+                                  "admission_path": str(profile.admission_db), "transcript_adapter": str(HERE / "transcript.py"),
+                                  "capture_mode": "public-transcript", "community_config": community})
+        try:
+            cfg = json.loads(profile.config_path.read_bytes().decode("utf-8-sig")) if profile.config_path.is_file() else {}
+        except TimeoutError:
             raise
-        emit_deferred("lock_busy")
-        return
-    except Exception as exc:
-        if not envelope_enabled():
-            raise
-        emit_failure(exc, source_root=HERE)
-        raise SystemExit(1)
-    print(json.dumps(result, default=str))
-    if result["status"] == "degraded":
-        raise SystemExit(1)
+        except (OSError, ValueError):
+            cfg = {}
+        python = sys.executable if importlib.util.find_spec("mindie_harness") is not None else (cfg.get("python") if isinstance(cfg.get("python"), str) and Path(cfg["python"]).is_file() else sys.executable)
+        cfg.update(dict(schema="mindie-cc-installation/1", facade_protocol=1, host="cc", python=python,
+                        runtime_scripts=str(HERE), base_config=str(profile.config_path),
+                        adapter_config=str(profile.config_path), engine_config=str(engine_path),
+                        state_dir=str(profile.state_dir), community_config=community, source_root=str(PLUGIN_ROOT)))
+        _write_json(profile.config_path, cfg)
+    finally:
+        lock.release()
+    return dict(status="configured", config_path=str(profile.config_path), engine_config=str(engine_path),
+                root=knowledge_root, domain=domain, admission_path=str(profile.admission_db), reportable=False)
 
+def sharing(args) -> int:
+    from mindie_harness.sharing import configure_sharing, sharing_status
+
+    if args.status or not (args.enable or args.local_only or args.disable):
+        _emit(sharing_status(_profile(), cwd=Path.cwd()))
+    else:
+        choice = "contribute" if args.enable else ("local-only" if args.local_only else "disabled")
+        _emit(configure_sharing(_profile(), choice=choice, project_roots=args.project_root,
+                                repository=args.repository, fork=args.fork, account=args.account))
+    return 0
+
+def doctor(args) -> int:
+    from mindie_harness.api import run_host
+
+    argv = ["--host", "cc", "--config", str(_profile().config_path), "doctor"]
+    argv += ["--probe-remote"] if args.probe_remote else []
+    argv += ["--cwd", args.cwd] if args.cwd else []
+    argv += ["--timeout", str(args.timeout)] if args.timeout is not None else []
+    return run_host(argv)
+
+def update(args) -> int:
+    from mindie_harness.runtime.wheelhouse import update_runtime
+
+    _emit(update_runtime(_profile(), force=args.force, offline=args.offline,
+                         channel_base_url=args.channel_base_url, background=args.background))
+    return 0
+
+def _has_symbol(path: Path, symbol: str) -> bool:
+    nodes = ast.parse(path.read_text(encoding="utf-8")).body
+    for segment in symbol.replace("::", ".").split("."):
+        selected = next((node for node in nodes if isinstance(
+            node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name == segment), None)
+        if selected is None:
+            return False
+        nodes = selected.body
+    return True
+
+def check_registry(source: Path, tests: Path, compatibility: dict) -> None:
+    """Check every registered production symbol, test, and local evidence file."""
+    for interface in compatibility["used_interfaces"]:
+        row = compatibility["interface_registry"][interface]
+        for reference in row["code_paths"]:
+            filename, symbol = reference.split(":", 1)
+            path = (source / filename).resolve()
+            if not path.is_relative_to(source) or not _has_symbol(path, symbol):
+                raise ValueError("registered Harness code boundary is missing: " + interface)
+        for reference in row["test_ids"]:
+            filename, symbol = reference.split("::", 1)
+            path = (tests / Path(filename).relative_to("tests")).resolve()
+            if not path.is_relative_to(tests) or not _has_symbol(path, symbol):
+                raise ValueError("registered Harness contract test is missing: " + interface)
+        for reference in row["evidence_refs"]:
+            if reference.startswith(("https://", "http://")):
+                continue
+            path = (source / reference.split("#", 1)[0]).resolve()
+            if not path.is_relative_to(source) or not path.is_file():
+                raise ValueError("registered Harness evidence is missing: " + interface)
+
+def release_metadata(source: Path, revision: str, tests: Path | None = None) -> dict:
+    from mindie_knowledge.releases import validate_compatibility, validate_release_metadata
+
+    source = Path(source).resolve()
+    compatibility = validate_compatibility(
+        json.loads((source / DECLARATION).read_text(encoding="utf-8")), harness_name=HARNESS)
+    if tests is not None:
+        check_registry(source, Path(tests).resolve(), compatibility)
+    version = tomllib.loads((source / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+    value = dict(schema="mindie-plugin-release/1", version=version,
+                 source=dict(repository=REPOSITORY, sha=revision), compatibility=compatibility)
+    return validate_release_metadata(value, repository=REPOSITORY, harness_name=HARNESS)
+
+def _install(args) -> int:
+    result = initialize_profile(root=getattr(args, "root", None), domain=getattr(args, "domain", DEFAULT_DOMAIN))
+    choice = ("contribute" if args.community_enable else "local-only" if (args.community_local_only or args.local_only)
+              else "disabled" if args.community_disable else None)
+    if choice is not None:
+        from mindie_harness.sharing import configure_sharing
+
+        result["sharing"] = configure_sharing(_profile(), choice=choice, project_roots=args.community_project_root)
+    _emit(result)
+    return 0
+
+def _release(args) -> int:
+    _emit(release_metadata(args.source, args.revision, args.tests))
+    return 0
+
+def _add_flags(parser: argparse.ArgumentParser, spec: list[tuple[str, dict]]) -> None:
+    for flag, options in spec:
+        parser.add_argument(flag, **options)
+
+def main(argv: list[str] | None = None) -> int:
+    raw_args = list(sys.argv[1:] if argv is None else argv)
+    parser = argparse.ArgumentParser(prog="setup.py")
+    sub = parser.add_subparsers(dest="command", required=True)
+    for name in ("install", "init"):
+        p = sub.add_parser(name)
+        _add_flags(p, [("--root", {}), ("--domain", {"default": DEFAULT_DOMAIN}),
+                       ("--community-project-root", {"action": "append", "default": []})])
+        g = p.add_mutually_exclusive_group()
+        _add_flags(g, [("--local-only", {"action": "store_true"}), ("--community-enable", {"action": "store_true"}),
+                       ("--community-local-only", {"action": "store_true"}), ("--community-disable", {"action": "store_true"})])
+        p.set_defaults(handler=_install)
+    p = sub.add_parser("sharing")
+    g = p.add_mutually_exclusive_group()
+    _add_flags(g, [("--status", {"action": "store_true"}), ("--enable", {"action": "store_true"}),
+                   ("--local-only", {"action": "store_true"}), ("--disable", {"action": "store_true"})])
+    _add_flags(p, [("--project-root", {"action": "append", "default": []}), ("--repository", {}),
+                   ("--fork", {}), ("--account", {})])
+    p.set_defaults(handler=sharing)
+    p = sub.add_parser("doctor")
+    _add_flags(p, [("--probe-remote", {"action": "store_true"}), ("--cwd", {}), ("--timeout", {"type": float})])
+    p.set_defaults(handler=doctor)
+    p = sub.add_parser("update")
+    _add_flags(p, [("--force", {"action": "store_true"}), ("--offline", {"action": "store_true"}),
+                   ("--channel-base-url", {}), ("--background", {"action": "store_true"})])
+    p.set_defaults(handler=update)
+    p = sub.add_parser("release-metadata")
+    _add_flags(p, [("--source", {"type": Path, "required": True}), ("--tests", {"type": Path}),
+                   ("--revision", {"required": True})])
+    p.set_defaults(handler=_release)
+    args = parser.parse_args(raw_args)
+    if importlib.util.find_spec("mindie_harness") is None:
+        import mindie_launch
+        py = mindie_launch.active_python(mindie_launch.config_path())
+        if py is not None and py.resolve() != Path(sys.executable).resolve():
+            return subprocess.run([str(py), "-I", "-X", "utf8", str(Path(__file__).resolve()), *raw_args], creationflags=_NO_WIN).returncode
+    return int(args.handler(args))
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

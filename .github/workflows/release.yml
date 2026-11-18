@@ -15,7 +15,7 @@ jobs:
     secrets:
       MINDIE_RELEASE_DEPLOY_KEY: ${{ secrets.MINDIE_RELEASE_DEPLOY_KEY }}
     with:
-      release-notes-path: docs/releases/mindie-agent-cc-0.1.29.md
+      release-notes-path: docs/releases/mindie-agent-cc-0.1.30.md
       version-files: |
         pyproject.toml
         .claude-plugin/plugin.json
@@ -29,4 +29,4 @@ jobs:
         .venv/bin/python -m pytest -q -m "not live_npu"
       build-command: |
         uv build --out-dir "$RELEASE_ASSETS_DIR"
-        .venv/bin/python scripts/harness.py --source . --tests tests --revision "$GITHUB_SHA" > "$RELEASE_ASSETS_DIR/mindie-plugin-release.json"
+        .venv/bin/python scripts/setup.py release-metadata --source . --tests tests --revision "$GITHUB_SHA" > "$RELEASE_ASSETS_DIR/mindie-plugin-release.json"

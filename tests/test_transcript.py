@@ -1,102 +1,125 @@
+"""Claude Code transcript identity, fork boundary, and public-read tests.
+
+[Role]
+Verifies `FileIdentity`/`identify`, profile-bound `capture_path`, the fork
+`queue-operation` `enqueue` creation boundary, and public-record filtering in
+`read_material`.
+[Invariants]
+- Transcripts are written only under the isolated `CLAUDE_CONFIG_DIR/projects`.
+- Byte accounting is checked against the exact `[start, end)` prefix.
+[Timeouts & Locks]
+- Pure filesystem reads; no locks.
+[Side-Effect Policy]
+- Writes only inside the isolated `tmp_path`.
+"""
+from __future__ import annotations
+
+import hashlib
 import json
-import shutil
-import sys
-import tempfile
-import unittest
+import os
 from pathlib import Path
-from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-import transcript  # noqa: E402
+import pytest
 
-FIXTURE = Path(__file__).resolve().parent / "fixtures" / "transcript.jsonl"
 SESSION = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+SESSION_FILE = SESSION + ".jsonl"
 
 
-class TranscriptTests(unittest.TestCase):
-    def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp())
-        self.path = self.tmp / f"{SESSION}.jsonl"
-        shutil.copy(FIXTURE, self.path)
-
-    def tearDown(self):
-        shutil.rmtree(self.tmp, ignore_errors=True)
-
-    def test_identify_and_public_records(self):
-        ident = transcript.identify(self.path)
-        self.assertIsNotNone(ident)
-        result = transcript.read_material(str(self.path), 0, session_id=SESSION)
-        self.assertEqual(result["status"], "ok")
-        self.assertGreater(result["records"], 0)
-        self.assertIn("No matching notes yet", result["text"])
-        self.assertNotIn("knowledge_query", result["text"])
-        self.assertNotIn("call_00_abc", result["text"])
-        self.assertNotIn("omitted-placeholder", result["text"])
-        self.assertNotIn("subagent hidden", result["text"])
-        self.assertNotIn("Base directory for this skill", result["text"])
-        self.assertNotIn("/mindie-agent:init", result["text"])
-
-    def test_not_before_excludes_inherited(self):
-        result = transcript.read_material(
-            str(self.path), 0, session_id=SESSION, not_before=1e18
-        )
-        self.assertEqual(result["records"], 0)
-
-    def test_wrong_session_file(self):
-        other = self.tmp / "bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl"
-        shutil.copy(self.path, other)
-        result = transcript.read_material(str(other), 0, session_id=SESSION)
-        self.assertEqual(result["status"], "wrong-task")
-
-    def test_profile_configuration_error_never_selects_another_profile(self):
-        with patch("paths.load_adapter_config", side_effect=ValueError("fixture damaged config")):
-            with self.assertRaisesRegex(ValueError, "damaged config"):
-                transcript.native_config_dir()
-        with patch("paths.load_adapter_config", return_value={"claude_config_dir": "relative-profile"}):
-            with self.assertRaisesRegex(ValueError, "absolute"):
-                transcript.native_config_dir()
-
-    def test_public_blocks_exclude_native_tool_payloads(self):
-        public = "The echo request completed; its reported result still needs review."
-        records = [
-            {"type": "assistant", "sessionId": SESSION, "message": {"content": [
-                {"type": "thinking", "thinking": "PRIVATE_THINKING", "signature": "PRIVATE_SIGNATURE"},
-                {"type": "tool_use", "id": "PRIVATE_CALL", "name": "mcp__mindie_probe__echo",
-                 "input": {"value": "PRIVATE_INPUT"}},
-                {"type": "text", "text": public},
-            ]}},
-            {"type": "user", "sessionId": SESSION, "message": {"content": [
-                {"type": "tool_result", "tool_use_id": "PRIVATE_CALL", "content": "PRIVATE_OUTPUT"},
-            ]}},
-        ]
-        self.path.write_text(
-            "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
-        )
-        result = transcript.read_material(str(self.path), 0, session_id=SESSION)
-        self.assertEqual(result["status"], "ok")
-        self.assertIn(public, result["text"])
-        self.assertNotIn("PRIVATE_", result["text"])
-        self.assertNotIn("mcp__mindie_probe__echo", result["text"])
-
-    def test_established_session_file_keeps_an_unrecognized_page(self):
-        path = self.tmp / f"{SESSION}.jsonl"
-        path.write_text("\n".join('{"type":"noise","n":%d}' % i for i in range(20)) + "\n", encoding="utf-8")
-        with path.open("a", encoding="utf-8") as stream:
-            stream.write('{"type":"user","sessionId":"%s","message":{"role":"user","content":"later public"}}\n' % SESSION)
-        identity = transcript.identify(str(path))
-        result = transcript.read_material(
-            str(path), 0, session_id=SESSION, expected=identity, max_scan_bytes=1024,
-        )
-        self.assertNotEqual(result["status"], "unknown-format")
-        self.assertTrue(result["more"] or "later public" in result["text"])
-
-    def test_partial_line_does_not_consume(self):
-        with self.path.open("ab") as stream:
-            stream.write(b'{"type":"assistant","sessionId":"' + SESSION.encode())
-        size = self.path.stat().st_size
-        result = transcript.read_material(str(self.path), 0, session_id=SESSION)
-        self.assertTrue(result["partial"] or result["end"] < size)
+def _projects() -> Path:
+    root = Path(os.environ["CLAUDE_CONFIG_DIR"]) / "projects" / "workspace"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
 
 
-if __name__ == "__main__":
-    unittest.main()
+def _write(records: list[dict]) -> Path:
+    path = _projects() / SESSION_FILE
+    path.write_bytes(b"".join(json.dumps(record).encode("utf-8") + b"\n" for record in records))
+    return path
+
+
+def _fork_prefix() -> list[dict]:
+    return [
+        {"type": "queue-operation", "operation": "enqueue", "sessionId": SESSION,
+         "timestamp": "2026-01-01T00:00:00Z"},
+        {"type": "user", "sessionId": SESSION, "timestamp": "2026-01-01T00:00:01Z",
+         "cwd": "/work/app", "message": {"content": "hello"}},
+    ]
+
+
+def test_identify_and_capture_path_are_profile_bound() -> None:
+    import transcript
+
+    path = _write(_fork_prefix())
+    identity = transcript.identify(path)
+    assert isinstance(identity, transcript.FileIdentity)
+    assert identity is not None
+    assert identity.path == str(path.resolve())
+    assert identity.size == path.stat().st_size
+    assert len(identity.anchor_digest) == 64
+    assert transcript.capture_path(str(path), SESSION) == path.resolve()
+    with pytest.raises(ValueError):
+        transcript.capture_path(str(path), "bbbbbbbb-cccc-dddd-eeee-ffffffffffff")
+    with pytest.raises(ValueError):
+        transcript.capture_path(str(Path(os.environ["CLAUDE_CONFIG_DIR"]) / SESSION_FILE), SESSION)
+
+
+def test_capture_source_uses_fork_enqueue_boundary() -> None:
+    import transcript
+
+    records = _fork_prefix() + [
+        {"type": "assistant", "sessionId": SESSION, "timestamp": "2026-01-01T00:00:02Z",
+         "cwd": "/work/app", "message": {"content": [{"type": "text", "text": "done"}]}},
+    ]
+    path = _write(records)
+    source = transcript.capture_source(str(path), SESSION)
+    assert source["session_id"] == SESSION
+    assert source["project_root"] == str(Path("/work/app").resolve())
+    assert source["created_at"] == 1767225600.0
+    binding = {"session": SESSION, "enabled": 1, "project_root": "/work/app",
+               "activated_at": 99.0}
+    assert transcript.capture_source(str(path), SESSION, binding=binding)["created_at"] == 1767225600.0
+    with pytest.raises(ValueError):
+        transcript.capture_source(str(path), SESSION, binding={**binding, "enabled": 0})
+
+
+def test_read_material_excludes_sidechains_thinking_and_commands() -> None:
+    import transcript
+
+    records = _fork_prefix() + [
+        {"type": "assistant", "sessionId": SESSION, "timestamp": "2026-01-01T00:00:02Z",
+         "message": {"content": [{"type": "thinking", "thinking": "HIDDEN"},
+                                 {"type": "text", "text": "world"}]}},
+        {"type": "assistant", "sessionId": SESSION, "isSidechain": True,
+         "timestamp": "2026-01-01T00:00:03Z", "message": {"content": [{"type": "text", "text": "SIDECHAIN"}]}},
+        {"type": "user", "sessionId": SESSION, "timestamp": "2026-01-01T00:00:04Z",
+         "message": {"content": "<command-foo>rm -rf /</command-foo>"}},
+        {"type": "user", "sessionId": SESSION, "timestamp": "2026-01-01T00:00:05Z",
+         "message": {"content": "<command-foo>ls</command-foo> real text"}},
+    ]
+    path = _write(records)
+    payload = path.read_bytes()
+    result = transcript.read_material(str(path), 0, session_id=SESSION)
+    assert result["status"] == "ok"
+    assert result["start"] == 0
+    assert result["end"] == len(payload)
+    assert result["digest"] == hashlib.sha256(payload[: result["end"]]).hexdigest()
+    assert "hello" in result["text"] and "world" in result["text"] and "real text" in result["text"]
+    for hidden in ("HIDDEN", "SIDECHAIN", "<command-"):
+        assert hidden not in result["text"]
+    assert result["records"] == 3
+
+    offset = len(payload.splitlines(keepends=True)[0])
+    tail = transcript.read_material(str(path), offset, session_id=SESSION)
+    assert tail["start"] == offset
+    assert tail["end"] == len(payload)
+    assert tail["digest"] == hashlib.sha256(payload[offset:]).hexdigest()
+    snap = transcript.read_material(str(path), 0, session_id=SESSION, scan_until=offset)
+    assert snap["end"] == offset and snap["more"] is False
+    ident = transcript.identify(str(path))
+    path.write_bytes(payload.replace(b"hello", b"HELLO"))
+    assert transcript.read_material(str(path), offset, session_id=SESSION, expected=ident)["status"] == "replaced"
+
+    assert transcript.to_seconds("2026-01-01T00:00:00Z") == 1767225600.0
+    assert transcript.to_seconds("2026-01-01T00:00:00.000Z") == 1767225600.0
+    assert transcript.to_seconds(1767225600000) == 1767225600.0
+    assert transcript.to_seconds("not-a-date") is None
