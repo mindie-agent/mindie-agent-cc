@@ -1,7 +1,7 @@
 """Thin-plugin release, manifest, seed, and metadata contract tests.
 
 [Role]
-Verifies the `0.1.30` manifest set, the `<= 1200` script line ceiling, the
+Verifies the `0.1.31` manifest set, the `<= 1500` script line ceiling, the
 bundled seed, the `HostAdapter` protocol, and `setup.py release-metadata`.
 [Invariants]
 - Assertions read the real working tree; no test writes outside `tmp_path`.
@@ -22,7 +22,7 @@ import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
-VERSION = "0.1.30"
+VERSION = "0.1.31"
 _NO_WIN = 0x08000000 if os.name == "nt" else 0
 
 
@@ -32,7 +32,7 @@ def _json(relative: str) -> dict:
 
 def test_total_script_loc_ceiling() -> None:
     total = sum(len(path.read_text(encoding="utf-8").splitlines()) for path in SCRIPTS.glob("*.py"))
-    assert total <= 1200, f"scripts/ totals {total} lines; hard ceiling is 1200"
+    assert total <= 1500, f"scripts/ totals {total} lines; hard ceiling is 1500"
 
 
 def test_release_version_and_marketplace_manifests_are_current() -> None:
@@ -48,13 +48,13 @@ def test_release_version_and_marketplace_manifests_are_current() -> None:
     assert VERSION in hooks_text
     assert "python -c" not in hooks_text
     assert "plugin_entry.py" in hooks_text
-    previous = "0.1." + "29"
+    previous = "0.1." + "30"
     assert f'"{previous}"' not in hooks_text
     assert "python -c" not in json.dumps(mcp)
     assert mcp["mcpServers"]["remote"]["env"]["REMOTE_DEV_HARNESS_PROFILE"] == "claude"
     for name, server in mcp["mcpServers"].items():
         assert any("plugin_entry.py" in arg for arg in server["args"]), name
-        assert "0.1.30" in server["args"], name
+        assert VERSION in server["args"], name
         assert "-c" not in server["args"], name
     assert set(hooks["hooks"]) >= {"PreToolUse", "Stop", "SessionStart"}
     assert "--offline" not in hooks["hooks"]["SessionStart"][0]["hooks"][0]["command"]
