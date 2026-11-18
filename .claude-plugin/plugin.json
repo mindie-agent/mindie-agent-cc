@@ -1,8 +1,8 @@
 {
   "name": "mindie-agent",
   "displayName": "MindIE Agent",
-  "version": "0.1.28",
-  "description": "MindIE Agent for Claude Code: explicit-task knowledge, optional public contribution, and independent remote-dev. One-time setup persists; the task binds from the mindie-agent entry.",
+  "version": "0.1.29",
+  "description": "MindIE Agent for Claude Code: silent default-on Ascend NPU knowledge, remote-dev, profiling, simulation, fault triage, and opt-in community contribution.",
   "author": {
     "name": "MindIE Agent",
     "url": "https://github.com/mindie-agent/mindie-agent-cc"

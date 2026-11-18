@@ -1,15 +1,23 @@
-"""Bounded native MCP transport and selected-generation invalidation.
+"""Bounded native MCP transport, read_pool fast lane, and generation invalidation.
 
-[Role] Keep the native connection alive across committed runtime updates.
-[Invariants] Preserve pending identity, cancellation and separate control capacity.
+[Role] Keep the native connection alive across committed runtime updates while
+routing `readOnlyHint=True` tools onto a dedicated `read_pool` (`ThreadPoolExecutor`).
+[Invariants] Preserve pending identity, cancellation, read_pool non-blocking
+concurrency, and separate control capacity.
 [Timeouts & Locks] Existing facade budgets; serialized output and 1s catalog poll.
 [Side-Effect Policy] Dispatch each operation once; refresh never activates a task.
 """
+from concurrent.futures import Future, ThreadPoolExecutor, wait as wait_futures
 import json
 import os
 import sys
 import threading
 import time
+
+from mcp_catalog import is_readonly_tool
+
+READ_POOL_WORKERS = 16
+
 
 def serve(surface: str, api) -> int:
     """Hold a shared runtime lease for the whole resident MCP connection."""
@@ -52,11 +60,12 @@ def _serve(surface: str, api, binding) -> int:
     pending_lock = threading.Lock()
     pending = {}
     workers = []
+    read_futures: set[Future[None]] = set()
+    read_pool = ThreadPoolExecutor(max_workers=READ_POOL_WORKERS, thread_name_prefix="mindie-mcp-read")
     active_work = 0
     active_control = 0
 
     def send(response):
-        # A client that stops reading must not hold cancellation/EOF forever.
         deadline = time.monotonic() + OUTPUT_BUDGET
         if not output_lock.acquire(timeout=OUTPUT_BUDGET):
             raise TimeoutError("response output unavailable")
@@ -106,8 +115,6 @@ def _serve(surface: str, api, binding) -> int:
                 response = _stage_error(ident, message, "deadline", surface)
             except Exception:
                 response = _stage_error(ident, message, "helper_failed", surface)
-            # Terminal selection is atomic with cancellation; no state lock
-            # spans output I/O. A later cancellation cannot change completion.
             with pending_lock:
                 if cancel.is_set():
                     response = _stage_error(ident, message, "cancelled", surface)
@@ -128,7 +135,7 @@ def _serve(surface: str, api, binding) -> int:
                     pending.pop(ident)
                 if slot == "control":
                     active_control -= 1
-                else:
+                elif slot == "work":
                     active_work -= 1
 
     try:
@@ -198,8 +205,15 @@ def _serve(surface: str, api, binding) -> int:
                 continue
             if method == "tools/call":
                 update.start_if_due()
-            is_control = (
-                method == "tools/call" and _local_tool_name(message) in CONTROL_TOOLS
+            local_name = _local_tool_name(message) if method == "tools/call" else None
+            is_control = method == "tools/call" and local_name in CONTROL_TOOLS
+            is_read = (
+                method == "tools/list"
+                or (
+                    method == "tools/call"
+                    and not is_control
+                    and is_readonly_tool(surface, local_name)
+                )
             )
             slot = None
             cancel = None
@@ -209,7 +223,9 @@ def _serve(surface: str, api, binding) -> int:
                     duplicate = True
                 else:
                     duplicate = False
-                    if is_control:
+                    if is_read:
+                        slot = "read"
+                    elif is_control:
                         if active_work < WORK_LIMIT:
                             slot = "work"
                         elif active_control < CONTROL_LIMIT:
@@ -229,26 +245,35 @@ def _serve(surface: str, api, binding) -> int:
             if slot is None:
                 send(_front_reject(ident, "Request capacity reached; not executed."))
                 continue
-            thread = threading.Thread(
-                target=execute,
-                args=(raw, message, ident, cancel, slot),
-                name=f"mindie-mcp-{ident}", daemon=True,
-            )
-            thread.start()
-            workers.append(thread)
+            if slot == "read":
+                fut = read_pool.submit(execute, raw, message, ident, cancel, slot)
+                with pending_lock:
+                    read_futures.add(fut)
+                fut.add_done_callback(lambda done: read_futures.discard(done))
+            else:
+                thread = threading.Thread(
+                    target=execute,
+                    args=(raw, message, ident, cancel, slot),
+                    name=f"mindie-mcp-{ident}", daemon=True,
+                )
+                thread.start()
+                workers.append(thread)
     finally:
         refresh.close()
         transport_closed.set()
         with pending_lock:
             events = list(pending.values())
+            pending_reads = {f for f in read_futures if not f.done()}
         for event in events:
             event.set()
         update.close()
         deadline = time.monotonic() + EOF_JOIN
+        if pending_reads:
+            wait_futures(pending_reads, timeout=max(0.0, deadline - time.monotonic()))
+        read_pool.shutdown(wait=False, cancel_futures=True)
         for thread in list(workers):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
             thread.join(timeout=remaining)
     return 0
-

@@ -6,10 +6,10 @@ Following Principle 9 of the [MindIE Agent Engineering Design Principles](https:
 
 ---
 
-## 1. Read-Only Status Inspection (`/mindie-agent:status` & `mindie_status`)
+## 1. Read-Only Status Inspection (`mindie_status` & `diagnostics_status`)
 
-- **What It Reports**: Factual control-plane state (`configured`, `knowledge_enabled`, current knowledge configuration, background service and storage health, `this_session` manual-entry lease state, diagnostic failure counter, `reporting` status, and the latest 5 captures and contribution batches associated with the bound task). The MCP `mindie_status` tool (`entry.status_facts(session)`) returns these factual fields without onboarding prompt fields (`first_use`, `next`, `recovery`).
-- **Strictly Read-Only**: Calling `status` or `mindie_status` never initializes databases, starts models or background services, activates or binds an unbound task, resets failure counters, or replays consumed inputs.
+- **What It Reports**: Factual control-plane state (`configured`, `knowledge_enabled`, current knowledge configuration, background service and storage health, `this_session` lease state, diagnostic failure counter, `reporting` status, and the latest 5 captures and contribution batches associated with the session). The MCP `mindie_status` tool (`entry.status_facts(session)`) returns these factual fields without onboarding prompt fields (`first_use`, `next`, `recovery`).
+- **Strictly Read-Only**: Calling `mindie_status` or `diagnostics_status` never initializes databases, starts models or background services, activates or binds an unbound task, resets failure counters, or replays consumed inputs.
 - **Corrupt Config Detection**: If an existing adapter configuration file is corrupted or malformed, `status` reports an explicit configuration diagnostic rather than treating the corruption as a "first-time install" and re-running onboarding.
 - **Decoupled Remote Execution**: Even if the local knowledge service is unavailable, native shell/SSH and the `remote-dev` MCP server remain fully operational.
 
@@ -32,10 +32,10 @@ When an isolated native Claude call for block-index generation fails, the adapte
 
 ---
 
-## 4. Opt-In Product Fault Reporting (`/mindie-agent:reporting-*`)
+## 4. Opt-In Product Fault Reporting (`diagnostics_status`)
 
 `mindie-agent-cc` integrates with the shared `mindie-diagnostics` reporter:
-- **Unified Contribution Switch (`mindie-consent.json`)**: Explicitly enabling contribution (`contribute`) authorizes scoped knowledge PRs and sanitized fault Issues together. During setup, the Hook returns a pending reporter handoff (`reporting.run_outside_hook=true`); the Agent executes it outside the Hook in the same setup flow and verifies actual worker readiness (`reporting.status == "running"`). Legacy knowledge-only `contribute` records lacking the unified consent revision (`choice_revision`) do not automatically gain fault-upload permission on upgrade—they surface `needs_choice` until explicitly re-confirmed once. The system strictly distinguishes **(1) local consent configuration saved**, **(2) background reporter worker running**, and **(3) external GitHub Issue published**. Legacy reporting mutators guide to the unified contribution flow, while `/mindie-agent:reporting-status` remains read-only.
+- **Unified Contribution Switch (`mindie-consent.json`)**: Explicitly enabling contribution (`contribute`) authorizes scoped knowledge PRs and sanitized fault Issues together. During setup, `setup.py sharing --enable` configures consent and verifies reporter worker readiness (`reporting.status == "running"`). Legacy knowledge-only `contribute` records lacking the unified consent revision (`choice_revision`) do not automatically gain fault-upload permission on upgrade—they surface `needs_choice` until explicitly re-confirmed once. The system strictly distinguishes **(1) local consent configuration saved**, **(2) background reporter worker running**, and **(3) external GitHub Issue published**, while `diagnostics_status` remains strictly read-only.
 - **Sanitized Public Payload**: Confirmed product defects generate local diagnostic records and—when reporting is enabled—submit redacted GitHub Issues containing **only** static product stages, error categories, and installed code versions. Task prompts, transcripts, raw stack traces, commands, file paths, and credentials are never included.
 - **Deduplication & Reconciliation**: Duplicate faults share a fingerprint, and any uncertain GitHub Issue creation attempt is reconciled before retrying so duplicates are never spammed.
 

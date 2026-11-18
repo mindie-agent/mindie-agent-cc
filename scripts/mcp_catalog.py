@@ -1,13 +1,13 @@
 """Native knowledge MCP schemas, separate from execution and session identity.
 
 [Role]
-Defines the knowledge and factual-status tools advertised by the Claude adapter.
+Defines the default-enabled knowledge and factual-status tools advertised by the Claude adapter.
 [Invariants]
-Schemas describe public inputs only; execution owns manual-domain admission.
+Schemas describe public inputs and MCP read-only annotations; session identity is never model-supplied.
 [Timeouts & Locks]
 Pure in-memory definitions; no I/O, services, subprocesses or locks.
 [Side-Effect Policy]
-Importing the catalog never activates knowledge or starts background work.
+Importing the catalog never creates SQLite state or starts background work.
 """
 import rsi_explore
 
@@ -15,18 +15,19 @@ KNOWLEDGE_TOOL_DEFS = [
     dict(
         name="mindie_status",
         description=(
-            "Read factual MindIE status for the current bound task. "
-            "Includes safe failure categories and this task's contribution batch IDs "
-            "for recovery inspection. Does not activate, enable sharing or retry work."
+            "Read factual MindIE status for the current session. "
+            "Includes safe failure categories and contribution batch IDs "
+            "for recovery inspection. Does not enable sharing or retry work."
         ),
         inputSchema=dict(type="object", properties={}, additionalProperties=False),
+        annotations=dict(readOnlyHint=True, destructiveHint=False, openWorldHint=False),
     ),
     dict(
         name="knowledge_sync",
         description=(
-            "Synchronize the configured knowledge feeds for the current manually "
-            "enabled domain. Returns each feed's sync outcome, including deferred "
-            "or failed work. Does not activate knowledge or enable contribution."
+            "Synchronize the configured knowledge feeds for the selected domain. "
+            "Returns each feed's sync outcome, including deferred or failed work. "
+            "Does not enable community contribution."
         ),
         inputSchema=dict(
             type="object",
@@ -36,12 +37,12 @@ KNOWLEDGE_TOOL_DEFS = [
             }),
             additionalProperties=False,
         ),
+        annotations=dict(readOnlyHint=False, destructiveHint=False, openWorldHint=True),
     ),
     dict(
         name="knowledge_query",
         description=(
-            "Requires explicit /mindie-agent activation in the current session. "
-            "Search graded rules and task material in the selected domain when a missing "
+            "Search graded L1-L4 rules and task material in the selected domain when a missing "
             "contract, mechanism, or method is needed for the next step. Returns bounded "
             "navigation cards and deduplicated foundation_cards; each match includes a "
             "readable ref and feedback_ref for its observed revision. Pass observed task "
@@ -77,11 +78,11 @@ KNOWLEDGE_TOOL_DEFS = [
             ),
             additionalProperties=False,
         ),
+        annotations=dict(readOnlyHint=True, destructiveHint=False, openWorldHint=False),
     ),
     dict(
         name="knowledge_explain",
         description=(
-            "Requires explicit /mindie-agent activation in the current session. "
             "Read complete graded units or task/block references by their exact returned ref. "
             "For graded units, pass refs (even for one unit) with observed conditions, visible "
             "known_refs, and token_budget to assemble the dependency closure (shared prerequisites "
@@ -106,11 +107,11 @@ KNOWLEDGE_TOOL_DEFS = [
             required=[],
             additionalProperties=False,
         ),
+        annotations=dict(readOnlyHint=True, destructiveHint=False, openWorldHint=False),
     ),
     dict(
         name="knowledge_feedback",
         description=(
-            "Requires explicit /mindie-agent activation in the current session. "
             "Record optional usage events (discovered, loaded, applied, evaluated) or an "
             "up/down rating for an exact feedback_ref returned by query or explain. "
             "evaluated requires run_id and outcome (supported, refuted, inconclusive) with "
@@ -142,11 +143,11 @@ KNOWLEDGE_TOOL_DEFS = [
             required=["ref"],
             additionalProperties=False,
         ),
+        annotations=dict(readOnlyHint=False, destructiveHint=False, openWorldHint=False),
     ),
     dict(
         name="knowledge_distill",
         description=(
-            "Requires explicit /mindie-agent activation in the current session. "
             "Distill caller-selected, authorized evidence into C5 graded units at "
             "task_state='verified_milestone' or 'completed'. Pass related_refs to compare "
             "against existing units as a delta, or pass a foreground mindie-distill-decision/1 "
@@ -198,5 +199,33 @@ KNOWLEDGE_TOOL_DEFS = [
             required=["inputs", "task_state"],
             additionalProperties=False,
         ),
+        annotations=dict(readOnlyHint=False, destructiveHint=False, openWorldHint=False),
     ),
 ]
+
+READONLY_KNOWLEDGE_TOOLS = frozenset(
+    item["name"]
+    for item in KNOWLEDGE_TOOL_DEFS
+    if (item.get("annotations") or {}).get("readOnlyHint") is True
+)
+
+READONLY_REMOTE_TOOLS = frozenset({
+    "remote_read", "remote_glob", "remote_grep", "remote_ls", "remote_stat",
+    "remote_probe", "remote_ping", "remote_hosts", "remote_job_status",
+    "remote_job_tail", "remote_job_output", "remote_job_list",
+    "remote_taskoutput", "remote_bashoutput",
+})
+
+
+def is_readonly_tool(surface: str, name: str | None) -> bool:
+    """Return True when `name` is declared `readOnlyHint=True` on `surface`."""
+    if not isinstance(name, str) or not name:
+        return False
+    local = name.rsplit("__", 1)[-1]
+    if surface == "knowledge":
+        return local in READONLY_KNOWLEDGE_TOOLS
+    if surface == "components":
+        return local == "diagnostics_status"
+    if surface == "remote":
+        return local.lower() in READONLY_REMOTE_TOOLS
+    return False

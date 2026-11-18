@@ -1,125 +1,13 @@
 {
-  "description": "Native lifecycle prepares one locked runtime; Stop only admits the current task.",
+  "description": "Native lifecycle prepares one locked runtime; Stop only captures opt-in authorized scopes.",
   "hooks": {
-    "UserPromptExpansion": [
-      {
-        "matcher": "mindie-agent",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "uv --native-tls run --offline --no-python-downloads --no-project --python 3.13 python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.1.28'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'bootstrap.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook expansion",
-            "timeout": 15
-          }
-        ]
-      },
-      {
-        "matcher": "mindie-agent:mindie-agent",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "uv --native-tls run --offline --no-python-downloads --no-project --python 3.13 python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.1.28'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'bootstrap.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook expansion",
-            "timeout": 15
-          }
-        ]
-      },
-      {
-        "matcher": "mindie-agent:init",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "uv --native-tls run --offline --no-python-downloads --no-project --python 3.13 python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.1.28'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'bootstrap.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook expansion",
-            "timeout": 15
-          }
-        ]
-      },
-      {
-        "matcher": "mindie-agent:status",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "uv --native-tls run --offline --no-python-downloads --no-project --python 3.13 python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.1.28'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'bootstrap.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook expansion",
-            "timeout": 15
-          }
-        ]
-      },
-      {
-        "matcher": "mindie-agent:deactivate",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "uv --native-tls run --offline --no-python-downloads --no-project --python 3.13 python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.1.28'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'bootstrap.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook expansion",
-            "timeout": 15
-          }
-        ]
-      },
-      {
-        "matcher": "mindie-agent:sharing-enable",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "uv --native-tls run --offline --no-python-downloads --no-project --python 3.13 python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.1.28'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'bootstrap.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook expansion",
-            "timeout": 15
-          }
-        ]
-      },
-      {
-        "matcher": "mindie-agent:sharing-disable",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "uv --native-tls run --offline --no-python-downloads --no-project --python 3.13 python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.1.28'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'bootstrap.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook expansion",
-            "timeout": 15
-          }
-        ]
-      },
-      {
-        "matcher": "mindie-agent:recover",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "uv --native-tls run --offline --no-python-downloads --no-project --python 3.13 python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.1.28'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'bootstrap.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook expansion",
-            "timeout": 15
-          }
-        ]
-      },
-      {
-        "matcher": "mindie-agent:reporting-status",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "uv --native-tls run --offline --no-python-downloads --no-project --python 3.13 python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.1.28'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'bootstrap.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook expansion",
-            "timeout": 15
-          }
-        ]
-      },
-      {
-        "matcher": "mindie-agent:reporting-enable",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "uv --native-tls run --offline --no-python-downloads --no-project --python 3.13 python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.1.28'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'bootstrap.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook expansion",
-            "timeout": 15
-          }
-        ]
-      },
-      {
-        "matcher": "mindie-agent:reporting-disable",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "uv --native-tls run --offline --no-python-downloads --no-project --python 3.13 python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.1.28'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'bootstrap.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook expansion",
-            "timeout": 15
-          }
-        ]
-      }
-    ],
     "PreToolUse": [
       {
         "matcher": "^mcp__plugin_mindie-agent_(knowledge|remote|components)__[A-Za-z0-9_.]+$",
         "hooks": [
           {
             "type": "command",
-            "command": "uv --native-tls run --offline --no-python-downloads --no-project --python 3.13 python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.1.28'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'bootstrap.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook pretool",
+            "command": "uv --native-tls run --offline --no-python-downloads --no-project --python 3.13 python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.1.29'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'bootstrap.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook pretool",
             "timeout": 20
           }
         ]
@@ -130,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv --native-tls run --offline --no-python-downloads --no-project --python 3.13 python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.1.28'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'bootstrap.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook stop",
+            "command": "uv --native-tls run --offline --no-python-downloads --no-project --python 3.13 python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.1.29'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'bootstrap.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook stop",
             "timeout": 20
           }
         ]
@@ -141,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv --native-tls run --offline --no-python-downloads --no-project python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.1.28'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'session_start.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook session-start",
+            "command": "uv --native-tls run --offline --no-python-downloads --no-project python -c 'import os,runpy,sys;from pathlib import Path;e=Path(os.environ['\"'\"'CLAUDE_PLUGIN_DATA'\"'\"'])/'\"'\"'releases'\"'\"'/'\"'\"'0.1.29'\"'\"'/'\"'\"'entry.py'\"'\"';p=e if e.is_file() else Path(os.environ['\"'\"'CLAUDE_PLUGIN_ROOT'\"'\"'])/'\"'\"'scripts'\"'\"'/'\"'\"'session_start.py'\"'\"';sys.path.insert(0,str(p.parent));sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='\"'\"'__main__'\"'\"')' hook session-start",
             "timeout": 1440
           }
         ]

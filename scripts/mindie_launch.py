@@ -2,14 +2,15 @@
 """Stable native facade; each operation dispatches the selected complete helper.
 
 [Role]
-Top-level entrypoint invoked by Claude Code hooks (`SessionStart`,
-`UserPromptExpansion`, `PreToolUse`, `Stop`) and `.mcp.json` (`mcp-server`).
+Top-level entrypoint invoked by Claude Code hooks (`SessionStart`, `PreToolUse`,
+`Stop`) and `.mcp.json` (`knowledge`, `remote`, `components`).
 
 [Invariants]
 - Resolves the locked runtime binding (`install_state.py`) or runs cold-start
   `bootstrap.py` when required.
-- Never silently swallows helper failures; attaches redacted diagnostic
-  references to user-facing hook warnings.
+- Passive `PreToolUse` and `UserPromptSubmit` hooks never block tool execution or
+  create SQLite state when unconfigured; `Stop` checks sharing consent and
+  authorized `project_roots` before spawning capture workers.
 
 [Timeouts & Locks]
 - `HOOK_TOTAL = 10.0s`, `HOOK_LOCK_BUDGET = 2.0s`. SessionStart outer timeout
@@ -17,8 +18,8 @@ Top-level entrypoint invoked by Claude Code hooks (`SessionStart`,
   deadline is read before `--source` setup. Remote MCP: native wait + 60s grace.
 
 [Side-Effect Policy]
-- Dispatches into `entry.py`, `bridge.py`, `mcp_server.py`, or background
-  `maintenance.py` / `release_update.py` under the locked runtime interpreter.
+- Dispatches into `bridge.py`, `mcp_server.py`, or background `maintenance.py` /
+  `release_update.py` under the locked runtime interpreter.
 """
 
 from __future__ import annotations
@@ -91,7 +92,8 @@ def _record_hook(stage, category, op="stop", exception=None):
     """One static diagnostic for an outer entry failure. Genuine off stays quiet."""
     try:
         diagnostic_support.failure(
-            "hook", stage, category, exception=exception, reportable=(op != "stop"),
+            "hook", stage, category, exception=exception,
+            reportable=op not in {"stop", "pretool", "prompt", "expansion"},
         )
     except Exception:
         pass
@@ -145,12 +147,14 @@ def _dispatch_failure(current, stage, category, exc, started):
 
 
 _CONNECTION_ID = os.environ.get("MINDIE_MCP_CONNECTION_ID") or f"cc-mcp-{os.getpid()}-{os.urandom(6).hex()}"
+_LAUNCH_CWD = os.getcwd()
 
 
 def _child_env(current: dict) -> dict:
     env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
     env["PYTHONIOENCODING"] = "utf-8"
     env["MINDIE_MCP_CONNECTION_ID"] = _CONNECTION_ID
+    env.setdefault("MINDIE_HOST_CWD", _LAUNCH_CWD)
     env[CONFIG_ENV] = current["adapter_config"]
     adapter = json.loads(Path(current["adapter_config"]).read_text(encoding="utf-8"))
     env.update(adapter.get("diagnostics_context", {}))
@@ -245,28 +249,40 @@ def _read_hook_stdin(deadline):
 
 
 def _hook_can_start_service(op, raw):
-    if op == "stop":
-        return True
-    if op != "expansion":
+    return op == "stop"
+
+
+def _stop_should_dispatch(binding, raw: bytes) -> bool:
+    """Check consent and authorized project_roots before spawning `bridge.py`."""
+    if not _sharing_enabled(binding):
         return False
-    try:
-        text = raw.decode("utf-8-sig") if isinstance(raw, (bytes, bytearray)) else str(raw).lstrip("\ufeff")
-        event = json.loads(text)
-    except (ValueError, UnicodeDecodeError):
-        return False
-    if not (
-        isinstance(event, dict)
-        and event.get("expansion_type") == "slash_command"
-        and event.get("command_source") == "plugin"
-    ):
-        return False
-    name = event.get("command_name")
-    if name in {"mindie-agent", "mindie-agent:mindie-agent"}:
-        first = ((event.get("command_args") or "").strip().split(None, 1) or [""])[0]
-        if first in {"status", "deactivate", "recover", "sharing-disable", "reporting-status"}:
-            return False
-        return True
-    return name in {"mindie-agent:init", "mindie-agent:sharing-enable"}
+    community = binding.get("community_config") if isinstance(binding, dict) else None
+    if isinstance(community, str) and os.path.isabs(community):
+        from mindie_knowledge.loop.settings import load
+
+        sharing = load(community)
+        if not sharing.allows_capture():
+            consent_state = (sharing.consent or {}).get("state")
+            if sharing.capture_block_kind() == "revoked" or consent_state == "missing":
+                return False
+            return True
+        if raw:
+            try:
+                event = json.loads(raw.decode("utf-8-sig"))
+            except (UnicodeDecodeError, ValueError):
+                event = None
+            if isinstance(event, dict):
+                if event.get("hook_event_name") not in {None, "Stop"}:
+                    return False
+                if event.get("stop_hook_active") not in {None, False}:
+                    return False
+                agent_id = event.get("agent_id")
+                if isinstance(agent_id, str) and agent_id.strip():
+                    return False
+                hook_cwd = event.get("cwd")
+                if isinstance(hook_cwd, str) and os.path.isabs(hook_cwd) and not sharing.in_scope(hook_cwd):
+                    return False
+    return True
 
 
 def _runtime(binding):
@@ -280,8 +296,10 @@ def _verify_installation(expected=None, *, timeout=5.0):
 
 
 def _hook(op: str) -> int:
+    if op in {"expansion", "prompt", "user-prompt-submit"}:
+        return _fail_open()
     deadline = time.monotonic() + HOOK_TOTAL
-    if op == "stop" and not _config_path().exists():
+    if not _config_path().exists():
         return _fail_open()
     raw = _read_hook_stdin(deadline)
     stage = "installation"
@@ -293,7 +311,7 @@ def _hook(op: str) -> int:
         )
         with admission as binding:
             stage = "sharing-probe"
-            if op == "stop" and not _sharing_enabled(binding):
+            if op == "stop" and not _stop_should_dispatch(binding, raw):
                 return _fail_open()
             selected = _runtime(binding)
             script = Path(selected["scripts"]) / "bridge.py"
@@ -307,17 +325,16 @@ def _hook(op: str) -> int:
                 check=op != "pretool", receipt=receipt,
                 allow_service=_hook_can_start_service(op, raw),
             )
-        code = int(receipt.get("returncode") or 0) if op == "pretool" else 0
+        if op == "pretool" and int(receipt.get("returncode") or 0):
+            _record_hook("pretool_helper", "child_failure", op)
+            return _fail_open()
         try:
             value = json.loads(out.strip()) if (out or "").strip() else None
         except ValueError:
             value = None
-        if op == "pretool" and code:
-            if isinstance(value, dict) and value:
-                print(json.dumps(value, ensure_ascii=False), flush=True)
-                return code
-            return _pretool_deny("helper exited without a JSON receipt", code)
         if not isinstance(value, dict):
+            if op == "pretool":
+                return _fail_open()
             raise ValueError("hook result must be one object")
         print(json.dumps(value, ensure_ascii=False), flush=True)
         return 0
@@ -325,13 +342,10 @@ def _hook(op: str) -> int:
         category = ("timeout" if isinstance(exc, TimeoutError) else
                     "child_failure" if stage == "helper_failed" else "configuration")
         _record_hook(stage, category, op, exc)
+        if op == "pretool":
+            return _fail_open()
         if isinstance(exc, LockTimeout):
             return _hook_warning(unavailable=True)
-        if op == "pretool":
-            return _pretool_deny(f"{type(exc).__name__}: {exc}",
-                                 int(receipt.get("returncode") or 0) or 2)
-        if op == "expansion":
-            return _expansion_error("MindIE entry failed; inspect reporting-status.")
         return _hook_warning()
 
 
@@ -587,7 +601,7 @@ def main(argv=None) -> int:
         if result["status"] != "ready":
             return _session_start_incomplete()
         return _fail_open()
-    if kind == "hook" and name in {"expansion", "pretool", "stop"}:
+    if kind == "hook" and name in {"expansion", "prompt", "user-prompt-submit", "pretool", "stop"}:
         return _hook(name)
     if kind == "mcp" and name in {"knowledge", "remote", "components"}:
         return _mcp(name)

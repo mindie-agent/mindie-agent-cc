@@ -267,6 +267,7 @@ def test_ad02_subagent_and_reconnected_session_share_remote_dev_state_dir(
 def test_ad11_single_skill_entry_subcommand_routing_and_p21_unactivated_knowledge_gate(
     isolated_env, tmp_path
 ):
+    import re
     import entry
     import mcp_server
     from support import make_config
@@ -278,8 +279,16 @@ def test_ad11_single_skill_entry_subcommand_routing_and_p21_unactivated_knowledg
     skill_dir = ROOT / "skills" / "mindie-agent"
     skill_md = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
     assert skill_md.startswith("---\n")
+    assert len(skill_md.splitlines()) <= 30
+    assert "$ARGUMENTS" not in skill_md
     frontmatter = skill_md.split("\n---\n", 1)[0]
-    assert "disable-model-invocation: true" in frontmatter
+    assert "user-invocable: false" in frontmatter
+    assert "disable-model-invocation" not in frontmatter
+    desc_lines = [ln for ln in frontmatter.splitlines() if ln.startswith("description:")]
+    assert len(desc_lines) == 1
+    desc_val = desc_lines[0].split("description:", 1)[1].strip()
+    if ": " in desc_val:
+        assert desc_val.startswith('"') and desc_val.endswith('"')
 
     for moved in ("user-notice.md", "workspace-setup.md", "github-authentication.md"):
         assert (ROOT / "docs" / "install" / moved).is_file()
@@ -296,13 +305,27 @@ def test_ad11_single_skill_entry_subcommand_routing_and_p21_unactivated_knowledg
         "setup.py sharing",
         "AskUserQuestion",
         "mindie-agent/mindie-agent",
+        "/mindie-agent",
     )
     for md_path in sorted(skill_dir.rglob("*.md")):
         body = md_path.read_text(encoding="utf-8")
         for snippet in forbidden_snippets:
             assert snippet not in body, f"{md_path.relative_to(ROOT)} still contains {snippet!r}"
 
-    # Unified `/mindie-agent <subcommand>` routing
+    slash_check_paths = [
+        ROOT / ".claude-plugin" / "plugin.json",
+        ROOT / ".claude-plugin" / "marketplace.json",
+        ROOT / "README.md",
+        ROOT / "README.en.md",
+        ROOT / "docs" / "README.md",
+        ROOT / "docs" / "README.en.md",
+        *sorted((ROOT / "docs" / "install").glob("*.md")),
+    ]
+    for doc_path in slash_check_paths:
+        text = doc_path.read_text(encoding="utf-8")
+        for m in re.finditer(r"(?<![A-Za-z0-9_.%*}-])/mindie-agent(?![A-Za-z0-9_.*-]*/)", text):
+            raise AssertionError(f"{doc_path.relative_to(ROOT)} exposes slash command at {m.start()}")
+
     cfg = make_config(tmp_path / "profile", sharing=False)
     os.environ["MINDIE_CC_CONFIG"] = str(cfg)
     session = str(uuid.uuid4())
@@ -324,20 +347,22 @@ def test_ad11_single_skill_entry_subcommand_routing_and_p21_unactivated_knowledg
 
     status_res = entry.dispatch_event(make_event("status"))
     assert status_res["configured"] is True
-    # Read-only `/mindie-agent status` must NOT activate a knowledge lease or create admission.sqlite3!
-    admission_db = tmp_path / "profile" / "state" / "admission.sqlite3"
+    admission_db = tmp_path / "profile" / "domain" / "admission.sqlite3"
     assert not admission_db.exists()
 
-    # P2.1: Unactivated session calling `knowledge_query` is strictly denied without creating admission.sqlite3
-    with pytest.raises(ValueError, match="manual /mindie-agent activation"):
-        mcp_server.knowledge_call("knowledge_query", {"query": "aclError"}, session)
+    # Silent Default-On: unactivated session calling `knowledge_query` works without creating admission.sqlite3
+    with patch("knowledge_service.ensure_service", return_value={"url": "http://127.0.0.1:1", "token": "t"}), \
+            patch("mindie_knowledge.loop.cli.rpc", return_value={"cards": []}):
+        assert mcp_server.knowledge_call("knowledge_query", {"query": "aclError"}, session) == {"cards": []}
     assert not admission_db.exists()
 
-    # Activate via `/mindie-agent`, then deactivate via `/mindie-agent deactivate`
+    # Explicit activate + deactivate still revokes session cleanly
     init_res = entry.dispatch_event(make_event(""))
     assert init_res["binding"]["enabled"] is True
     deact_res = entry.dispatch_event(make_event("deactivate"))
     assert deact_res["deactivated"] is True
+    with pytest.raises(ValueError, match="inactive"):
+        mcp_server.knowledge_call("knowledge_query", {"query": "aclError"}, session)
     rep_res = entry.dispatch_event(make_event("reporting-status"))
     assert "enabled" in rep_res
 

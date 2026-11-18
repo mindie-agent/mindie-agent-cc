@@ -90,8 +90,7 @@
       ],
       "code_paths": [
         "scripts/bridge.py:handle_stop",
-        "scripts/bridge.py:handle_pretool",
-        "scripts/bridge.py:handle_expansion"
+        "scripts/bridge.py:handle_pretool"
       ],
       "test_ids": [
         "tests/test_launch_entry.py::test_missing_config_and_explicit_off_stay_quiet"
