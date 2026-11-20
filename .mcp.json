@@ -12,7 +12,7 @@
         "-B",
         "${CLAUDE_PLUGIN_ROOT}/scripts/plugin_entry.py",
         "--release-version",
-        "0.1.31",
+        "0.1.32",
         "mcp",
         "knowledge"
       ],
@@ -33,7 +33,7 @@
         "-B",
         "${CLAUDE_PLUGIN_ROOT}/scripts/plugin_entry.py",
         "--release-version",
-        "0.1.31",
+        "0.1.32",
         "mcp",
         "remote"
       ],
@@ -55,7 +55,7 @@
         "-B",
         "${CLAUDE_PLUGIN_ROOT}/scripts/plugin_entry.py",
         "--release-version",
-        "0.1.31",
+        "0.1.32",
         "mcp",
         "components"
       ],

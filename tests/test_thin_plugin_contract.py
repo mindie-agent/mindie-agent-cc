@@ -1,8 +1,9 @@
 """Thin-plugin release, manifest, seed, and metadata contract tests.
 
 [Role]
-Verifies the `0.1.31` manifest set, the `<= 1500` script line ceiling, the
-bundled seed, the `HostAdapter` protocol, and `setup.py release-metadata`.
+Verifies the `0.1.32` manifest set, the `<= 1500` script line ceiling, the
+9 runtime component declarations (including `npu-top`), the bundled seed,
+the `HostAdapter` protocol, and `setup.py release-metadata`.
 [Invariants]
 - Assertions read the real working tree; no test writes outside `tmp_path`.
 [Timeouts & Locks]
@@ -22,8 +23,19 @@ import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
-VERSION = "0.1.31"
+VERSION = "0.1.32"
 _NO_WIN = 0x08000000 if os.name == "nt" else 0
+EXPECTED_COMPONENTS = {
+    "mindie-harness",
+    "mindie-knowledge",
+    "remote-dev",
+    "mindie-diagnostics",
+    "mindie-debugger",
+    "mindie-profiler",
+    "mindie-sim",
+    "npu-top",
+    "mindie-coordinator",
+}
 
 
 def _json(relative: str) -> dict:
@@ -32,24 +44,48 @@ def _json(relative: str) -> dict:
 
 def test_total_script_loc_ceiling() -> None:
     total = sum(len(path.read_text(encoding="utf-8").splitlines()) for path in SCRIPTS.glob("*.py"))
-    assert total <= 1500, f"scripts/ totals {total} lines; hard ceiling is 1500"
+    assert total <= 1350, f"scripts/ totals {total} lines; target ceiling is 1350 (hard ceiling 1500)"
 
 
 def test_release_version_and_marketplace_manifests_are_current() -> None:
+    import entry
+
     plugin = _json(".claude-plugin/plugin.json")
     marketplace = _json(".claude-plugin/marketplace.json")
+    contract = _json("product-contract.json")
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     hooks_text = (ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8")
     hooks = json.loads(hooks_text)
     mcp = _json(".mcp.json")
+    release_yml = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    checks_yml = (ROOT / ".github" / "workflows" / "checks.yml").read_text(encoding="utf-8")
+    skill_md = (ROOT / "skills" / "mindie-agent" / "SKILL.md").read_text(encoding="utf-8")
+
+    assert entry.NATIVE_VERSION == VERSION
     assert plugin["version"] == VERSION
     assert marketplace["plugins"][0]["version"] == VERSION
     assert project["project"]["version"] == VERSION
+    assert contract["native_version"] == VERSION
+    assert set(contract["components"]) == EXPECTED_COMPONENTS
+    assert contract["components"]["npu-top"] == "0.3.5"
+
+    declared_deps = project["project"]["dependencies"]
+    for pkg in EXPECTED_COMPONENTS:
+        assert any(dep.startswith(f"{pkg} @ git+https://github.com/mindie-agent/") for dep in declared_deps), pkg
+
+    assert f"mindie-agent-cc-{VERSION}.md" in release_yml
+    assert "mindie-agent/mindie-bench/.github/workflows/verify-host-plugin.yml@main" in checks_yml
+    assert "host-acceptance" in checks_yml
+    assert "`knowledge` (`knowledge_query`, `knowledge_explain`, `knowledge_feedback`, `knowledge_distill`, `knowledge_sync`)" in skill_md
+    for tool_name in ("`npu_top`", "`rsi_loop`", "`experiment_ledger`"):
+        assert tool_name in skill_md
+
     assert VERSION in hooks_text
     assert "python -c" not in hooks_text
     assert "plugin_entry.py" in hooks_text
-    previous = "0.1." + "30"
-    assert f'"{previous}"' not in hooks_text
+    previous = "0.1." + "31"
+    assert previous not in hooks_text
+    assert previous not in json.dumps(mcp)
     assert "python -c" not in json.dumps(mcp)
     assert mcp["mcpServers"]["remote"]["env"]["REMOTE_DEV_HARNESS_PROFILE"] == "claude"
     for name, server in mcp["mcpServers"].items():

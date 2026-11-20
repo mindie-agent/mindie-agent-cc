@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv --native-tls run --offline --no-python-downloads --no-project --python 3.13 python -B \"${CLAUDE_PLUGIN_ROOT}/scripts/plugin_entry.py\" --release-version 0.1.31 hook pretool",
+            "command": "uv --native-tls run --offline --no-python-downloads --no-project --python 3.13 python -B \"${CLAUDE_PLUGIN_ROOT}/scripts/plugin_entry.py\" --release-version 0.1.32 hook pretool",
             "timeout": 20
           }
         ]
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv --native-tls run --offline --no-python-downloads --no-project --python 3.13 python -B \"${CLAUDE_PLUGIN_ROOT}/scripts/plugin_entry.py\" --release-version 0.1.31 hook stop",
+            "command": "uv --native-tls run --offline --no-python-downloads --no-project --python 3.13 python -B \"${CLAUDE_PLUGIN_ROOT}/scripts/plugin_entry.py\" --release-version 0.1.32 hook stop",
             "timeout": 20
           }
         ]
@@ -29,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv --native-tls run --no-project --python 3.13 python -B \"${CLAUDE_PLUGIN_ROOT}/scripts/plugin_entry.py\" --release-version 0.1.31 hook session-start",
+            "command": "uv --native-tls run --no-project --python 3.13 python -B \"${CLAUDE_PLUGIN_ROOT}/scripts/plugin_entry.py\" --release-version 0.1.32 hook session-start",
             "timeout": 1440
           }
         ]

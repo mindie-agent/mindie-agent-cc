@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Cold-start `SessionStart` trampoline for the MindIE Claude Code plugin.
 
-[Role] Delegates to `mindie_launch.main(["hook", "session-start", *argv])`, re-execing through `uv --python 3.13` only below Python 3.11.
-[Invariants] Pure stdlib; extra hook flags such as `--offline` pass through unchanged.
-[Timeouts & Locks] No locks; the re-exec inherits the host SessionStart timeout.
-[Side-Effect Policy] Re-executes one interpreter or delegates in-process; writes no state.
+[Role] Delegates to `mindie_launch.main(["hook", "session-start", *argv])` to write `pending-update-check.json` and print `{}` in `< 30ms`.
+[Invariants] Pure stdlib; never builds a runtime, never runs `uv sync`, and never creates SQLite on cold start.
+[Timeouts & Locks] No locks; sub-30ms marker-only handoff.
+[Side-Effect Policy] Atomically writes `pending-update-check.json` via `mindie_launch` and emits `{}`.
 """
 from __future__ import annotations
 

@@ -6,21 +6,14 @@
 [Timeouts & Locks] Bounded `60s` inventory probe and `540s` `uv` sync/override when a higher floor exists.
 [Side-Effect Policy] Read-only returning `null` in normal upgrades; writes only under `root` when preserving a newer floor.
 """
-import argparse
-import hashlib
-import json
-import os
+import argparse, hashlib, json, os, shutil, subprocess, sys, tomllib
 from pathlib import Path
-import shutil
-import subprocess
-import sys
-import tomllib
 
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 _INV = (
     "import importlib.metadata as m,json;r={};"
     "[r.__setitem__((d.metadata.get('Name') or '').strip().lower(),{'version':d.version,'direct':json.loads(d.read_text('direct_url.json') or '{}')}) "
-    "for d in m.distributions() if (d.metadata.get('Name') or '').strip().lower().startswith('mindie-') or (d.metadata.get('Name') or '').strip().lower()=='remote-dev'];"
+    "for d in m.distributions() if (d.metadata.get('Name') or '').strip().lower().startswith('mindie-') or (d.metadata.get('Name') or '').strip().lower() in ('remote-dev','npu-top')];"
     "print(json.dumps(r))"
 )
 
