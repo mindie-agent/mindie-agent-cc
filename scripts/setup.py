@@ -162,6 +162,8 @@ def _legacy_activate(candidate_path: Path) -> int:
             src_root = Path(candidate.get("source_root") or PLUGIN_ROOT).resolve()
             res = _call_binding(profile, plugin_root=adapter_plugin_root(Path(candidate["state_dir"]), src_root), python=candidate["python"], retire_previous=True, root=k_root)
             if res.get("status") != "configured":
+                if res.get("reason") == "knowledge_retirement_incomplete":
+                    _emit({"status": "incomplete", "stage": "old_retirement", "switched": False}); return 0
                 _emit({"status": "deferred" if res.get("status") == "deferred" else "incomplete",
                        "stage": "old_owner" if res.get("reason") == "knowledge_service_busy" else str(res.get("reason") or "binding"), "switched": False}); return 0
             if had_legacy_dir:
