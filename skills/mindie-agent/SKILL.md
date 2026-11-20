@@ -8,7 +8,7 @@ user-invocable: false
 
 ## 1. Default-On MCP Tooling & Non-Blocking Task Continuity
 
-- **Ready out of the box**: While the MindIE plugin is enabled in Claude Code, all MCP surfaces—`knowledge` (`mindie_status`, `knowledge_query`, `knowledge_explain`, `knowledge_feedback`, `knowledge_distill`, `knowledge_sync`), `remote` (the 13 `remote_*` `claude` tools), and `components` (`mindie_doctor`, `mindie_status`, `coordinator`, `debugger`, `profiler`, `sim`, `diagnostics_status`, `diagnostics_bundle`)—work across main chats, `Task` subagents, and forks with zero pre-call session-binding gates or `context_file`.
+- **Ready out of the box**: While the MindIE plugin is enabled in Claude Code, all MCP surfaces—`knowledge` (`knowledge_query`, `knowledge_explain`, `knowledge_feedback`, `knowledge_distill`, `knowledge_sync`), `remote` (the 13 `remote_*` `claude` tools), and `components` (`mindie_status`, `mindie_doctor`, `diagnostics_status`, `diagnostics_bundle`, `profiler`, `sim`, `coordinator`, `npu_top`, `debugger`, `rsi_loop`, `experiment_ledger`)—work across main chats, `Task` subagents, and forks with zero pre-call session-binding gates or `context_file`.
 - **Non-Blocking Task Continuity Rule**: MindIE tools (`remote-dev`, `coordinator`, `knowledge`, `mindie_doctor`) are accelerators, **never roadblocks**. If any tool fails, report the concrete error once—reconciling any uncertain remote write before repeating it—then continue immediately via native `ssh`/`scp` or task-local scripts. Never stop or ask the user to repair a helper before completing the requested work.
 
 ## 2. Code-First Investigation, Knowledge & NPU Discipline

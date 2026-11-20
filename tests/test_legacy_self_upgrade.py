@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 
@@ -108,8 +109,8 @@ def test_v0129_to_v0131_self_upgrade_handoff_cas_and_live_frontend(tmp_path: Pat
     assert json.loads(base_config.read_text(encoding="utf-8"))["python"] == "/nonexistent/v0.1.29/python"
     monkeypatch.undo()
 
-    # Remove empty domain dir and activate cleanly via subprocess
-    (knowledge_root / "operators").rmdir()
+    # Remove legacy domain dir and activate cleanly via subprocess
+    shutil.rmtree(knowledge_root / "operators")
     act = subprocess.run(
         [sys.executable, str(SCRIPTS / "setup.py"), "--activate", prepared["config"]],
         env=env, capture_output=True, text=True, timeout=60, creationflags=_NO_WIN,

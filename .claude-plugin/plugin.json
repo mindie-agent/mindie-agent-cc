@@ -1,7 +1,7 @@
 {
   "name": "mindie-agent",
   "displayName": "MindIE Agent",
-  "version": "0.1.31",
+  "version": "0.1.32",
   "description": "MindIE Agent for Claude Code: silent default-on Ascend NPU knowledge, remote-dev, profiling, simulation, fault triage, and opt-in community contribution.",
   "author": {
     "name": "MindIE Agent",

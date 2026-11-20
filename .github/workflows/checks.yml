@@ -61,9 +61,14 @@ jobs:
           MINDIE_TEST_KNOWLEDGE_CHECKOUT: ${{ github.workspace }}/.ci/knowledge
         run: uv run --locked --no-editable --group test python -m pytest -q -m "not live_npu"
 
+  host-acceptance:
+    uses: mindie-agent/mindie-bench/.github/workflows/verify-host-plugin.yml@main
+    with:
+      host: cc
+
   release-ready:
     name: release-ready
-    needs: [component]
+    needs: [component, host-acceptance]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
